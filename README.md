@@ -16,6 +16,64 @@ pi keeps running in its own window.
 Status: design phase. See
 [docs/superpowers/specs/2026-11-10-pi-codeview-design.md](docs/superpowers/specs/2026-11-10-pi-codeview-design.md).
 
+## Usage
+
+### Install
+
+pi side, as a pi package:
+
+```sh
+pi install /path/to/pi-codeview
+```
+
+Neovim side: put the repo's `nvim/` directory on the runtimepath and call
+`setup()`.
+
+```lua
+vim.opt.rtp:append("/path/to/pi-codeview/nvim")
+require("codeview").setup()
+```
+
+With nixvim:
+
+```nix
+extraPlugins = [ (pkgs.vimUtils.buildVimPlugin { name = "codeview"; src = /path/to/pi-codeview/nvim; }) ];
+extraConfigLua = ''require("codeview").setup()'';
+```
+
+`setup({ keys = { send = "<leader>rs" } })` overrides single keys; set a key
+to `false` to leave it unmapped.
+
+### Commands and keys
+
+| Command | Default key | What it does |
+|---|---|---|
+| `:Codeview` | `<leader>cv` | Toggle the chunk panel (`<CR>` opens a chunk, `r` refreshes, `q` closes). |
+| `:CodeviewPrompt` | `<leader>ca` | Prompt the agent; normal mode sends the file as context, visual mode the selection. |
+| `:CodeviewAnnotate` | `<leader>cc` | Annotate the current line or the visual range. |
+| `:CodeviewRemove` | `<leader>cx` | Remove the annotation under the cursor. |
+| `:CodeviewSend` | `<leader>cs` | Save all buffers, then send the annotations and an optional note. |
+| `:CodeviewMode review\|vibe` | | Switch the mode for this repository. |
+
+In a chunk diff, `]f` and `[f` move to the next and previous file. For the
+chunk waiting for review the right side is the real file, so LSP and editing
+work; past chunks open read-only. For the statusline,
+`require("codeview").status()` returns `"review N"`, `"working"`, `"idle"`, or
+`""` when not connected.
+
+In pi, `/codeview` shows the state, `/codeview on|off` switches review mode,
+`/codeview continue <note>` sends a review without Neovim, and
+`/codeview discard <note>` throws the open chunk away.
+
+### The loop
+
+1. `/codeview on` in pi (or `:CodeviewMode review`).
+2. `<leader>ca`: give the agent a task; it works in pi's window.
+3. The agent stops at a checkpoint; the panel opens with the new chunk.
+4. `<CR>` on the chunk: read the diff with LSP, edit the live file, `]f` for the next file.
+5. `<leader>cc` on lines you have something to say about.
+6. `<leader>cs`: the review goes to the agent and it continues.
+
 ## Why
 
 Agent harnesses like pi hide the codebase. The agent reads, writes and
