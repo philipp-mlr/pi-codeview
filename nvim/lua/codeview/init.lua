@@ -27,8 +27,8 @@ end
 
 local function on_event(name, data)
   if name == "chunk_ready" then
-    -- The server sends { chunk = {...} }; docs/protocol.md shows { n = ... }.
-    local n = data and (data.n or (data.chunk and data.chunk.n)) or "?"
+    -- The server sends { chunk = {...} }.
+    local n = data and (data.chunk and data.chunk.n) or "?"
     if panel.visible() or diff.is_diff_window(vim.api.nvim_get_current_win()) then
       vim.notify(("codeview: chunk %s ready"):format(n))
     else
@@ -211,6 +211,8 @@ function M.setup(opts)
 
   local group = vim.api.nvim_create_augroup("codeview", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", { group = group, callback = on_write })
+  vim.api.nvim_create_autocmd("VimLeavePre", { group = group, callback = session.flush })
+  vim.api.nvim_create_autocmd("TabClosed", { group = group, callback = diff.cleanup })
 end
 
 return M

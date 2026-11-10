@@ -80,7 +80,34 @@ local function step(delta)
   M.show(view, index)
 end
 
+local mapped = {} -- buf -> true while it carries the codeview file keys
+
+-- Removes the file keys from every buffer no live diff window shows any more, so they do not
+-- linger on the user's real file buffers.
+function M.cleanup()
+  local shown = {}
+  for tab, view in pairs(views) do
+    if vim.api.nvim_tabpage_is_valid(tab) then
+      for _, win in ipairs({ view.left, view.right }) do
+        if vim.api.nvim_win_is_valid(win) then
+          shown[vim.api.nvim_win_get_buf(win)] = true
+        end
+      end
+    end
+  end
+  for buf in pairs(mapped) do
+    if not shown[buf] then
+      if vim.api.nvim_buf_is_valid(buf) then
+        pcall(vim.keymap.del, "n", "]f", { buffer = buf })
+        pcall(vim.keymap.del, "n", "[f", { buffer = buf })
+      end
+      mapped[buf] = nil
+    end
+  end
+end
+
 local function map_file_keys(buf)
+  mapped[buf] = true
   vim.keymap.set("n", "]f", function()
     step(1)
   end, { buffer = buf, desc = "codeview: next file in chunk" })
@@ -119,6 +146,7 @@ function M.show(view, index)
       vim.cmd("diffthis")
     end)
   end
+  M.cleanup()
   viewed[chunk.n] = true
 end
 

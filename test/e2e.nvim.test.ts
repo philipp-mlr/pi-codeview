@@ -46,7 +46,7 @@ async function agentWrite(fake: FakePi, repo: TestRepo, file: string, text: stri
 }
 
 /** Runs `body` inside a headless nvim in the repo; every vim.notify call is appended to a JSON log. */
-function runNvim(repo: TestRepo, body: string): { notifications(): Notification[] } {
+function runNvim(repo: TestRepo, body: string): { notifications(): Notification[]; exited: Promise<void> } {
   const log = path.join(scratchDir, "notify.json");
   const script = path.join(scratchDir, "script.lua");
   fs.writeFileSync(
@@ -72,7 +72,9 @@ if not ok then vim.notify("SCRIPT ERROR: " .. err, vim.log.levels.ERROR) end
   cleanups.push(() => {
     if (nvim.exitCode === null) nvim.kill("SIGKILL");
   });
+  const exited = new Promise<void>((resolve) => nvim.once("exit", () => resolve()));
   return {
+    exited,
     notifications() {
       if (!fs.existsSync(log)) return [];
       return JSON.parse(fs.readFileSync(log, "utf8")) as Notification[];
@@ -206,5 +208,65 @@ cv.send({ note = "" })
     );
     expect(refused.msg).toContain(SEND_REFUSED);
     expect(await settled(pending)).toBe(false);
+  }, TIMEOUT_MS);
+
+  it("an annotation added just before quitting is saved as a draft and restored by the next nvim", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    await agentWrite(fake, repo, "a.txt", "one\ntwo\n");
+
+    const first = runNvim(
+      repo,
+      `
+local cv = require("codeview")
+cv.setup()
+vim.cmd("edit a.txt")
+cv.annotate(vim.api.nvim_get_current_buf(), 2, 2, "draft survives quit")
+vim.wait(5000, function() return require("codeview.annotations").list(require("codeview.session").root)[1] ~= nil end)
+vim.cmd("qa!")
+`,
+    );
+    await first.exited;
+
+    const second = runNvim(
+      repo,
+      `
+local cv = require("codeview")
+cv.setup()
+vim.cmd("edit a.txt")
+require("codeview.session").ensure(function(_, root)
+  vim.notify("DRAFTS " .. vim.json.encode(require("codeview.annotations").list(root)))
+end)
+`,
+    );
+    const drafts = await until(() => second.notifications().find((n) => n.msg.startsWith("DRAFTS")), "restored drafts");
+    expect(drafts.msg).toContain("draft survives quit");
+  }, TIMEOUT_MS);
+
+  it("]f and [f are not left mapped on the real buffer after the diff tab closes", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    await agentWrite(fake, repo, "a.txt", "one\n");
+    void fake.callTool("checkpoint", { note: "add a" });
+
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("codeview")
+cv.setup()
+vim.cmd("edit a.txt")
+local buf = vim.api.nvim_get_current_buf()
+cv.toggle_panel()
+cv.open_chunk(1)
+vim.wait(5000, function() return vim.fn.maparg("]f", "n", false, true).desc ~= nil end)
+vim.notify("OPEN " .. tostring(vim.fn.maparg("]f", "n", false, true).desc))
+vim.cmd("tabclose")
+vim.notify("CLOSED " .. vim.inspect(vim.api.nvim_buf_call(buf, function() return vim.fn.maparg("]f", "n", false, true) end)))
+`,
+    );
+    const notes = await until(() => nvim.notifications().some((n) => n.msg.startsWith("CLOSED") || n.msg.startsWith("SCRIPT")) && nvim.notifications(), "mapping check");
+    const msgs = notes.map((n) => n.msg);
+    expect(msgs).toContain("OPEN codeview: next file in chunk");
+    expect(msgs.filter((m) => !m.startsWith("OPEN"))).toEqual(["CLOSED vim.empty_dict()"]);
   }, TIMEOUT_MS);
 });

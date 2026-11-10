@@ -44,7 +44,7 @@ handler failures are returned as `ok:false`.
 
 | event | example |
 |---|---|
-| `chunk_ready` | `{"event":"chunk_ready","data":{"n":2}}` |
+| `chunk_ready` | `{"event":"chunk_ready","data":{"chunk":{"n":2,"status":"open","...":"..."}}}` |
 | `chunk_reviewed` | `{"event":"chunk_reviewed","data":{"n":2,"status":"reviewed"}}` |
 | `mode_changed` | `{"event":"mode_changed","data":{"mode":"review"}}` |
 | `run_settled` | `{"event":"run_settled","data":{}}` |

@@ -41,11 +41,14 @@ function M.refresh_status(cb)
   end)
 end
 
-local function save_drafts()
+local function save_drafts(cb)
   if not M.connected() then
     return
   end
   M.conn:request("save_drafts", { annotations = annotations.list(M.root) }, function(err)
+    if cb then
+      cb()
+    end
     if err then
       vim.notify("codeview: saving drafts failed: " .. err, vim.log.levels.WARN)
     end
@@ -56,6 +59,24 @@ local function schedule_save()
   save_timer = save_timer or vim.uv.new_timer()
   save_timer:stop()
   save_timer:start(SAVE_DRAFTS_DEBOUNCE_MS, 0, vim.schedule_wrap(save_drafts))
+end
+
+-- Sends a pending debounced save now and waits briefly for the reply (used when nvim exits).
+function M.flush()
+  if not save_timer or not save_timer:is_active() then
+    return
+  end
+  save_timer:stop()
+  if not M.connected() then
+    return
+  end
+  local done = false
+  save_drafts(function()
+    done = true
+  end)
+  vim.wait(500, function()
+    return done
+  end, 10)
 end
 
 local function dir_of_current_buffer()
