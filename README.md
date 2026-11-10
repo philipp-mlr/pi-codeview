@@ -26,8 +26,8 @@ pi side, as a pi package:
 pi install /path/to/pi-codeview
 ```
 
-Neovim side: put the repo's `nvim/` directory on the runtimepath and call
-`setup()`.
+Neovim side (Neovim 0.10 or newer): put the repo's `nvim/` directory on the
+runtimepath and call `setup()`.
 
 ```lua
 vim.opt.rtp:append("/path/to/pi-codeview/nvim")
@@ -37,19 +37,27 @@ require("codeview").setup()
 With nixvim:
 
 ```nix
-extraPlugins = [ (pkgs.vimUtils.buildVimPlugin { name = "codeview"; src = /path/to/pi-codeview/nvim; }) ];
+extraPlugins = [
+  (pkgs.vimUtils.buildVimPlugin {
+    pname = "codeview";
+    version = "0.1.0";
+    src = "${pi-codeview}/nvim"; # the flake input or a path to this repository
+  })
+];
 extraConfigLua = ''require("codeview").setup()'';
 ```
 
 `setup({ keys = { send = "<leader>rs" } })` overrides single keys; set a key
-to `false` to leave it unmapped.
+to `false` to leave it unmapped. A default key that is already mapped (for
+example `<leader>cc` by another plugin) is left alone, and `setup()` lists the
+skipped keys in one message; keys you pass in `keys` are always mapped.
 
 ### Commands and keys
 
 | Command | Default key | What it does |
 |---|---|---|
 | `:Codeview` | `<leader>cv` | Toggle the chunk panel (`<CR>` opens a chunk, `r` refreshes, `q` closes). |
-| `:CodeviewPrompt` | `<leader>ca` | Prompt the agent; normal mode sends the file as context, visual mode the selection. |
+| `:CodeviewPrompt` | `<leader>cp` | Prompt the agent; normal mode sends the file as context, visual mode the selection. |
 | `:CodeviewAnnotate` | `<leader>cc` | Annotate the current line or the visual range. |
 | `:CodeviewRemove` | `<leader>cx` | Remove the annotation under the cursor. |
 | `:CodeviewSend` | `<leader>cs` | Save all buffers, then send the annotations and an optional note. |
@@ -68,7 +76,7 @@ In pi, `/codeview` shows the state, `/codeview on|off` switches review mode,
 ### The loop
 
 1. `/codeview on` in pi (or `:CodeviewMode review`).
-2. `<leader>ca`: give the agent a task; it works in pi's window.
+2. `<leader>cp`: give the agent a task; it works in pi's window.
 3. The agent stops at a checkpoint; the panel opens with the new chunk.
 4. `<CR>` on the chunk: read the diff with LSP, edit the live file, `]f` for the next file.
 5. `<leader>cc` on lines you have something to say about.

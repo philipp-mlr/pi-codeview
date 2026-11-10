@@ -38,6 +38,16 @@ handler failures are returned as `ok:false`.
 
 `prompt.context` is optional; `startLine`/`endLine` inside it are optional.
 
+### Results
+
+- `status`: `{"mode":"review","root":"/abs/worktree","sessionId":"…","openChunk":<chunk>|null,"drafts":[<annotation>],"busy":false,"queued":0}`.
+  `root` is the worktree the session runs in; clients attach only to sessions whose `root` is their own worktree.
+  `busy` is true while the agent is working; `queued` counts prompts waiting behind the open chunk.
+- `prompt`: `{"queued":true}` when a chunk is open and the prompt waits for its review, else `{"queued":false}` (sent to the agent).
+- `list_chunks`: array of chunks. `get_chunk`: `{"chunk":<chunk>,"diff":"<unified diff fromSha..toSha>"}`.
+- `send`: `{"chunk":<closed chunk>}` for a review, `{"chunk":null}` when sent as a prompt (no open chunk).
+- `save_drafts`: `{"saved":<count>}`. `human_write`: `{"files":[<paths changed since the last snapshot>]}`. `set_mode`: `{"mode":"review"}`.
+
 ## Events
 
 `{"event": <name>, "data": ...}`, no `id`.
@@ -45,7 +55,8 @@ handler failures are returned as `ok:false`.
 | event | example |
 |---|---|
 | `chunk_ready` | `{"event":"chunk_ready","data":{"chunk":{"n":2,"status":"open","...":"..."}}}` |
-| `chunk_reviewed` | `{"event":"chunk_reviewed","data":{"n":2,"status":"reviewed"}}` |
+| `chunk_reviewed` | `{"event":"chunk_reviewed","data":{"chunk":{"n":2,"status":"reviewed","...":"..."}}}` |
 | `mode_changed` | `{"event":"mode_changed","data":{"mode":"review"}}` |
-| `run_settled` | `{"event":"run_settled","data":{}}` |
-| `state` | `{"event":"state","data":{"mode":"review","openChunk":2}}` |
+| `run_settled` | `{"event":"run_settled","data":{"aborted":false}}` |
+
+`chunk_reviewed` is also sent for a discarded chunk (`status: "discarded"`).
