@@ -125,26 +125,40 @@ local function same(a, b)
 end
 
 function M.restore(drafts, root)
-  local present = M.list(root)
   local changed = false
   for _, draft in ipairs(drafts) do
+    local path = root .. "/" .. draft.path
+    local exists = vim.uv.fs_stat(path) ~= nil
+    local buf = nil
+    local target = draft
+    if exists then
+      -- A draft parked as unplaced becomes placeable once its file exists.
+      local parked = {}
+      for _, u in ipairs(unplaced) do
+        if not (u.root == root and same(u.draft, draft)) then
+          parked[#parked + 1] = u
+        end
+      end
+      unplaced = parked
+      buf = vim.fn.bufadd(path)
+      vim.fn.bufload(buf)
+      -- Stored ranges are clamped to the buffer, so compare against the clamped draft.
+      local last = math.max(vim.api.nvim_buf_line_count(buf), 1)
+      local s = math.max(1, math.min(draft.startLine, last))
+      target = { path = draft.path, startLine = s, endLine = math.max(s, math.min(draft.endLine, last)), note = draft.note }
+    end
     local duplicate = false
-    for _, p in ipairs(present) do
-      if same(p, draft) then
+    for _, p in ipairs(M.list(root)) do
+      if same(p, target) or (not exists and same(p, draft)) then
         duplicate = true
         break
       end
     end
     if not duplicate then
-      local path = root .. "/" .. draft.path
-      if vim.uv.fs_stat(path) then
-        local buf = vim.fn.bufadd(path)
-        vim.fn.bufload(buf)
+      if exists then
         place(buf, draft.startLine, draft.endLine, draft.note)
-        present[#present + 1] = draft
       else
         unplaced[#unplaced + 1] = { root = root, draft = vim.deepcopy(draft) }
-        present[#present + 1] = draft
       end
       changed = true
     end

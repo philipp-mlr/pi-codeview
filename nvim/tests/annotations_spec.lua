@@ -101,6 +101,34 @@ M["restore is idempotent, keeps unplaced, fires on_change only on news"] = funct
   assert(annotations.count() == 0 and #annotations.list(root) == 0)
 end
 
+M["restore dedupes out-of-range drafts that were clamped"] = function()
+  annotations.clear()
+  local root = temp_root()
+  file_buf(root, "o.txt", numbered(8))
+  local drafts = { { path = "o.txt", startLine = 20, endLine = 22, note = "far" } }
+  annotations.restore(drafts, root)
+  annotations.restore(drafts, root)
+  local list = annotations.list(root)
+  assert(#list == 1, vim.inspect(list))
+  annotations.clear()
+end
+
+M["restore places a previously unplaced draft once its file exists"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local drafts = { { path = "late.txt", startLine = 2, endLine = 3, note = "late" } }
+  annotations.restore(drafts, root)
+  assert(#annotations.list(root) == 1)
+  file_buf(root, "late.txt", numbered(8))
+  annotations.restore(drafts, root)
+  annotations.restore(drafts, root)
+  local list = annotations.list(root)
+  assert(#list == 1, vim.inspect(list))
+  assert(list[1].startLine == 2 and list[1].endLine == 3, vim.inspect(list))
+  assert(annotations.count() == 1, annotations.count())
+  annotations.clear()
+end
+
 M["remove_at_cursor removes containing range and on_change fires"] = function()
   annotations.clear()
   local root = temp_root()
