@@ -147,4 +147,18 @@ M["remove_at_cursor removes containing range and on_change fires"] = function()
   annotations.clear()
 end
 
+M["clear_root drops only the annotations and unplaced drafts of that root"] = function()
+  annotations.clear()
+  local root, other = temp_root(), temp_root()
+  annotations.add(file_buf(root, "a.txt", numbered(3)), 1, 1, "sent")
+  annotations.add(file_buf(other, "b.txt", numbered(3)), 1, 1, "kept")
+  annotations.restore({ { path = "gone.txt", startLine = 1, endLine = 1, note = "sent too" } }, root)
+  annotations.restore({ { path = "gone.txt", startLine = 1, endLine = 1, note = "kept too" } }, other)
+  annotations.clear_root(root)
+  assert(#annotations.list(root) == 0, vim.inspect(annotations.list(root)))
+  local left = vim.tbl_map(function(a) return a.note end, annotations.list(other))
+  assert(vim.deep_equal(left, { "kept", "kept too" }), vim.inspect(left))
+  annotations.clear()
+end
+
 return M

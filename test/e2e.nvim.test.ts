@@ -31,9 +31,9 @@ afterEach(async () => {
   fs.rmSync(scratchDir, { recursive: true, force: true });
 });
 
-async function start(repo: TestRepo): Promise<FakePi> {
+async function start(repo: TestRepo, opts: { root?: string; sessionId?: string } = {}): Promise<FakePi> {
   await repo.git("config", "pi-codeview.mode", "review");
-  const fake = makeFakePi(repo.root);
+  const fake = makeFakePi(opts.root ?? repo.root, { sessionId: opts.sessionId });
   codeview(fake.pi);
   await fake.fire("session_start", { reason: "startup" });
   cleanups.push(() => fake.fire("session_shutdown", { reason: "quit" }).then(() => {}));
@@ -46,9 +46,10 @@ async function agentWrite(fake: FakePi, repo: TestRepo, file: string, text: stri
 }
 
 /** Runs `body` inside a headless nvim in the repo; every vim.notify call is appended to a JSON log. */
-function runNvim(repo: TestRepo, body: string): { notifications(): Notification[]; exited: Promise<void> } {
-  const log = path.join(scratchDir, "notify.json");
-  const script = path.join(scratchDir, "script.lua");
+function runNvim(repo: TestRepo, body: string, cwd = repo.root): { notifications(): Notification[]; exited: Promise<void> } {
+  const run = fs.mkdtempSync(path.join(scratchDir, "n"));
+  const log = path.join(run, "notify.json");
+  const script = path.join(run, "script.lua");
   fs.writeFileSync(
     script,
     `
@@ -67,7 +68,7 @@ if not ok then vim.notify("SCRIPT ERROR: " .. err, vim.log.levels.ERROR) end
   const nvim: ChildProcess = spawn(
     "nvim",
     ["--headless", "--clean", "-u", "NONE", "--cmd", `set rtp^=${NVIM_RTP}`, "-c", `luafile ${script}`],
-    { cwd: repo.root, env: { ...process.env, XDG_RUNTIME_DIR: runtimeDir }, stdio: "ignore" },
+    { cwd, env: { ...process.env, XDG_RUNTIME_DIR: runtimeDir }, stdio: "ignore" },
   );
   cleanups.push(() => {
     if (nvim.exitCode === null) nvim.kill("SIGKILL");
@@ -222,7 +223,7 @@ local cv = require("codeview")
 cv.setup()
 vim.cmd("edit a.txt")
 cv.annotate(vim.api.nvim_get_current_buf(), 2, 2, "draft survives quit")
-vim.wait(5000, function() return require("codeview.annotations").list(require("codeview.session").root)[1] ~= nil end)
+vim.wait(5000, function() return require("codeview.session").connected() end)
 vim.cmd("qa!")
 `,
     );
@@ -268,5 +269,92 @@ vim.notify("CLOSED " .. vim.inspect(vim.api.nvim_buf_call(buf, function() return
     const msgs = notes.map((n) => n.msg);
     expect(msgs).toContain("OPEN codeview: next file in chunk");
     expect(msgs.filter((m) => !m.startsWith("OPEN"))).toEqual(["CLOSED vim.empty_dict()"]);
+  }, TIMEOUT_MS);
+
+  it("a save before any codeview command attaches quietly and is recorded as Philipp's step", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    await agentWrite(fake, repo, "a.txt", "one\n");
+
+    const nvim = runNvim(
+      repo,
+      `
+require("codeview").setup()
+vim.cmd("edit README.md")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "hello from Philipp" })
+vim.cmd("write")
+`,
+    );
+
+    const steps = await until(() => {
+      const state = fake.entries.at(-1)?.data as { steps: { author: string; files: string[] }[] } | undefined;
+      return state?.steps.some((s) => s.author === "human") && state.steps;
+    }, "human step");
+    expect(steps.find((s) => s.author === "human")?.files).toEqual(["README.md"]);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(nvim.notifications()).toEqual([]);
+  }, TIMEOUT_MS);
+
+  it("nvim in one worktree attaches to that worktree's pi session, not another worktree's", async () => {
+    const repo = await makeRepo();
+    const other = path.join(fs.realpathSync(scratchDir), "wt");
+    await repo.git("worktree", "add", "-q", other, "-b", "other");
+    const inOther = await start(repo, { root: other, sessionId: "other" });
+    await new Promise((r) => setTimeout(r, 20));
+    const inMain = await start(repo, { sessionId: "main" });
+    await agentWrite(inMain, repo, "a.txt", "one\n");
+
+    const nvim = runNvim(
+      repo,
+      `
+require("codeview").setup()
+vim.cmd("edit README.md")
+require("codeview.session").ensure(function(_, root)
+  vim.notify("ATTACHED " .. require("codeview.session").cached.sessionId .. " " .. root)
+end)
+`,
+    );
+    const attached = await until(() => nvim.notifications().find((n) => n.msg.startsWith("ATTACHED") || n.level === ERROR), "attach");
+    expect(attached.msg).toBe(`ATTACHED main ${repo.root}`);
+
+    const wtNvim = runNvim(
+      repo,
+      `
+require("codeview").setup()
+vim.cmd("edit README.md")
+require("codeview.session").ensure(function(_, root)
+  vim.notify("ATTACHED " .. require("codeview.session").cached.sessionId .. " " .. root)
+end)
+`,
+      other,
+    );
+    const wtAttached = await until(() => wtNvim.notifications().find((n) => n.msg.startsWith("ATTACHED") || n.level === ERROR), "attach in worktree");
+    expect(wtAttached.msg).toBe(`ATTACHED other ${other}`);
+    expect(inOther.sent).toEqual([]);
+  }, TIMEOUT_MS);
+
+  it("saving a file stores the drafts' moved positions", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    repo.write("b.txt", "one\ntwo\n");
+    await agentWrite(fake, repo, "a.txt", "x\n");
+
+    runNvim(
+      repo,
+      `
+local cv = require("codeview")
+cv.setup()
+vim.cmd("edit b.txt")
+cv.annotate(vim.api.nvim_get_current_buf(), 2, 2, "moves")
+vim.wait(5000, function() return require("codeview.session").connected() end)
+vim.wait(1000)
+vim.api.nvim_buf_set_lines(0, 0, 0, false, { "new 1", "new 2" })
+vim.cmd("write")
+`,
+    );
+    await until(() => {
+      const state = fake.entries.at(-1)?.data as { drafts: { startLine: number }[] } | undefined;
+      return state?.drafts[0]?.startLine === 4;
+    }, "draft saved at line 4");
   }, TIMEOUT_MS);
 });

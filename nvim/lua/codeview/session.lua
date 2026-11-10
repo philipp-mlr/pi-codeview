@@ -55,7 +55,8 @@ local function save_drafts(cb)
   end)
 end
 
-local function schedule_save()
+-- Saves the drafts with their current extmark positions after a short debounce.
+function M.schedule_save()
   save_timer = save_timer or vim.uv.new_timer()
   save_timer:stop()
   save_timer:start(SAVE_DRAFTS_DEBOUNCE_MS, 0, vim.schedule_wrap(save_drafts))
@@ -79,8 +80,8 @@ function M.flush()
   end, 10)
 end
 
-local function dir_of_current_buffer()
-  local name = vim.api.nvim_buf_get_name(0)
+local function dir_of_buffer(buf)
+  local name = vim.api.nvim_buf_get_name(buf or 0)
   local real = name ~= "" and vim.uv.fs_realpath(name) or nil
   return real and vim.fs.dirname(real) or vim.uv.cwd()
 end
@@ -106,21 +107,33 @@ end
 
 local function attach(conn, root, status, cb)
   M.conn, M.root, M.cached = conn, root, status
-  annotations.on_change(schedule_save)
+  annotations.on_change(M.schedule_save)
   annotations.restore(status.drafts or {}, root)
+  -- Annotations added while pi was unreachable reach the extension now.
+  if not vim.deep_equal(annotations.list(root), status.drafts or {}) then
+    M.schedule_save()
+  end
   redraw()
   cb(conn, root)
 end
 
--- Calls cb(conn, root) once attached to a pi session for the current buffer's repo.
-function M.ensure(cb)
+-- Calls cb(conn, root) once attached to a pi session for the repo of opts.buf (default: current buffer).
+-- Only sessions whose root is this worktree count. With opts.quiet nothing is reported and no picker
+-- is shown: the attach happens only when exactly one session matches.
+function M.ensure(cb, opts)
+  opts = opts or {}
   if M.connected() then
     return cb(M.conn, M.root)
   end
-  local dir = dir_of_current_buffer()
+  local function fail(msg)
+    if not opts.quiet then
+      vim.notify(msg, vim.log.levels.ERROR)
+    end
+  end
+  local dir = dir_of_buffer(opts.buf)
   local root = discover.root(dir)
   if not root then
-    return vim.notify("codeview: not inside a git repository", vim.log.levels.ERROR)
+    return fail("codeview: not inside a git repository")
   end
   local candidates = {}
   for _, path in ipairs(discover.sockets(dir)) do
@@ -130,12 +143,13 @@ function M.ensure(cb)
     end
   end
   if #candidates == 0 then
-    return vim.notify("codeview: no pi session with codeview for " .. root, vim.log.levels.ERROR)
+    return fail("codeview: no pi session with codeview for " .. root)
   end
   local remaining = #candidates
   local function choose()
     local live = vim.tbl_filter(function(c)
-      return c.status ~= nil
+      return c.status ~= nil and type(c.status.root) == "string"
+        and (vim.uv.fs_realpath(c.status.root) or c.status.root) == root
     end, candidates)
     local function pick(choice)
       for _, c in ipairs(candidates) do
@@ -149,15 +163,18 @@ function M.ensure(cb)
     end
     if #live == 0 then
       pick(nil)
-      return vim.notify("codeview: no pi session answered", vim.log.levels.ERROR)
+      return fail("codeview: no pi session with codeview for " .. root)
     end
     if #live == 1 then
       return pick(live[1])
     end
+    if opts.quiet then
+      return pick(nil)
+    end
     vim.ui.select(live, {
       prompt = "codeview: attach to which pi session?",
       format_item = function(c)
-        return c.status.sessionId .. " (" .. c.status.mode .. ")"
+        return ("%s (%s) %s"):format(c.status.sessionId, c.status.mode, c.status.root)
       end,
     }, pick)
   end

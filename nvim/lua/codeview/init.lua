@@ -9,7 +9,7 @@ local M = {}
 
 M.default_keys = {
   panel = "<leader>cv",
-  prompt = "<leader>ca",
+  prompt = "<leader>cp",
   annotate = "<leader>cc",
   remove = "<leader>cx",
   send = "<leader>cs",
@@ -34,6 +34,9 @@ local function on_event(name, data)
     else
       panel.open()
     end
+  end
+  if name == "chunk_reviewed" and data and data.chunk then
+    diff.forget(data.chunk.n)
   end
   if name == "chunk_ready" or name == "chunk_reviewed" or name == "mode_changed" then
     panel.refresh()
@@ -66,17 +69,21 @@ function M.prompt(text, context)
   end)
 end
 
+-- Places the annotation right away, so the note survives even when pi is unreachable; it is saved
+-- as a draft once attached.
 function M.annotate(buf, start_line, end_line, note)
+  annotations.add(buf, start_line, end_line, note)
   session.ensure(function()
-    annotations.add(buf, start_line, end_line, note)
-  end)
+    session.schedule_save()
+  end, { buf = buf })
 end
 
 -- Sends the annotations and opts.note (asked via vim.ui.input when nil) as review or prompt.
 function M.send(opts)
   opts = opts or {}
-  vim.cmd("silent! wall")
   session.ensure(function(conn, root)
+    -- Saved inside ensure, so the saves are reported as Philipp's edits to the attached session.
+    vim.cmd("silent! wall")
     local function deliver(note)
       if note == nil then
         return
@@ -95,7 +102,7 @@ function M.send(opts)
           if err then
             return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
           end
-          annotations.clear()
+          annotations.clear_root(root)
           vim.notify(open_chunk and ("codeview: review of chunk %d sent"):format(open_chunk.n) or "codeview: annotations sent")
           session.refresh_status()
         end)
@@ -163,14 +170,32 @@ local function remove_command()
   end
 end
 
-local function on_write(args)
-  if not session.connected() then
-    return
-  end
-  local path = relpath(args.buf, session.root)
+local function report_write(buf)
+  local path = relpath(buf, session.root)
   if path then
     session.request("human_write", { path = path })
   end
+  -- Extmarks may have moved with the edit; store the drafts' new positions.
+  session.schedule_save()
+end
+
+-- Every save is reported, so Philipp's edits are never counted as the agent's. When not attached
+-- yet, attach quietly: no message, no picker; nothing happens without exactly one matching session.
+local function on_write(args)
+  if session.connected() then
+    return report_write(args.buf)
+  end
+  local name = vim.api.nvim_buf_get_name(args.buf)
+  if name == "" or name:match("^codeview://") then
+    return
+  end
+  local real = vim.uv.fs_realpath(name)
+  if not real or #discover.sockets(vim.fs.dirname(real)) == 0 then
+    return
+  end
+  session.ensure(function()
+    report_write(args.buf)
+  end, { buf = args.buf, quiet = true })
 end
 
 function M.setup(opts)
@@ -196,18 +221,33 @@ function M.setup(opts)
     desc = "codeview: set mode review or vibe",
   })
 
-  local function map(modes, lhs, rhs, desc)
-    if lhs then
-      vim.keymap.set(modes, lhs, rhs, { desc = desc })
+  -- Default keys never replace an existing mapping (e.g. an LSP <leader>c… key); keys passed in
+  -- opts.keys always map.
+  local skipped = {}
+  local function map(modes, name, rhs, desc)
+    local lhs = keys[name]
+    if not lhs then
+      return
     end
+    if (opts.keys or {})[name] == nil then
+      local existing = vim.fn.maparg(lhs, modes, false, true)
+      if not vim.tbl_isempty(existing) and not vim.startswith(existing.desc or "", "codeview:") then
+        skipped[#skipped + 1] = ("%s (%s)"):format(lhs, modes)
+        return
+      end
+    end
+    vim.keymap.set(modes, lhs, rhs, { desc = desc })
   end
-  map("n", keys.panel, "<cmd>Codeview<CR>", "codeview: toggle panel")
-  map("n", keys.prompt, "<cmd>CodeviewPrompt<CR>", "codeview: prompt with file context")
-  map("x", keys.prompt, ":CodeviewPrompt<CR>", "codeview: prompt with selection context")
-  map("n", keys.annotate, "<cmd>CodeviewAnnotate<CR>", "codeview: annotate line")
-  map("x", keys.annotate, ":CodeviewAnnotate<CR>", "codeview: annotate selection")
-  map("n", keys.remove, "<cmd>CodeviewRemove<CR>", "codeview: remove annotation")
-  map("n", keys.send, "<cmd>CodeviewSend<CR>", "codeview: send")
+  map("n", "panel", "<cmd>Codeview<CR>", "codeview: toggle panel")
+  map("n", "prompt", "<cmd>CodeviewPrompt<CR>", "codeview: prompt with file context")
+  map("x", "prompt", ":CodeviewPrompt<CR>", "codeview: prompt with selection context")
+  map("n", "annotate", "<cmd>CodeviewAnnotate<CR>", "codeview: annotate line")
+  map("x", "annotate", ":CodeviewAnnotate<CR>", "codeview: annotate selection")
+  map("n", "remove", "<cmd>CodeviewRemove<CR>", "codeview: remove annotation")
+  map("n", "send", "<cmd>CodeviewSend<CR>", "codeview: send")
+  if #skipped > 0 then
+    vim.notify("codeview: kept existing mappings, not mapped: " .. table.concat(skipped, ", "), vim.log.levels.INFO)
+  end
 
   local group = vim.api.nvim_create_augroup("codeview", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", { group = group, callback = on_write })

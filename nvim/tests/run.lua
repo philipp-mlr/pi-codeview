@@ -1,5 +1,5 @@
 local tests_dir = vim.fs.dirname(vim.fs.normalize(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
-package.path = vim.fs.dirname(tests_dir) .. "/lua/?.lua;" .. package.path
+package.path = vim.fs.dirname(tests_dir) .. "/lua/?.lua;" .. vim.fs.dirname(tests_dir) .. "/lua/?/init.lua;" .. package.path
 
 local failed = 0
 local specs = vim.fn.sort(vim.fn.glob(tests_dir .. "/*_spec.lua", false, true))
@@ -25,4 +25,5 @@ for _, file in ipairs(specs) do
   end
 end
 
+io.stdout:write("\n")
 os.exit(failed > 0 and 1 or 0)

@@ -111,6 +111,25 @@ function M.list(root)
   return result
 end
 
+-- Drops the annotations of files under root and the unplaced drafts of root; others stay.
+function M.clear_root(root)
+  local kept = {}
+  for _, item in ipairs(items) do
+    local name = vim.api.nvim_buf_is_valid(item.buf) and vim.api.nvim_buf_get_name(item.buf) or ""
+    local real = name ~= "" and vim.uv.fs_realpath(name) or nil
+    if real and discover.relpath(root, real) then
+      drop(item)
+    else
+      kept[#kept + 1] = item
+    end
+  end
+  items = kept
+  unplaced = vim.tbl_filter(function(u)
+    return u.root ~= root
+  end, unplaced)
+  notify_change()
+end
+
 function M.clear()
   for _, item in ipairs(items) do
     drop(item)

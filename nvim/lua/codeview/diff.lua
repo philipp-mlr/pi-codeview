@@ -4,8 +4,14 @@ local session = require("codeview.session")
 
 local M = {}
 
-local views = {} -- tabpage -> { n, chunk, root, files, index, left, right }
-local viewed = {} -- chunk n -> true once one of its files was shown in this nvim
+local views = {} -- tabpage -> { key, n, chunk, root, files, index, left, right }
+local viewed = {} -- chunk key -> true once one of its files was shown in this nvim
+
+-- Chunk numbers restart in every pi session, so views and viewed marks are keyed by session too.
+local function chunk_key(n)
+  local session_id = session.cached and session.cached.sessionId or ""
+  return session_id .. ":" .. tostring(n)
+end
 
 local function git_show(root, sha, path)
   local result = vim.system({ "git", "show", sha .. ":" .. path }, { cwd = root, text = true }):wait()
@@ -162,14 +168,14 @@ function M.show(view, index)
     end)
   end
   M.cleanup()
-  viewed[chunk.n] = true
+  viewed[view.key] = true
 end
 
 -- Opens chunk n in its own tabpage (or switches to the existing one).
 function M.open(n)
   current_view()
   for tab, view in pairs(views) do
-    if view.n == n then
+    if view.key == chunk_key(n) then
       vim.api.nvim_set_current_tabpage(tab)
       return
     end
@@ -188,7 +194,7 @@ function M.open(n)
     local left = vim.api.nvim_get_current_win()
     vim.cmd("rightbelow vsplit")
     local right = vim.api.nvim_get_current_win()
-    local view = { n = n, chunk = chunk, root = session.root, files = files, index = 1, left = left, right = right }
+    local view = { key = chunk_key(n), n = n, chunk = chunk, root = session.root, files = files, index = 1, left = left, right = right }
     views[vim.api.nvim_get_current_tabpage()] = view
     M.show(view, 1)
     vim.api.nvim_set_current_win(right)
@@ -196,7 +202,21 @@ function M.open(n)
 end
 
 function M.viewed(n)
-  return viewed[n] == true
+  return viewed[chunk_key(n)] == true
+end
+
+-- Closes the diff tab of chunk n (it shows a state that no longer exists once the chunk was
+-- reviewed), so opening the chunk again fetches it fresh.
+function M.forget(n)
+  for tab, view in pairs(views) do
+    if view.key == chunk_key(n) then
+      views[tab] = nil
+      if vim.api.nvim_tabpage_is_valid(tab) and #vim.api.nvim_list_tabpages() > 1 then
+        pcall(vim.cmd, "tabclose " .. vim.api.nvim_tabpage_get_number(tab))
+      end
+    end
+  end
+  M.cleanup()
 end
 
 function M.is_diff_window(win)

@@ -22,8 +22,9 @@ local function chunk_repo()
   return root, sh(root, "rev-parse", "HEAD")
 end
 
-local function open_chunk(root, sha)
+local function open_chunk(root, sha, session_id)
   session.root = root
+  session.cached = { sessionId = session_id or "s1" }
   local original = session.request
   session.request = function(_, _, cb)
     cb(nil, { chunk = { n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = {} } })
@@ -49,6 +50,35 @@ M["user buffer-local file keys are restored after the diff tab closes"] = functi
   diff.cleanup()
   assert(buffer_map(buf, "]f").desc == "user", vim.inspect(buffer_map(buf, "]f")))
   assert(vim.tbl_isempty(buffer_map(buf, "[f")), "[f leaked: " .. vim.inspect(buffer_map(buf, "[f")))
+end
+
+M["viewed is per pi session, not per chunk number"] = function()
+  local root, sha = chunk_repo()
+  open_chunk(root, sha, "first")
+  assert(diff.viewed(1), "chunk 1 of the first session not viewed")
+  vim.cmd("tabclose")
+  session.cached = { sessionId = "second" }
+  assert(not diff.viewed(1), "chunk 1 of another session counts as viewed")
+  session.cached = nil
+end
+
+M["forget closes the diff tab of a reviewed chunk"] = function()
+  local root, sha = chunk_repo()
+  open_chunk(root, sha, "forget")
+  assert(#vim.api.nvim_list_tabpages() == 2, "diff tab not open")
+  diff.forget(1)
+  assert(#vim.api.nvim_list_tabpages() == 1, "diff tab still open")
+  local fetched = false
+  local original = session.request
+  session.request = function(_, _, cb)
+    fetched = true
+    cb(nil, { chunk = { n = 1, status = "reviewed", fromSha = sha, toSha = sha, agentFiles = { "a.txt" }, humanFiles = {} } })
+  end
+  diff.open(1)
+  session.request = original
+  assert(fetched, "open reused a stale view instead of fetching the chunk")
+  vim.cmd("tabclose")
+  session.cached = nil
 end
 
 return M
