@@ -13,10 +13,13 @@ export function socketPath(repoHash: string, sessionId: string, runtimeDir?: str
 export type Server = { broadcast(e: Event): void; close(): Promise<void> };
 
 function isLive(p: string): Promise<boolean> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const probe = net.connect(p);
     probe.once("connect", () => { probe.destroy(); resolve(true); });
-    probe.once("error", () => resolve(false));
+    probe.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ECONNREFUSED" || err.code === "ENOENT" || err.code === "ENOTSOCK") resolve(false);
+      else reject(err);
+    });
   });
 }
 
@@ -63,8 +66,9 @@ export async function startServer(opts: {
   const server = net.createServer((sock) => {
     clients.add(sock);
     const decoder = new LineDecoder();
-    sock.on("data", (data) => {
-      for (const line of decoder.pushLines(data.toString("utf8"))) {
+    sock.setEncoding("utf8");
+    sock.on("data", (data: string) => {
+      for (const line of decoder.pushLines(data)) {
         let msg: unknown;
         try {
           msg = JSON.parse(line);

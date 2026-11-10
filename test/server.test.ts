@@ -25,8 +25,9 @@ async function connect(p: string): Promise<Client> {
   const dec = new LineDecoder();
   const queue: any[] = [];
   const waiters: Array<(m: any) => void> = [];
-  sock.on("data", (b) => {
-    for (const m of dec.push(b.toString())) {
+  sock.setEncoding("utf8");
+  sock.on("data", (b: string) => {
+    for (const m of dec.push(b)) {
       const w = waiters.shift();
       if (w) w(m); else queue.push(m);
     }
@@ -108,6 +109,22 @@ describe("server", () => {
     await c.next();
     c.send({ id: 2, type: "status" });
     expect(await c.next()).toEqual({ id: 2, ok: false, error: "boom" });
+  });
+
+  it("multibyte characters split across chunks survive", async () => {
+    const p = tmp();
+    let seen: any;
+    await start(p, async (r) => { seen = r; return { text: r.text }; });
+    const c = await connect(p);
+    c.send({ id: 1, type: "hello", version: 1 });
+    await c.next();
+    const bytes = Buffer.from(encode({ id: 2, type: "status", text: "Größe ä" }), "utf8");
+    const cut = bytes.indexOf(Buffer.from("ö")) + 1; // inside the two-byte ö
+    c.sock.write(bytes.subarray(0, cut));
+    await new Promise((r) => setTimeout(r, 30));
+    c.sock.write(bytes.subarray(cut));
+    expect(await c.next()).toEqual({ id: 2, ok: true, result: { text: "Größe ä" } });
+    expect(seen.text).toBe("Größe ä");
   });
 
   it("malformed json keeps the connection open", async () => {
