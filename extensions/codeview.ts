@@ -23,6 +23,8 @@ export default function codeview(pi: ExtensionAPI): void {
     promptGuidelines: CHECKPOINT_GUIDELINES,
     parameters: Type.Object({ note: Type.String({ description: "What was done in this step and why" }) }),
     defaultActive: false,
+    // A parallel sibling edit could land after the chunk snapshot and be hidden from review.
+    executionMode: "sequential",
     async execute(_id, params, signal) {
       if (!loop) throw new Error(NOT_A_REPO);
       const text = await loop.checkpoint(params.note, signal);
@@ -81,12 +83,15 @@ export default function codeview(pi: ExtensionAPI): void {
     await loop?.endOfRun();
   });
 
-  pi.on("agent_settled", (event) => {
+  pi.on("agent_settled", async (event) => {
+    // An aborted run skips agent_before_settle; its changes still become a chunk.
+    if (event.aborted) await loop?.endOfRun();
     loop?.settled(event.aborted);
   });
 
   pi.on("input", (event) => {
-    if (event.source === "extension" || !loop?.queueIfOpen(event.text)) return undefined;
+    if (event.source === "extension") return undefined;
+    if (!loop?.queueIfOpen(event.text, (event.images?.length ?? 0) > 0)) return undefined;
     return { action: "handled" };
   });
 }

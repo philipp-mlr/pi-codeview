@@ -103,6 +103,8 @@ export class ReviewLoop {
   private waiters: Waiter[] = [];
   private server: Server | null = null;
   private lock: Promise<unknown> = Promise.resolve();
+  /** Whether a mutating tool ran or a human_write arrived since the last vibe turn_end snapshot. */
+  private mayHaveChanged = false;
 
   private constructor(
     private readonly pi: ExtensionAPI,
@@ -140,6 +142,8 @@ export class ReviewLoop {
 
   async stop(): Promise<void> {
     this.resolveWaiters(REVIEW_PENDING);
+    // Let in-flight work (e.g. a human_write) finish and persist before the runtime goes away.
+    await this.lock;
     const server = this.server;
     this.server = null;
     await server?.close();
@@ -168,8 +172,10 @@ export class ReviewLoop {
   }
 
   async afterTool(toolName: string): Promise<void> {
+    if (isReadOnlyTool(toolName)) return;
+    this.mayHaveChanged = true;
     // Vibe mode records at turn_end only, so mutating tools stay cheap.
-    if (this.state.mode !== "review" || isReadOnlyTool(toolName)) return;
+    if (this.state.mode !== "review") return;
     await this.serial(async () => {
       if ((await this.recordSince("agent")).files.length > 0) this.persist();
     });
@@ -188,7 +194,8 @@ export class ReviewLoop {
   }
 
   async turnEnd(turnIndex: number): Promise<void> {
-    if (this.state.mode !== "vibe") return;
+    if (this.state.mode !== "vibe" || !this.mayHaveChanged) return;
+    this.mayHaveChanged = false;
     await this.serial(async () => {
       const { sha } = await this.recordSince("agent");
       if (this.state.steps.length === 0) return;
@@ -202,10 +209,17 @@ export class ReviewLoop {
     this.broadcast("run_settled", { aborted });
   }
 
-  /** Queues a prompt while a chunk is open. Returns false when nothing is open. */
-  queueIfOpen(text: string): boolean {
+  /**
+   * Queues a prompt while a chunk is open. Returns false when nothing is open, or when the prompt has
+   * images: the queue holds text only, so such a prompt passes through untouched and Philipp is told.
+   */
+  queueIfOpen(text: string, hasImages = false): boolean {
     const chunk = this.state.openChunk();
     if (!chunk) return false;
+    if (hasImages) {
+      this.notify(`Prompt with images not queued: review chunk ${chunk.n} first`, "warning");
+      return false;
+    }
     this.state.queuePrompt(text);
     this.persist();
     this.notify(`Prompt queued until chunk ${chunk.n} is reviewed`, "info");
@@ -229,11 +243,11 @@ export class ReviewLoop {
       const humanEdits = unique([...chunk.humanFiles, ...this.state.humanFiles()]).length;
       const sendable = { annotations: annotations.length, note: input.note, humanEdits, viewed: input.viewed };
       if (!this.state.canSend(sendable)) throw new Error(SEND_REFUSED);
-      const humanDiff = await this.humanDiff(chunk, sha);
+      const humanDiff = await this.humanDiff(chunk);
       const review = renderReview({ chunk, annotations, note: input.note, humanDiff });
       const reviewNote = input.note === "" ? undefined : input.note;
       const closed = this.state.closeChunk(chunk.n, { status: "reviewed", annotations, reviewNote });
-      this.state.setBaseline(sha);
+      this.state.advanceAfterReview(sha);
       this.state.setDrafts([]);
       if (this.resolveWaiters(review, closed.n)) {
         this.deliverQueued();
@@ -266,6 +280,7 @@ export class ReviewLoop {
   }
 
   async humanWrite(file: string): Promise<{ files: string[] }> {
+    this.mayHaveChanged = true;
     return this.serial(async () => {
       const { files } = await this.recordSince("human");
       if (files.length > 0) this.persist();
@@ -286,6 +301,10 @@ export class ReviewLoop {
   }
 
   async setMode(mode: Mode): Promise<void> {
+    const open = this.state.openChunk();
+    if (mode === "vibe" && open) {
+      throw new Error(`chunk ${open.n} is open — send a review or /codeview discard <note> first`);
+    }
     if (mode === "review" && (await this.otherReviewSession())) throw new Error(ONE_REVIEW_SESSION);
     await writeMode(this.root, mode);
     await this.serial(async () => {
@@ -372,17 +391,14 @@ export class ReviewLoop {
       return { sha: previous, files: [] };
     }
     const files = changed.map((c) => c.path);
-    this.state.recordStep({ sha, author, files, lines: changed.reduce((sum, c) => sum + c.lines, 0) });
+    this.state.recordStep({ from: previous, sha, author, files, lines: changed.reduce((sum, c) => sum + c.lines, 0) });
     return { sha, files };
   }
 
-  /** Philipp's edits inside the chunk plus those made since it was opened (during review). */
-  private async humanDiff(chunk: Chunk, sha: string): Promise<string> {
-    const during = this.state.humanFiles();
-    const parts = await Promise.all([
-      chunk.humanFiles.length > 0 ? diffText(this.root, chunk.fromSha, chunk.toSha, chunk.humanFiles) : "",
-      during.length > 0 ? diffText(this.root, chunk.toSha, sha, during) : "",
-    ]);
+  /** Philipp's edits inside the chunk plus those made since it was opened, step by step so the agent's hunks stay out. */
+  private async humanDiff(chunk: Chunk): Promise<string> {
+    const steps = [...chunk.humanSteps, ...this.state.humanSteps()];
+    const parts = await Promise.all(steps.map((s) => diffText(this.root, s.from, s.sha, s.files)));
     return parts.join("");
   }
 

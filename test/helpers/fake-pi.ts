@@ -9,6 +9,7 @@ type Handler = (event: any, ctx: any) => unknown;
 type ToolDef = {
   name: string;
   defaultActive?: boolean;
+  executionMode?: string;
   execute(id: string, params: any, signal: AbortSignal | undefined, onUpdate: unknown, ctx: any): Promise<any>;
 };
 type CommandDef = { handler(args: string, ctx: any): Promise<void> | void };
@@ -69,6 +70,7 @@ export function makeFakePi(cwd: string, opts: { sessionId?: string; entries?: Fa
   return {
     pi: pi as unknown as ExtensionAPI,
     ctx,
+    tools,
     sent,
     entries,
     statuses,

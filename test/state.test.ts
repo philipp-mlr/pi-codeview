@@ -5,9 +5,9 @@ describe("CodeviewState", () => {
   it("createChunk attributes steps", () => {
     const s = new CodeviewState();
     s.setBaseline("base");
-    s.recordStep({ sha: "1", author: "agent", files: ["a.ts"], lines: 10 });
-    s.recordStep({ sha: "2", author: "agent", files: ["b.ts"], lines: 5 });
-    s.recordStep({ sha: "3", author: "human", files: ["c.ts"], lines: 7 });
+    s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts"], lines: 10 });
+    s.recordStep({ from: "f2", sha: "2", author: "agent", files: ["b.ts"], lines: 5 });
+    s.recordStep({ from: "f3", sha: "3", author: "human", files: ["c.ts"], lines: 7 });
     expect(s.agentLines()).toBe(15);
     const c = s.createChunk("note", "tip");
     expect(c).toMatchObject({ n: 1, fromSha: "base", toSha: "tip", status: "open", agentFiles: ["a.ts", "b.ts"], humanFiles: ["c.ts"] });
@@ -17,7 +17,7 @@ describe("CodeviewState", () => {
   });
   it("human lines do not count toward agentLines", () => {
     const s = new CodeviewState();
-    s.recordStep({ sha: "1", author: "human", files: ["a.ts"], lines: 99 });
+    s.recordStep({ from: "f1", sha: "1", author: "human", files: ["a.ts"], lines: 99 });
     expect(s.agentLines()).toBe(0);
   });
   it("only one open chunk", () => {
@@ -41,9 +41,9 @@ describe("CodeviewState", () => {
     const s = new CodeviewState();
     s.mode = "review";
     s.setBaseline("b");
-    s.recordStep({ sha: "1", author: "agent", files: ["a.ts"], lines: 3 });
+    s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts"], lines: 3 });
     s.createChunk("n", "t");
-    s.recordStep({ sha: "2", author: "human", files: ["h.ts"], lines: 1 });
+    s.recordStep({ from: "f2", sha: "2", author: "human", files: ["h.ts"], lines: 1 });
     s.setDrafts([{ path: "a.ts", startLine: 1, endLine: 2, note: "x" }]);
     s.queuePrompt("p");
     const data = JSON.parse(JSON.stringify(s.serialize()));
@@ -54,6 +54,32 @@ describe("CodeviewState", () => {
     expect(r.drafts).toHaveLength(1);
     expect(r.queuedPrompts).toEqual(["p"]);
     expect(new CodeviewState().serialize()).toMatchObject({ mode: "vibe", baseline: "" });
+  });
+  it("restores steps persisted without from, chaining them from the baseline", () => {
+    const r = new CodeviewState({
+      mode: "review", baseline: "b", chunks: [], drafts: [], queuedPrompts: [],
+      steps: [{ sha: "1", author: "agent", files: ["a.ts"], lines: 1 }, { sha: "2", author: "human", files: ["a.ts"], lines: 1 }] as any,
+    });
+    expect(r.steps.map((s) => s.from)).toEqual(["b", "1"]);
+  });
+  it("advanceAfterReview keeps agent steps recorded during review and marks human ones reported", () => {
+    const s = new CodeviewState();
+    s.setBaseline("b");
+    s.createChunk("n", "t");
+    s.recordStep({ from: "t", sha: "1", author: "agent", files: ["a.ts"], lines: 4 });
+    s.recordStep({ from: "1", sha: "2", author: "human", files: ["h.ts"], lines: 1 });
+    s.closeChunk(1, { status: "reviewed", annotations: [] });
+    s.advanceAfterReview("2");
+    expect(s.baseline).toBe("t");
+    expect(s.agentLines()).toBe(4);
+    expect(s.humanFiles()).toEqual([]);
+    s.recordStep({ from: "2", sha: "3", author: "human", files: ["h.ts"], lines: 1 });
+    expect(s.humanSteps().map((x) => x.sha)).toEqual(["3"]);
+    expect(s.createChunk("next", "3")).toMatchObject({ agentFiles: ["a.ts"], humanFiles: ["h.ts"], humanSteps: [{ sha: "3" }] });
+    const s2 = new CodeviewState();
+    s2.recordStep({ from: "t", sha: "1", author: "human", files: ["h.ts"], lines: 1 });
+    s2.advanceAfterReview("1");
+    expect(s2).toMatchObject({ baseline: "1", steps: [] });
   });
   it("takeQueuedPrompts drains the queue", () => {
     const s = new CodeviewState();

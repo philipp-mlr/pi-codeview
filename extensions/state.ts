@@ -3,7 +3,11 @@ import type { Mode } from "./git.ts";
 export type { Mode } from "./git.ts";
 
 export type Author = "agent" | "human";
-export type Step = { sha: string; author: Author; files: string[]; lines: number };
+/**
+ * One recorded change: `from` is the snapshot it starts at, `sha` the one it ends at.
+ * `reported` marks human steps whose diff already reached the agent in a review.
+ */
+export type Step = { from: string; sha: string; author: Author; files: string[]; lines: number; reported?: boolean };
 export type Annotation = { path: string; startLine: number; endLine: number; note: string; quote?: string };
 export type ChunkStatus = "open" | "reviewed" | "discarded" | "recorded";
 export type Chunk = {
@@ -14,6 +18,8 @@ export type Chunk = {
   toSha: string;
   agentFiles: string[];
   humanFiles: string[];
+  /** Philipp's steps inside the chunk, so his diff can be shown without the agent's hunks. */
+  humanSteps: Step[];
   annotations: Annotation[];
   reviewNote?: string;
 };
@@ -41,8 +47,9 @@ export class CodeviewState {
     );
     this.mode = data.mode;
     this.baseline = data.baseline;
-    this.chunks = data.chunks;
-    this.steps = data.steps;
+    this.chunks = data.chunks.map((c) => ({ ...c, humanSteps: c.humanSteps ?? [] }));
+    // Steps persisted before `from` existed start where the previous one ended.
+    this.steps = data.steps.map((s, i) => ({ ...s, from: s.from ?? data.steps[i - 1]?.sha ?? data.baseline }));
     this.drafts = data.drafts;
     this.queuedPrompts = data.queuedPrompts;
   }
@@ -79,6 +86,21 @@ export class CodeviewState {
     return this.filesBy("human");
   }
 
+  /** Philipp's steps not yet reported to the agent. */
+  humanSteps(): Step[] {
+    return this.steps.filter((s) => s.author === "human" && !s.reported);
+  }
+
+  /**
+   * After a review: the steps recorded while the chunk was open move into the next chunk when the
+   * agent changed files meanwhile (a parallel tool call), with Philipp's steps marked as reported.
+   * Otherwise everything up to `sha` becomes the new baseline.
+   */
+  advanceAfterReview(sha: string): void {
+    if (!this.steps.some((s) => s.author === "agent")) return this.setBaseline(sha);
+    for (const s of this.steps) if (s.author === "human") s.reported = true;
+  }
+
   openChunk(): Chunk | undefined {
     return this.chunks.find((c) => c.status === "open");
   }
@@ -93,6 +115,7 @@ export class CodeviewState {
       toSha,
       agentFiles: this.agentFiles(),
       humanFiles: this.humanFiles(),
+      humanSteps: this.humanSteps(),
       annotations: [],
     };
     this.chunks.push(chunk);
@@ -131,6 +154,7 @@ export class CodeviewState {
   }
 
   private filesBy(author: Step["author"]): string[] {
-    return [...new Set(this.steps.filter((s) => s.author === author).flatMap((s) => s.files))];
+    const steps = author === "human" ? this.humanSteps() : this.steps.filter((s) => s.author === author);
+    return [...new Set(steps.flatMap((s) => s.files))];
   }
 }

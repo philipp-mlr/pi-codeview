@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -10,6 +10,7 @@ import {
   pruneRefs,
   readConfig,
   repoHash,
+  seedIndex,
   showFile,
   snapshot,
   writeMode,
@@ -35,6 +36,43 @@ describe("snapshot", () => {
     await snapshot(r.root, "refs/pi-codeview/s/0", "snap");
     expect((await r.git("diff", "--cached", "--name-only")).trim()).toBe("b.ts");
     expect((await r.git("rev-parse", "HEAD")).trim()).toBe(head);
+  });
+
+  it("never writes the real index file", async () => {
+    const r = await makeRepo();
+    r.write("b.ts", "x\n");
+    await r.git("add", "b.ts");
+    r.write("README.md", "changed\n");
+    r.write("c.ts", "c\n");
+    const index = join(r.root, ".git", "index");
+    const before = readFileSync(index);
+    const sha = await snapshot(r.root, "refs/pi-codeview/s/0", "snap");
+    expect(readFileSync(index).equals(before)).toBe(true);
+    expect(await showFile(r.root, sha, "README.md")).toBe("changed\n");
+    expect(await showFile(r.root, sha, "b.ts")).toBe("x\n");
+    expect(await showFile(r.root, sha, "c.ts")).toBe("c\n");
+  });
+
+  it("seedIndex copies the real index (cached stat data, no rehash) and leaves no file without one", async () => {
+    const r = await makeRepo();
+    const dest = join(realpathSync(mkdtempSync(join(tmpdir(), "codeview-seed-"))), "index");
+    await seedIndex(r.root, dest);
+    expect(readFileSync(dest).equals(readFileSync(join(r.root, ".git", "index")))).toBe(true);
+    const empty = await makeRepo({ commit: false });
+    const dest2 = join(realpathSync(mkdtempSync(join(tmpdir(), "codeview-seed-"))), "index");
+    await seedIndex(empty.root, dest2);
+    expect(existsSync(dest2)).toBe(false);
+  });
+
+  it("snapshot keeps a file removed from the real index but still on disk", async () => {
+    const r = await makeRepo();
+    r.write("b.ts", "x\n");
+    await r.git("add", "b.ts");
+    // A path removed from the real index but still on disk is untracked; it stays in the snapshot.
+    await r.git("rm", "-q", "--cached", "README.md");
+    const sha = await snapshot(r.root, "refs/pi-codeview/s/0", "snap");
+    expect(await showFile(r.root, sha, "README.md")).toBe("hello\n");
+    expect(await showFile(r.root, sha, "b.ts")).toBe("x\n");
   });
 
   it("includes untracked and respects .gitignore", async () => {

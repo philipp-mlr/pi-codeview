@@ -1,7 +1,7 @@
 {
   "name": "pi-codeview",
   "version": "0.1.0",
-  "description": "pi extension that sends code selections from Neovim to the pi coding agent",
+  "description": "Keep the code in view while a coding agent works: review-sized checkpoints for pi, reviewed in Neovim.",
   "keywords": [
     "pi-package"
   ],

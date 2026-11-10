@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -46,12 +46,16 @@ export async function repoHash(root: string): Promise<string> {
   return createHash("sha256").update(real).digest("hex").slice(0, 12);
 }
 
-async function hasHead(root: string): Promise<boolean> {
+/**
+ * Copies the worktree's real index to `dest` so `add -A` reuses its cached stat data instead of
+ * rehashing every file. The real index is only read. Without one, `dest` is left absent (empty index).
+ */
+export async function seedIndex(root: string, dest: string): Promise<void> {
+  const index = resolve(root, (await git(root, ["rev-parse", "--git-path", "index"])).trim());
   try {
-    await git(root, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]);
-    return true;
-  } catch {
-    return false;
+    await copyFile(index, dest);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 }
 
@@ -59,7 +63,7 @@ export async function snapshot(root: string, ref: string, message: string): Prom
   const dir = await mkdtemp(join(tmpdir(), "codeview-index-"));
   try {
     const env = { GIT_INDEX_FILE: join(dir, "index"), ...SNAPSHOT_IDENTITY };
-    if (await hasHead(root)) await git(root, ["read-tree", "HEAD"], env);
+    await seedIndex(root, env.GIT_INDEX_FILE);
     await git(root, ["add", "-A"], env);
     const tree = (await git(root, ["write-tree"], env)).trim();
     const sha = (

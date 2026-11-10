@@ -16,6 +16,7 @@ const chunk: Chunk = {
   toSha: "b",
   agentFiles: ["src/a.ts"],
   humanFiles: [],
+  humanSteps: [],
   annotations: [],
 };
 
@@ -42,6 +43,14 @@ describe("renderReview", () => {
     expect(text).toContain("src/a.ts:7-7");
     expect(text).not.toContain("```");
     expect(text).toContain("Note: why?");
+  });
+
+  it("renderReview fences a quote containing backticks with a longer fence", () => {
+    const quote = "const md = `\n```ts\nx\n```\n`;";
+    const text = renderReview({ chunk, annotations: [{ path: "a.md", startLine: 1, endLine: 5, note: "n", quote }], note: "", humanDiff: "" });
+    expect(text).toContain(`a.md:1-5\n\`\`\`\`\n${quote}\n\`\`\`\`\nNote: n`);
+    const long = renderReview({ chunk, annotations: [{ path: "b", startLine: 1, endLine: 1, note: "n", quote: "a ````` b" }], note: "", humanDiff: "" });
+    expect(long).toContain("``````\na ````` b\n``````");
   });
 
   it("renderReview includes the chunk number and agent note in the header", () => {

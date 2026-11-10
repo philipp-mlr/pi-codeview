@@ -5,9 +5,18 @@ export const CHECKPOINT_GUIDELINES: string[] = [
   "The checkpoint note states what was done and why.",
 ];
 
+/** A backtick fence longer than any backtick run in `text`, at least three. */
+function fenceFor(text: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
 function formatAnnotation(a: Annotation): string {
   const lines = [`${a.path}:${a.startLine}-${a.endLine}`];
-  if (a.quote !== undefined) lines.push("```", a.quote, "```");
+  if (a.quote !== undefined) {
+    const fence = fenceFor(a.quote);
+    lines.push(fence, a.quote, fence);
+  }
   lines.push(`Note: ${a.note}`);
   return lines.join("\n");
 }
