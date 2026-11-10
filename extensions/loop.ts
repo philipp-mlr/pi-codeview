@@ -99,7 +99,8 @@ function probeStatus(sockPath: string): Promise<{ root?: string; mode?: string }
 export class ReviewLoop {
   readonly state: CodeviewState;
   private snapshotSeq: number;
-  private waiter: Waiter | null = null;
+  /** Every checkpoint call waiting for the open chunk's review; parallel calls share one review. */
+  private waiters: Waiter[] = [];
   private server: Server | null = null;
   private lock: Promise<unknown> = Promise.resolve();
 
@@ -138,7 +139,7 @@ export class ReviewLoop {
   }
 
   async stop(): Promise<void> {
-    this.waiter?.resolve(REVIEW_PENDING);
+    this.resolveWaiters(REVIEW_PENDING);
     const server = this.server;
     this.server = null;
     await server?.close();
@@ -167,7 +168,8 @@ export class ReviewLoop {
   }
 
   async afterTool(toolName: string): Promise<void> {
-    if (isReadOnlyTool(toolName)) return;
+    // Vibe mode records at turn_end only, so mutating tools stay cheap.
+    if (this.state.mode !== "review" || isReadOnlyTool(toolName)) return;
     await this.serial(async () => {
       if ((await this.recordSince("agent")).files.length > 0) this.persist();
     });
@@ -233,8 +235,7 @@ export class ReviewLoop {
       const closed = this.state.closeChunk(chunk.n, { status: "reviewed", annotations, reviewNote });
       this.state.setBaseline(sha);
       this.state.setDrafts([]);
-      if (this.waiter?.n === closed.n) {
-        this.waiter.resolve(review);
+      if (this.resolveWaiters(review, closed.n)) {
         this.deliverQueued();
       } else {
         this.pi.sendUserMessage(renderResume(review, this.state.takeQueuedPrompts()), this.delivery());
@@ -257,7 +258,7 @@ export class ReviewLoop {
       const open = this.state.openChunk();
       if (!open) throw new Error("no open chunk");
       const chunk = this.state.closeChunk(open.n, { status: "discarded", annotations: [], reviewNote: note });
-      if (this.waiter?.n === chunk.n) this.waiter.resolve(`Philipp discarded chunk ${chunk.n}. His note:\n${note}`);
+      this.resolveWaiters(`Philipp discarded chunk ${chunk.n}. His note:\n${note}`, chunk.n);
       this.deliverQueued();
       this.persist();
       this.broadcast("chunk_reviewed", { chunk });
@@ -398,20 +399,28 @@ export class ReviewLoop {
   private waitForReview(n: number, signal?: AbortSignal): Promise<string> {
     return new Promise((resolve) => {
       if (signal?.aborted) return resolve(REVIEW_PENDING);
-      const onAbort = () => {
-        if (this.waiter?.n === n) this.waiter = null;
-        resolve(REVIEW_PENDING);
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-      this.waiter = {
+      const waiter: Waiter = {
         n,
         resolve: (text) => {
           signal?.removeEventListener("abort", onAbort);
-          this.waiter = null;
           resolve(text);
         },
       };
+      const onAbort = () => {
+        this.waiters = this.waiters.filter((w) => w !== waiter);
+        resolve(REVIEW_PENDING);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.waiters.push(waiter);
     });
+  }
+
+  /** Resolves the waiters for chunk `n` (all waiters when `n` is omitted). Returns whether any were waiting. */
+  private resolveWaiters(text: string, n?: number): boolean {
+    const matched = this.waiters.filter((w) => n === undefined || w.n === n);
+    this.waiters = this.waiters.filter((w) => !matched.includes(w));
+    for (const w of matched) w.resolve(text);
+    return matched.length > 0;
   }
 
   private deliverQueued(): void {

@@ -202,6 +202,60 @@ describe("codeview extension", () => {
     expect((await client2.request("status")).result).toMatchObject({ openChunk: null, drafts: [] });
   });
 
+  it("parallel checkpoint calls share the open chunk and all resolve with the review", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "review" });
+    const client = await connect(repo);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    const first = fake.callTool("checkpoint", { note: "add a" });
+    const second = fake.callTool("checkpoint", { note: "add a again" });
+    await until(() => client.events.find((e) => e.event === "chunk_ready"));
+    expect(await settled(Promise.race([first, second]))).toBe(false);
+    expect((await client.request("send", { annotations: [], note: "ok", viewed: true })).ok).toBe(true);
+    const [a, b] = await Promise.all([first, second]);
+    expect(text(a)).toContain('Review of chunk 1 ("add a")');
+    expect(text(b)).toBe(text(a));
+    expect(fake.sent.filter((s) => s.kind === "user")).toEqual([]);
+    expect(client.events.filter((e) => e.event === "chunk_ready")).toHaveLength(1);
+  });
+
+  it("aborting one of two checkpoint calls keeps the other waiting for the review", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "review" });
+    const client = await connect(repo);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    const abort = new AbortController();
+    const first = fake.callTool("checkpoint", { note: "add a" }, abort.signal);
+    const second = fake.callTool("checkpoint", { note: "add a" });
+    await until(() => client.events.find((e) => e.event === "chunk_ready"));
+    abort.abort();
+    expect(text(await first)).toBe("Review pending. Philipp will send it later.");
+    expect(await settled(second)).toBe(false);
+    expect((await client.request("send", { annotations: [], note: "ok", viewed: true })).ok).toBe(true);
+    expect(text(await second)).toContain('Review of chunk 1 ("add a")');
+    expect(fake.sent.filter((s) => s.kind === "user")).toEqual([]);
+  });
+
+  it("vibe mode: mutating tools take no snapshots, turn_end records one chunk", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const refs = async () => (await repo.git("for-each-ref", "refs/pi-codeview/")).split("\n").filter(Boolean).length;
+    const entriesBefore = fake.entries.length;
+    const refsBefore = await refs();
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    await agentWrite(fake, repo, "b.txt", "b\n");
+    await agentWrite(fake, repo, "c.txt", "c\n");
+    expect(fake.entries.length).toBe(entriesBefore);
+    expect(await refs()).toBe(refsBefore);
+    await fake.fire("turn_end", { turnIndex: 0 });
+    expect(fake.entries.length).toBe(entriesBefore + 1);
+    expect(await refs()).toBe(refsBefore + 1);
+    const client = await connect(repo);
+    const chunks = (await client.request("list_chunks")).result;
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({ n: 1, status: "recorded", agentFiles: ["a.txt", "b.txt", "c.txt"] });
+  });
+
   it("prompt typed while a chunk is open is queued and delivered after the review", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "review" });
