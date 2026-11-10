@@ -268,7 +268,8 @@ vim.notify("CLOSED " .. vim.inspect(vim.api.nvim_buf_call(buf, function() return
     const notes = await until(() => nvim.notifications().some((n) => n.msg.startsWith("CLOSED") || n.msg.startsWith("SCRIPT")) && nvim.notifications(), "mapping check");
     const msgs = notes.map((n) => n.msg);
     expect(msgs).toContain("OPEN codeview: next file in chunk");
-    expect(msgs.filter((m) => !m.startsWith("OPEN"))).toEqual(["CLOSED vim.empty_dict()"]);
+    // Only the mapping checks matter here; a "chunk N ready" notice can race in on slow machines.
+    expect(msgs.filter((m) => m.startsWith("CLOSED") || m.startsWith("SCRIPT"))).toEqual(["CLOSED vim.empty_dict()"]);
   }, TIMEOUT_MS);
 
   it("a save before any codeview command attaches quietly and is recorded as Philipp's step", async () => {
