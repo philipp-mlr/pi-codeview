@@ -1,0 +1,35 @@
+{
+  "name": "pi-codeview",
+  "version": "0.1.0",
+  "description": "pi extension that sends code selections from Neovim to the pi coding agent",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "extensions",
+    "nvim",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": ["./extensions/codeview.ts"]
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "test:nvim": "nvim --headless -l nvim/tests/run.lua"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@types/node": "^22.0.0",
+    "typebox": "*",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
