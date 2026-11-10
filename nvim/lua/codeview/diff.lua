@@ -80,7 +80,7 @@ local function step(delta)
   M.show(view, index)
 end
 
-local mapped = {} -- buf -> true while it carries the codeview file keys
+local mapped = {} -- buf -> { ["]f"] = user map dict or false, ["[f"] = ... } while it carries the codeview file keys
 
 -- Removes the file keys from every buffer no live diff window shows any more, so they do not
 -- linger on the user's real file buffers.
@@ -98,8 +98,14 @@ function M.cleanup()
   for buf in pairs(mapped) do
     if not shown[buf] then
       if vim.api.nvim_buf_is_valid(buf) then
-        pcall(vim.keymap.del, "n", "]f", { buffer = buf })
-        pcall(vim.keymap.del, "n", "[f", { buffer = buf })
+        for lhs, saved in pairs(mapped[buf]) do
+          pcall(vim.keymap.del, "n", lhs, { buffer = buf })
+          if saved then
+            vim.api.nvim_buf_call(buf, function()
+              vim.fn.mapset("n", false, saved)
+            end)
+          end
+        end
       end
       mapped[buf] = nil
     end
@@ -107,7 +113,16 @@ function M.cleanup()
 end
 
 local function map_file_keys(buf)
-  mapped[buf] = true
+  mapped[buf] = mapped[buf] or {}
+  for _, lhs in ipairs({ "]f", "[f" }) do
+    if mapped[buf][lhs] == nil then
+      local existing = vim.api.nvim_buf_call(buf, function()
+        return vim.fn.maparg(lhs, "n", false, true)
+      end)
+      local user_owned = existing.buffer == 1 and not vim.startswith(existing.desc or "", "codeview:")
+      mapped[buf][lhs] = user_owned and existing or false
+    end
+  end
   vim.keymap.set("n", "]f", function()
     step(1)
   end, { buffer = buf, desc = "codeview: next file in chunk" })
