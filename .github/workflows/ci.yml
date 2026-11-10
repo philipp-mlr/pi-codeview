@@ -16,7 +16,9 @@ jobs:
         with:
           neovim: true
           version: stable
-      - run: git config --global user.name ci && git config --global user.email ci@localhost
+      - run: |
+          git config --global user.name ci
+          git config --global user.email ci@localhost
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
