@@ -73,9 +73,32 @@ M["restore places drafts"] = function()
     { path = "missing.txt", startLine = 1, endLine = 1, note = "gone" },
   }, root)
   local list = annotations.list(root)
-  assert(#list == 1, vim.inspect(list))
-  assert(list[1].startLine == 2 and list[1].endLine == 4 and list[1].note == "r", vim.inspect(list))
+  assert(#list == 2, vim.inspect(list))
+  assert(list[1].path == "d.txt" and list[1].startLine == 2 and list[1].endLine == 4 and list[1].note == "r", vim.inspect(list))
+  assert(vim.deep_equal(list[2], { path = "missing.txt", startLine = 1, endLine = 1, note = "gone" }), vim.inspect(list))
   annotations.clear()
+end
+
+M["restore is idempotent, keeps unplaced, fires on_change only on news"] = function()
+  annotations.clear()
+  local root = temp_root()
+  file_buf(root, "f.txt", numbered(8))
+  local drafts = {
+    { path = "f.txt", startLine = 2, endLine = 4, note = "r" },
+    { path = "missing.txt", startLine = 1, endLine = 1, note = "gone" },
+  }
+  annotations.restore(drafts, root)
+  annotations.restore(drafts, root)
+  assert(annotations.count(root) == 2, annotations.count(root))
+  assert(#annotations.list(root) == 2, vim.inspect(annotations.list(root)))
+  local fired = 0
+  annotations.on_change(function() fired = fired + 1 end)
+  annotations.restore(drafts, root)
+  vim.wait(50, function() return fired > 0 end)
+  assert(fired == 0, "fired " .. fired)
+  annotations.on_change(nil)
+  annotations.clear()
+  assert(annotations.count() == 0 and #annotations.list(root) == 0)
 end
 
 M["remove_at_cursor removes containing range and on_change fires"] = function()

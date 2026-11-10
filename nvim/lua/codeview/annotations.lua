@@ -4,6 +4,7 @@ local M = {}
 
 local ns = vim.api.nvim_create_namespace("codeview")
 local items = {}
+local unplaced = {} -- drafts whose file is missing; kept verbatim so save round-trips never drop them
 local next_id = 0
 local change_listener = nil
 
@@ -96,6 +97,11 @@ function M.list(root)
     end
   end
   items = kept
+  for _, u in ipairs(unplaced) do
+    if u.root == root then
+      result[#result + 1] = vim.deepcopy(u.draft)
+    end
+  end
   table.sort(result, function(a, b)
     if a.path ~= b.path then
       return a.path < b.path
@@ -110,27 +116,59 @@ function M.clear()
     drop(item)
   end
   items = {}
+  unplaced = {}
   notify_change()
 end
 
+local function same(a, b)
+  return a.path == b.path and a.startLine == b.startLine and a.endLine == b.endLine and a.note == b.note
+end
+
 function M.restore(drafts, root)
+  local present = M.list(root)
+  local changed = false
   for _, draft in ipairs(drafts) do
-    local path = root .. "/" .. draft.path
-    if vim.uv.fs_stat(path) then
-      local buf = vim.fn.bufadd(path)
-      vim.fn.bufload(buf)
-      place(buf, draft.startLine, draft.endLine, draft.note)
+    local duplicate = false
+    for _, p in ipairs(present) do
+      if same(p, draft) then
+        duplicate = true
+        break
+      end
+    end
+    if not duplicate then
+      local path = root .. "/" .. draft.path
+      if vim.uv.fs_stat(path) then
+        local buf = vim.fn.bufadd(path)
+        vim.fn.bufload(buf)
+        place(buf, draft.startLine, draft.endLine, draft.note)
+        present[#present + 1] = draft
+      else
+        unplaced[#unplaced + 1] = { root = root, draft = vim.deepcopy(draft) }
+        present[#present + 1] = draft
+      end
+      changed = true
     end
   end
-  notify_change()
+  if changed then
+    notify_change()
+  end
 end
 
 function M.on_change(fn)
   change_listener = fn
 end
 
-function M.count()
-  return #items
+function M.count(root)
+  if root then
+    return #M.list(root)
+  end
+  local n = #unplaced
+  for _, item in ipairs(items) do
+    if position(item) and vim.api.nvim_buf_get_name(item.buf) ~= "" then
+      n = n + 1
+    end
+  end
+  return n
 end
 
 return M
