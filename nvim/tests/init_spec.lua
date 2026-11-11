@@ -3,7 +3,7 @@ local annotations = require("pi.annotations")
 
 local M = {}
 
-local KEYS = { "<leader>pa", "<leader>ps", "<leader>pn", "<leader>px", "<leader>pr", "<leader>pv", "<leader>pm", "<leader>pc" }
+local KEYS = { "<leader>pa", "<leader>ps", "<leader>pn", "<leader>px", "<leader>pe", "<leader>pr", "<leader>pv", "<leader>pm", "<leader>pc" }
 
 local function reset_maps()
   for _, lhs in ipairs(KEYS) do
@@ -31,6 +31,7 @@ M["default keys live under <leader>p with pi: descriptions"] = function()
     session = "<leader>ps",
     annotate = "<leader>pn",
     remove = "<leader>px",
+    edit = "<leader>pe",
     send = "<leader>pr",
     chunks = "<leader>pv",
     checkpoints = "<leader>pm",
@@ -44,6 +45,7 @@ M["default keys live under <leader>p with pi: descriptions"] = function()
     { "n", "<leader>pn", "pi: annotate line" },
     { "x", "<leader>pn", "pi: annotate selection" },
     { "n", "<leader>px", "pi: remove annotation" },
+    { "n", "<leader>pe", "pi: edit annotation" },
     { "n", "<leader>pr", "pi: send annotations" },
     { "n", "<leader>pv", "pi: toggle chunk panel" },
     { "n", "<leader>pm", "pi: toggle checkpoint mode" },
@@ -53,7 +55,7 @@ M["default keys live under <leader>p with pi: descriptions"] = function()
     local desc = vim.fn.maparg(w[2], w[1], false, true).desc
     assert(desc == w[3], ("%s (%s): %s"):format(w[2], w[1], tostring(desc)))
   end
-  for _, name in ipairs({ "PiAsk", "PiSession", "PiAnnotate", "PiAnnotationRemove", "PiSendAnnotations", "PiChunks", "PiCheckpoints", "PiCancel" }) do
+  for _, name in ipairs({ "PiAsk", "PiSession", "PiAnnotate", "PiAnnotationRemove", "PiAnnotationEdit", "PiSendAnnotations", "PiChunks", "PiCheckpoints", "PiCancel" }) do
     assert(vim.fn.exists(":" .. name) == 2, "missing command " .. name)
   end
   assert(#notes == 0, vim.inspect(notes))
@@ -326,6 +328,119 @@ M["highlight links are restored after a colorscheme change"] = function()
   vim.cmd("doautocmd ColorScheme")
   assert(vim.api.nvim_get_hl(0, { name = "PiAnnotation" }).link == "DiagnosticInfo")
   assert(vim.api.nvim_get_hl(0, { name = "PiLive" }).link == "CursorLine")
+end
+
+
+local function stub_ui(select_choice, input_value)
+  local saved = { select = vim.ui.select, input = vim.ui.input }
+  local seen = {}
+  vim.ui.select = function(list, opts, cb)
+    seen.select = { n = #list, prompt = opts.prompt, labels = vim.tbl_map(opts.format_item, list) }
+    cb(select_choice and list[select_choice] or nil)
+  end
+  vim.ui.input = function(opts, cb)
+    seen.input = opts
+    cb(input_value)
+  end
+  return seen, function()
+    vim.ui.select, vim.ui.input = saved.select, saved.input
+  end
+end
+
+local function three_on_line_2()
+  annotations.clear()
+  local dir = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()
+  vim.fn.mkdir(dir, "p")
+  dir = vim.uv.fs_realpath(dir)
+  vim.fn.writefile({ "l1", "l2", "l3", "l4" }, dir .. "/n.txt")
+  local buf = vim.fn.bufadd(dir .. "/n.txt")
+  vim.fn.bufload(buf)
+  vim.api.nvim_set_current_buf(buf)
+  annotations.add(buf, 2, 2, "first")
+  annotations.add(buf, 2, 2, "second")
+  annotations.add(buf, 1, 3, "range")
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  pi.setup()
+  return buf, dir
+end
+
+local function notes_of(dir)
+  return vim.tbl_map(function(a) return a.note end, annotations.list(dir))
+end
+
+M["PiAnnotationRemove removes exactly the chosen annotation"] = function()
+  local _, dir = three_on_line_2()
+  local seen, restore = stub_ui(2)
+  vim.cmd("PiAnnotationRemove")
+  restore()
+  assert(seen.select.prompt == "pi: remove which annotation?", vim.inspect(seen))
+  assert(vim.deep_equal(seen.select.labels, { "L1-3: range", "L2-2: first", "L2-2: second" }), vim.inspect(seen.select.labels))
+  local left = notes_of(dir)
+  table.sort(left)
+  assert(vim.deep_equal(left, { "range", "second" }), vim.inspect(left))
+  annotations.clear()
+end
+
+M["PiAnnotationRemove / Edit with Esc in the picker change nothing"] = function()
+  local _, dir = three_on_line_2()
+  local seen, restore = stub_ui(nil, "never")
+  vim.cmd("PiAnnotationRemove")
+  vim.cmd("PiAnnotationEdit")
+  restore()
+  assert(seen.select and not seen.input, vim.inspect(seen))
+  assert(#notes_of(dir) == 3)
+  annotations.clear()
+end
+
+M["PiAnnotationRemove removes a single annotation without a picker; none gives a message"] = function()
+  local buf, dir = three_on_line_2()
+  vim.api.nvim_win_set_cursor(0, { 3, 0 })
+  local seen, restore = stub_ui(nil)
+  vim.cmd("PiAnnotationRemove")
+  assert(seen.select == nil and #notes_of(dir) == 2, vim.inspect(seen))
+  vim.api.nvim_win_set_cursor(0, { 4, 0 })
+  local notes = capture_notify(function() vim.cmd("PiAnnotationRemove") end)
+  restore()
+  assert(#notes == 1 and notes[1].msg == "pi: no annotation at the cursor", vim.inspect(notes))
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["PiAnnotationEdit changes text and the virtual line; cancelled or empty input keeps it"] = function()
+  local buf, dir = three_on_line_2()
+  local function virt()
+    local ns = vim.api.nvim_create_namespace("pi_annotations")
+    local out = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
+      if m[4].virt_lines then out[#out + 1] = m[4].virt_lines[1][1][1] end
+    end
+    return out
+  end
+  local seen, restore = stub_ui(3, "  edited\n text ")
+  vim.cmd("PiAnnotationEdit")
+  assert(seen.select.prompt == "pi: edit which annotation?")
+  assert(seen.input.prompt == "pi annotation: " and seen.input.default == "second", vim.inspect(seen.input))
+  assert(vim.tbl_contains(notes_of(dir), " edited text ") or vim.tbl_contains(notes_of(dir), "edited text"), vim.inspect(notes_of(dir)))
+  assert(vim.tbl_contains(virt(), "  ✎ " .. annotations.at_cursor()[3].note), vim.inspect(virt()))
+  assert(not vim.tbl_contains(virt(), "  ✎ second"), vim.inspect(virt()))
+  restore()
+  for _, value in ipairs({ "", false }) do
+    local before = notes_of(dir)
+    local _, r = stub_ui(1, value or nil)
+    vim.cmd("PiAnnotationEdit")
+    r()
+    assert(vim.deep_equal(notes_of(dir), before), vim.inspect(notes_of(dir)))
+  end
+  annotations.clear()
+end
+
+M["picker label truncates long text to 80 characters"] = function()
+  local buf = three_on_line_2()
+  annotations.add(buf, 4, 4, string.rep("x", 100))
+  vim.api.nvim_win_set_cursor(0, { 4, 0 })
+  local label = annotations.label(annotations.at_cursor()[1])
+  assert(label == "L4-4: " .. string.rep("x", 80) .. "…", label)
+  annotations.clear()
 end
 
 return M

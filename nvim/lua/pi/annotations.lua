@@ -158,27 +158,56 @@ local function drop(item)
   end
 end
 
-function M.remove_at_cursor()
+-- Items whose current range contains the cursor line in the current buffer, sorted by start line.
+function M.at_cursor()
   local buf = vim.api.nvim_get_current_buf()
   local line = vim.api.nvim_win_get_cursor(0)[1]
-  local kept, removed = {}, 0
+  local found = {}
   for _, item in ipairs(items) do
-    local s, e = nil, nil
     if item.buf == buf then
-      s, e = position(item)
+      local s, e = position(item)
+      if s and line >= s and line <= e then
+        found[#found + 1] = { item = item, start_line = s }
+      end
     end
-    if s and line >= s and line <= e then
-      drop(item)
-      removed = removed + 1
-    else
-      kept[#kept + 1] = item
+  end
+  table.sort(found, function(a, b)
+    if a.start_line ~= b.start_line then
+      return a.start_line < b.start_line
+    end
+    return a.item.id < b.item.id
+  end)
+  return vim.tbl_map(function(f)
+    return f.item
+  end, found)
+end
+
+-- Picker label: `L<start>-<end>: <text>`, text cut to 80 characters.
+function M.label(item)
+  local s, e = position(item)
+  local text = item.note:gsub("%s+", " ")
+  if vim.fn.strchars(text) > 80 then
+    text = vim.fn.strcharpart(text, 0, 80) .. "…"
+  end
+  return ("L%d-%d: %s"):format(s or 0, e or 0, text)
+end
+
+function M.remove(item)
+  local kept = {}
+  for _, other in ipairs(items) do
+    if other ~= item then
+      kept[#kept + 1] = other
     end
   end
   items = kept
-  if removed > 0 then
-    notify_change()
-  end
-  return removed
+  drop(item)
+  notify_change()
+end
+
+function M.edit(item, text)
+  item.note = text:gsub("%s+", " ")
+  build_extras(item)
+  notify_change()
 end
 
 -- opts.diagnostics: attach the ERROR/WARN diagnostics on each annotation's current lines.

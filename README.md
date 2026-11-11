@@ -80,7 +80,8 @@ message. Keys you pass in `keys` are always mapped. The key names are `ask`,
 | `<leader>pc` | `:PiCancel` | Cancel the agent's current run (like Escape in pi). |
 | `<leader>ps` | `:PiSession` | Choose the pi session to work with. |
 | `<leader>pn` | `:PiAnnotate` | Annotate the current line or the visual range. |
-| `<leader>px` | `:PiAnnotationRemove` | Remove the annotation under the cursor. |
+| `<leader>px` | `:PiAnnotationRemove` | Remove one annotation under the cursor; when several cover the line, pick which. |
+| `<leader>pe` | `:PiAnnotationEdit` | Edit the text of one annotation under the cursor; when several cover the line, pick which. |
 | `<leader>pr` | `:PiSendAnnotations` | Save all buffers, then send the annotations and an optional message. |
 | `<leader>pv` | `:PiChunks` | Toggle the chunk panel (checkpoint mode). |
 | `<leader>pm` | `:PiCheckpoints [on\|off]` | Switch checkpoint mode for this repository; without an argument it toggles. |

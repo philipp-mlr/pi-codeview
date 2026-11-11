@@ -15,6 +15,7 @@ M.default_keys = {
   session = "<leader>ps",
   annotate = "<leader>pn",
   remove = "<leader>px",
+  edit = "<leader>pe",
   send = "<leader>pr",
   chunks = "<leader>pv",
   checkpoints = "<leader>pm",
@@ -268,10 +269,34 @@ local function annotate_command(cmd)
   end)
 end
 
-local function remove_command()
-  if annotations.remove_at_cursor() == 0 then
+-- Picks one of the annotations at the cursor (no picker when exactly one), then calls act(item).
+local function pick_annotation(prompt, act)
+  local found = annotations.at_cursor()
+  if #found == 0 then
     vim.notify("pi: no annotation at the cursor")
+  elseif #found == 1 then
+    act(found[1])
+  else
+    vim.ui.select(found, { prompt = prompt, format_item = annotations.label }, function(item)
+      if item then
+        act(item)
+      end
+    end)
   end
+end
+
+local function remove_command()
+  pick_annotation("pi: remove which annotation?", annotations.remove)
+end
+
+local function edit_command()
+  pick_annotation("pi: edit which annotation?", function(item)
+    vim.ui.input({ prompt = "pi annotation: ", default = item.note }, function(text)
+      if text and text ~= "" then
+        annotations.edit(item, text)
+      end
+    end)
+  end)
 end
 
 local function report_write(buf)
@@ -314,6 +339,7 @@ function M.setup(opts)
   command("PiAsk", prompt_command, { range = true, desc = "pi: ask pi" })
   command("PiAnnotate", annotate_command, { range = true, desc = "pi: annotate lines" })
   command("PiAnnotationRemove", remove_command, { desc = "pi: remove the annotation at the cursor" })
+  command("PiAnnotationEdit", edit_command, { desc = "pi: edit the annotation at the cursor" })
   command("PiSendAnnotations", function()
     M.send()
   end, { desc = "pi: send annotations" })
@@ -356,6 +382,7 @@ function M.setup(opts)
   map("n", "annotate", "<cmd>PiAnnotate<CR>", "pi: annotate line")
   map("x", "annotate", ":PiAnnotate<CR>", "pi: annotate selection")
   map("n", "remove", "<cmd>PiAnnotationRemove<CR>", "pi: remove annotation")
+  map("n", "edit", "<cmd>PiAnnotationEdit<CR>", "pi: edit annotation")
   map("n", "send", "<cmd>PiSendAnnotations<CR>", "pi: send annotations")
   map("n", "chunks", "<cmd>PiChunks<CR>", "pi: toggle chunk panel")
   map("n", "checkpoints", "<cmd>PiCheckpoints<CR>", "pi: toggle checkpoint mode")
