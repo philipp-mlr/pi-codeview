@@ -34,6 +34,7 @@ handler failures are returned as `ok:false`.
 | `send` | `{"id":6,"type":"send","annotations":[{"path":"a.ts","startLine":3,"endLine":4,"note":"rename","quote":"foo"}],"note":"overall","viewed":true}` |
 | `save_drafts` | `{"id":7,"type":"save_drafts","annotations":[{"path":"a.ts","startLine":3,"endLine":4,"note":"wip"}]}` |
 | `human_write` | `{"id":8,"type":"human_write","path":"a.ts"}` |
+| `get_activity` (`since` optional) | `{"id":10,"type":"get_activity","since":41}` |
 | `set_mode` (`review` or `vibe`) | `{"id":9,"type":"set_mode","mode":"review"}` |
 
 `prompt.context` is optional; `startLine`/`endLine` inside it are optional.
@@ -43,6 +44,12 @@ handler failures are returned as `ok:false`.
 - `status`: `{"mode":"review","root":"/abs/worktree","sessionId":"…","openChunk":<chunk>|null,"drafts":[<annotation>],"busy":false,"queued":0}`.
   `root` is the worktree the session runs in; clients attach only to sessions whose `root` is their own worktree.
   `busy` is true while the agent is working; `queued` counts prompts waiting behind the open chunk.
+  `activity` is the tool currently running (`{"tool":"edit","target":"a.ts"}`, the most recently started one when several run) or `null`;
+  `activitySeq` is the seq of the latest activity item (0 when none). Both are additive fields.
+- `get_activity`: array of activity items with `seq > since` (all when omitted), oldest first. The log is in memory only and keeps the last 200 items.
+  Item: `{"seq":42,"kind":"prompt"|"text"|"tool"|"checkpoint"|"settled","text":"…","tool":"edit","target":"a.ts","at":<ms epoch>}`;
+  `tool`/`target` only on `tool` items. `text` is a whitespace-collapsed excerpt (300 chars, `…` when cut) for `prompt`/`text`,
+  `<tool> <target>` for `tool`, the note for `checkpoint`, `settled` or `aborted` for `settled`.
 - `prompt`: `{"queued":true}` when a chunk is open and the prompt waits for its review, else `{"queued":false}` (sent to the agent).
 - `list_chunks`: array of chunks. `get_chunk`: `{"chunk":<chunk>,"diff":"<unified diff fromSha..toSha>"}`.
 - `send`: `{"chunk":<closed chunk>}` for a review, `{"chunk":null}` when sent as a prompt (no open chunk).
@@ -58,5 +65,8 @@ handler failures are returned as `ok:false`.
 | `chunk_reviewed` | `{"event":"chunk_reviewed","data":{"chunk":{"n":2,"status":"reviewed","...":"..."}}}` |
 | `mode_changed` | `{"event":"mode_changed","data":{"mode":"review"}}` |
 | `run_settled` | `{"event":"run_settled","data":{"aborted":false}}` |
+
+`activity` (additive): `{"event":"activity","data":{"seq":42,"kind":"tool","text":"edit a.ts","tool":"edit","target":"a.ts","at":1,"current":{"tool":"edit","target":"a.ts"}|null}}`,
+one per added activity item; `current` is the same value as `status.activity`.
 
 `chunk_reviewed` is also sent for a discarded chunk (`status: "discarded"`).

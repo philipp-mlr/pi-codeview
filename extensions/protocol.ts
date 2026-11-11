@@ -10,6 +10,7 @@ export type Request =
   | { id: number; type: "status" }
   | { id: number; type: "list_chunks" }
   | { id: number; type: "get_chunk"; n: number }
+  | { id: number; type: "get_activity"; since?: number }
   | { id: number; type: "prompt"; text: string; context?: PromptContext }
   | { id: number; type: "send"; annotations: Annotation[]; note: string; viewed: boolean }
   | { id: number; type: "save_drafts"; annotations: Annotation[] }
@@ -23,7 +24,7 @@ export type Response =
   | { id: number | null; ok: true; result: unknown }
   | { id: number | null; ok: false; error: string };
 
-export type EventName = "chunk_ready" | "chunk_reviewed" | "mode_changed" | "run_settled";
+export type EventName = "chunk_ready" | "chunk_reviewed" | "mode_changed" | "run_settled" | "activity";
 export type Event = { event: EventName; data: unknown };
 
 /** Serialises one message as an NDJSON line. */

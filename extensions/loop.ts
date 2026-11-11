@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ActivityLog, excerpt, toolLine } from "./activity.ts";
 import { diffText, numstat, parseMode, pruneRefs, readConfig, repoHash, showFile, snapshot, writeMode } from "./git.ts";
 import type { Mode } from "./git.ts";
 import { LineDecoder, PROTOCOL_VERSION, encode } from "./protocol.ts";
@@ -92,6 +93,7 @@ function probeStatus(sockPath: string): Promise<{ root?: string; mode?: string }
 /** The review loop for one pi session in one git worktree. */
 export class ReviewLoop {
   readonly state: CodeviewState;
+  private readonly activity = new ActivityLog();
   private snapshotSeq: number;
   /** Every checkpoint call waiting for the open chunk's review; parallel calls share one review. */
   private waiters: Waiter[] = [];
@@ -199,7 +201,31 @@ export class ReviewLoop {
     });
   }
 
+  activityToolStart(toolCallId: string, toolName: string, args: unknown): void {
+    const { tool, target } = toolLine(toolName, args);
+    this.activity.startTool(toolCallId, tool, target);
+    const note = (args as { note?: unknown } | null)?.note;
+    if (toolName === CHECKPOINT_TOOL && typeof note === "string") {
+      this.addActivity({ kind: "checkpoint", text: note });
+    } else {
+      this.addActivity({ kind: "tool", text: target === "" ? tool : `${tool} ${target}`, tool, target });
+    }
+  }
+
+  activityToolEnd(toolCallId: string): void {
+    this.activity.endTool(toolCallId);
+  }
+
+  /** Adds a `text` item for an assistant message or a `prompt` item for a user message; other roles are ignored. */
+  activityMessage(message: { role?: string; content?: unknown }): void {
+    if (message.role !== "assistant" && message.role !== "user") return;
+    const text = excerpt(message);
+    if (text !== null) this.addActivity({ kind: message.role === "user" ? "prompt" : "text", text });
+  }
+
   settled(aborted: boolean): void {
+    this.activity.clearTools();
+    this.addActivity({ kind: "settled", text: aborted ? "aborted" : "settled" });
     this.broadcast("run_settled", { aborted });
   }
 
@@ -332,7 +358,11 @@ export class ReviewLoop {
           drafts: this.state.drafts,
           busy: !this.ctx.isIdle(),
           queued: this.state.queuedPrompts.length,
+          activity: this.activity.current(),
+          activitySeq: this.activity.lastSeq(),
         };
+      case "get_activity":
+        return this.activity.since(req.since);
       case "list_chunks":
         return this.state.chunks;
       case "get_chunk": {
@@ -473,6 +503,11 @@ export class ReviewLoop {
         ? "codeview: review"
         : undefined;
     if (this.ctx.hasUI) this.ctx.ui.setStatus(STATUS_KEY, status);
+  }
+
+  private addActivity(item: Parameters<ActivityLog["add"]>[0]): void {
+    const added = this.activity.add(item);
+    this.broadcast("activity", { ...added, current: this.activity.current() });
   }
 
   private broadcast(event: EventName, data: unknown): void {

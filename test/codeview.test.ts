@@ -579,3 +579,58 @@ describe("codeview extension", () => {
     expect((await client.request("status")).result.mode).toBe("vibe");
   });
 });
+
+describe("codeview activity", () => {
+  it("reports tool start/end, text, prompt, settled and serves get_activity", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    expect((await client.request("status")).result).toMatchObject({ activity: null, activitySeq: 0 });
+
+    await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "edit", args: { path: "a.ts" } });
+    const ev = await until(() => client.events.find((e) => e.event === "activity"));
+    expect(ev.data).toMatchObject({ seq: 1, kind: "tool", tool: "edit", target: "a.ts", current: { tool: "edit", target: "a.ts" } });
+    expect((await client.request("status")).result).toMatchObject({ activity: { tool: "edit", target: "a.ts" }, activitySeq: 1 });
+
+    await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "edit", result: {}, isError: false });
+    expect((await client.request("status")).result.activity).toBeNull();
+
+    await fake.fire("message_end", { message: { role: "assistant", content: [{ type: "thinking", thinking: "x" }, { type: "text", text: "Done \n here" }] } });
+    await fake.fire("message_end", { message: { role: "user", content: "why  so?" } });
+    await fake.fire("message_end", { message: { role: "toolResult", content: [{ type: "text", text: "ignored" }] } });
+    await fake.fire("message_end", { message: { role: "assistant", content: [{ type: "toolCall", name: "x" }] } });
+    await fake.fire("tool_execution_start", { toolCallId: "t2", toolName: "bash", args: { command: "ls" } });
+    await fake.fire("agent_settled", { aborted: false });
+
+    const items = (await client.request("get_activity")).result;
+    expect(items.map((i: any) => [i.kind, i.text])).toEqual([
+      ["tool", "edit a.ts"], ["text", "Done here"], ["prompt", "why so?"], ["tool", "bash ls"], ["settled", "settled"],
+    ]);
+    expect((await client.request("status")).result.activity).toBeNull();
+    const tail = (await client.request("get_activity", { since: 3 })).result;
+    expect(tail.map((i: any) => i.seq)).toEqual([4, 5]);
+  });
+
+  it("logs the checkpoint note instead of a generic tool line", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "review" });
+    const client = await connect(repo);
+    await fake.fire("tool_execution_start", { toolCallId: "c1", toolName: "checkpoint", args: { note: "add a" } });
+    const items = (await client.request("get_activity")).result;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "checkpoint", text: "add a" });
+  });
+
+  it("keeps only the last 200 of 250 tool events", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    for (let i = 0; i < 250; i++) {
+      await fake.fire("tool_execution_start", { toolCallId: `t${i}`, toolName: "read", args: { path: `f${i}` } });
+      await fake.fire("tool_execution_end", { toolCallId: `t${i}`, toolName: "read", result: {}, isError: false });
+    }
+    const items = (await client.request("get_activity")).result;
+    expect(items).toHaveLength(200);
+    expect(items.at(-1).seq).toBe(250);
+  });
+});

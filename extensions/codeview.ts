@@ -75,6 +75,18 @@ export default function codeview(pi: ExtensionAPI): void {
     await loop?.afterTool(event.toolName);
   });
 
+  pi.on("tool_execution_start", (event) => {
+    loop?.activityToolStart(event.toolCallId, event.toolName, event.args);
+  });
+
+  pi.on("tool_execution_end", (event) => {
+    loop?.activityToolEnd(event.toolCallId);
+  });
+
+  pi.on("message_end", (event) => {
+    loop?.activityMessage(event.message);
+  });
+
   pi.on("turn_end", async (event) => {
     await loop?.turnEnd(event.turnIndex);
   });
