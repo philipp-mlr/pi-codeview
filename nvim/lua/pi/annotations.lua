@@ -71,6 +71,15 @@ local function build_extras(item)
   })
 end
 
+local function stop_timer(buf)
+  local timer = timers[buf]
+  if timer then
+    timer:stop()
+    timer:close()
+    timers[buf] = nil
+  end
+end
+
 local function schedule_rebuild(buf)
   local timer = timers[buf]
   if not timer then
@@ -80,6 +89,11 @@ local function schedule_rebuild(buf)
   timer:stop()
   timer:start(REBUILD_MS, 0, vim.schedule_wrap(function()
     if not vim.api.nvim_buf_is_valid(buf) then
+      stop_timer(buf)
+      return
+    end
+    if #buffer_items(buf) == 0 then
+      stop_timer(buf)
       return
     end
     for _, item in ipairs(buffer_items(buf)) do
@@ -97,12 +111,7 @@ local function attach(buf)
     on_lines = function()
       if #buffer_items(buf) == 0 then
         attached[buf] = nil
-        local timer = timers[buf]
-        if timer then
-          timer:stop()
-          timer:close()
-          timers[buf] = nil
-        end
+        stop_timer(buf)
         return true
       end
       schedule_rebuild(buf)
@@ -112,6 +121,7 @@ local function attach(buf)
     end,
     on_detach = function()
       attached[buf] = nil
+      stop_timer(buf)
     end,
   })
 end
@@ -233,7 +243,15 @@ function M.clear()
   end
   items = {}
   unplaced = {}
+  for buf in pairs(timers) do
+    stop_timer(buf)
+  end
   notify_change()
+end
+
+-- Test hook: the debounce timers still open, keyed by buffer.
+function M._timers()
+  return timers
 end
 
 local function same(a, b)

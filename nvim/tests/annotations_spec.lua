@@ -330,6 +330,43 @@ M["deleting the last line of the range leaves marks only on remaining rows"] = f
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
+local function timer_count()
+  local n = 0
+  for _ in pairs(annotations._timers()) do
+    n = n + 1
+  end
+  return n
+end
+
+M["wiping a buffer with a pending rebuild closes its timer"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local buf = file_buf(root, "w.txt", numbered(10))
+  annotations.add(buf, 3, 5, "note")
+  vim.api.nvim_buf_set_lines(buf, 0, 0, false, { "new" })
+  assert(annotations._timers()[buf], "no pending rebuild timer")
+  vim.cmd("bwipeout! " .. buf)
+  vim.wait(200)
+  assert(annotations._timers()[buf] == nil, "timer left for wiped buffer")
+  assert(timer_count() == 0, timer_count())
+end
+
+M["clear closes every pending rebuild timer"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local b1 = file_buf(root, "c1.txt", numbered(10))
+  local b2 = file_buf(root, "c2.txt", numbered(10))
+  annotations.add(b1, 3, 5, "one")
+  annotations.add(b2, 3, 5, "two")
+  vim.api.nvim_buf_set_lines(b1, 0, 0, false, { "new" })
+  vim.api.nvim_buf_set_lines(b2, 0, 0, false, { "new" })
+  assert(timer_count() == 2, timer_count())
+  annotations.clear()
+  assert(timer_count() == 0, timer_count())
+  vim.api.nvim_buf_delete(b1, { force = true })
+  vim.api.nvim_buf_delete(b2, { force = true })
+end
+
 M["remove deletes the sign, number and text marks"] = function()
   annotations.clear()
   local root = temp_root()
