@@ -29,8 +29,8 @@ local function relpath(buf, root)
 end
 
 local function on_event(name, data)
-  -- A tool that cannot change files triggers no reload; `mutating` is absent from older extensions.
-  local mutating = name == "activity_current" and not (type(data) == "table" and data.mutating == false)
+  -- Only a tool end carries `mutating`; tool start, agent_start and agent_settled events do not reload.
+  local mutating = name == "activity_current" and type(data) == "table" and data.mutating == true
   if mutating or name == "chunk_ready" or name == "chunk_reviewed" then
     live.schedule(session.refresh_live)
   end

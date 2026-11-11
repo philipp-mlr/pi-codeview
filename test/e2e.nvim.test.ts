@@ -600,6 +600,40 @@ vim.notify("DONE " .. table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), 
     expect(done.msg).toBe("DONE one");
   }, TIMEOUT_MS);
 
+  it("tool start, agent_start and agent_settled reload nothing; a mutating tool end does", async () => {
+    const repo = await makeRepo();
+    repo.write("a.txt", "one\n");
+    await repo.git("add", ".");
+    await repo.git("commit", "-q", "-m", "add a");
+    const fake = await start(repo, { mode: "vibe" });
+    const nvim = runNvim(
+      repo,
+      `
+require("codeview").setup()
+vim.cmd("edit a.txt")
+require("codeview.session").ensure(function() end)
+vim.wait(5000, function() return require("codeview.session").connected() end)
+vim.wait(500)
+vim.notify("READY")
+vim.wait(1500, function() return false end, 20)
+vim.notify("BEFORE " .. table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "|"))
+vim.wait(15000, function() return #vim.api.nvim_buf_get_lines(0, 0, -1, false) == 2 end, 20)
+vim.notify("AFTER " .. table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "|"))
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg === "READY"), "attached");
+    await new Promise((r) => setTimeout(r, 1100));
+    repo.write("a.txt", "one\ntwo\n");
+    await fake.fire("agent_start", {});
+    await fake.fire("tool_execution_start", { toolCallId: "w1", toolName: "write", args: { path: "a.txt" } });
+    await fake.fire("agent_settled", { aborted: false });
+    const before = await until(() => nvim.notifications().find((n) => n.msg.startsWith("BEFORE")), "before");
+    expect(before.msg).toBe("BEFORE one");
+    await fake.fire("tool_execution_end", { toolCallId: "w1", toolName: "write", result: {}, isError: false });
+    const after = await until(() => nvim.notifications().find((n) => n.msg.startsWith("AFTER")), "after");
+    expect(after.msg).toBe("AFTER one|two");
+  }, TIMEOUT_MS);
+
   it("an unsaved buffer keeps its edit and warns once when the agent changes the file", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "vibe" });

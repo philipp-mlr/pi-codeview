@@ -42,9 +42,8 @@ handler failures are returned as `ok:false`.
 
 - `status`: `{"mode":"review","root":"/abs/worktree","sessionId":"…","openChunk":<chunk>|null,"drafts":[<annotation>],"busy":false,"queued":0}`.
   `root` is the worktree the session runs in; clients attach only to sessions whose `root` is their own worktree.
-  `busy` is true while the agent is working; `queued` counts prompts waiting behind the open chunk.
-  `activity` is the tool currently running (`{"tool":"edit","target":"a.ts"}`, the most recently started one when several run) or `null`;
-  This is an additive field.
+  `busy` is true while the agent is working (`activity_current` events carry it too); `queued` counts prompts waiting behind the open chunk.
+  `activity` is the tool currently running (`{"tool":"edit","target":"a.ts"}`, the most recently started one when several run) or `null` (an additive field).
   `markBase` (additive) is the snapshot sha clients mark changed lines against: the open chunk's `fromSha`; without one,
   `baseline` in review mode and in vibe mode the `baseline` at the start of the current or last agent run (kept in memory, so
   `baseline` again after a restart). Older extensions omit it; clients fall back to `baseline`.
@@ -67,6 +66,6 @@ handler failures are returned as `ok:false`.
 
 `activity_current` (additive): `{"event":"activity_current","data":{"current":{"tool":"edit","target":"a.ts"}|null,"mutating":true,"busy":true}}`,
 sent on tool start (`busy` true, `current` the tool), tool end (`current` the still-running tool or `null`; `mutating` only here), `agent_start` (`busy` true, `current` null) and `agent_settled` (`busy` false, `current` null).
-`mutating` is false when the tool that ended cannot change files (e.g. `read`); clients reload buffers only when it is not false (older extensions omit it).
+`mutating` is false when the tool that ended cannot change files (e.g. `read`); clients reload buffers only when it is true.
 
 `chunk_reviewed` is also sent for a discarded chunk (`status: "discarded"`).
