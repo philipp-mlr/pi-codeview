@@ -37,8 +37,16 @@ vim.opt.rtp:append("/path/to/pi-nvim/nvim")
 require("pi").setup({})
 ```
 
-With nixvim, using a flake input `pi-nvim = github:philipp-mlr/pi-nvim`
-(`flake = false`):
+With nixvim, declare the repository as a flake input that is not a flake:
+
+```nix
+inputs.pi-nvim = {
+  url = "github:philipp-mlr/pi-nvim";
+  flake = false;
+};
+```
+
+Then build the plugin from it:
 
 ```nix
 extraPlugins = [
@@ -49,6 +57,13 @@ extraPlugins = [
   })
 ];
 extraConfigLua = ''require("pi").setup({})'';
+```
+
+Register the same input as a pi package so pi loads the extension, by adding
+its path to pi's `packages` setting:
+
+```nix
+settings.packages = [ "${inputs.pi-nvim}" ];
 ```
 
 `setup({ keys = { send = "<leader>rs" } })` overrides single keys; set a key

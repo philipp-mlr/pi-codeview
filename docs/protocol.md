@@ -37,7 +37,8 @@ handler failures are returned as `ok:false`.
 | `set_mode` (`checkpoints` or `off`; also accepts `on`, `review`) | `{"id":9,"type":"set_mode","mode":"checkpoints"}` |
 | `cancel` | `{"id":10,"type":"cancel"}` |
 
-`prompt.context` is optional; `startLine`/`endLine` inside it are optional.
+`prompt.context` is optional; only `path` is required inside it. `startLine`/`endLine` are optional.
+`text` is the selected text, which the extension quotes for the agent. `unsaved` is `true` when the buffer differs from the file on disk.
 `prompt.context.diagnostics` and each `annotations[].diagnostics` (`send`, `save_drafts`) are optional arrays of
 `{"line":3,"severity":"error"|"warning","message":"…","source":"eslint"}` (`line` is 1-based, `source` optional): the LSP errors and warnings
 on the context's or annotation's lines, at most 20, errors first then by line, messages whitespace-collapsed and cut at 200 characters.
