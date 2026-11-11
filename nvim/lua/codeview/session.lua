@@ -2,6 +2,7 @@
 local annotations = require("codeview.annotations")
 local client = require("codeview.client")
 local discover = require("codeview.discover")
+local live = require("codeview.live")
 local log = require("codeview.log")
 
 local M = {}
@@ -150,6 +151,7 @@ function M.detach()
   M.conn, M.root, M.cached = nil, nil, nil
   backlog_pending = nil
   log.clear()
+  live.clear()
   conn:close()
   redraw()
 end
@@ -174,6 +176,7 @@ local function open(path)
       M.conn, M.cached = nil, nil
       backlog_pending = nil
       log.clear()
+      live.clear()
       redraw()
       vim.notify("codeview: disconnected from pi", vim.log.levels.WARN)
     end

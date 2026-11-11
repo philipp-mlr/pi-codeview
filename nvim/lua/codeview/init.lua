@@ -2,6 +2,7 @@
 local annotations = require("codeview.annotations")
 local diff = require("codeview.diff")
 local discover = require("codeview.discover")
+local live = require("codeview.live")
 local log = require("codeview.log")
 local panel = require("codeview.panel")
 local session = require("codeview.session")
@@ -29,7 +30,20 @@ local function relpath(buf, root)
   return real and discover.relpath(root, real) or nil
 end
 
+-- Reloads and marks the open buffers against the current baseline (after a status refresh, since a
+-- review moves it).
+local function refresh_live()
+  session.refresh_status(function(err, status)
+    if not err and session.root and type(status.baseline) == "string" then
+      live.refresh(session.root, status.baseline)
+    end
+  end)
+end
+
 local function on_event(name, data)
+  if name == "activity_current" or name == "chunk_ready" or name == "chunk_reviewed" then
+    live.schedule(refresh_live)
+  end
   if name == "chunk_ready" then
     -- The server sends { chunk = {...} }.
     local n = data and (data.chunk and data.chunk.n) or "?"

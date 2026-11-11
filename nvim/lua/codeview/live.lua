@@ -1,0 +1,128 @@
+-- Live view of the agent's changes in open buffers: reloads untouched buffers and marks the lines
+-- that differ from the start of the current chunk (the baseline commit).
+local discover = require("codeview.discover")
+
+local M = {}
+
+local DEBOUNCE_MS = 150
+local ns = vim.api.nvim_create_namespace("codeview_live")
+
+vim.api.nvim_set_hl(0, "CodeviewLive", { default = true, link = "CursorLine" })
+vim.api.nvim_set_hl(0, "CodeviewLiveAdd", { default = true, link = "DiffAdd" })
+vim.api.nvim_set_hl(0, "CodeviewLiveChange", { default = true, link = "DiffChange" })
+vim.api.nvim_set_hl(0, "CodeviewLiveDelete", { default = true, link = "DiffDelete" })
+
+local baseline_text = {} -- baseline .. "\0" .. path -> file text at that commit ("" when absent)
+local mtimes = {} -- absolute path -> last seen mtime "sec.nsec"
+local warned = {} -- baseline .. "\0" .. path -> true
+local timer = nil
+
+local function mtime_of(real)
+  local stat = vim.uv.fs_stat(real)
+  return stat and (stat.mtime.sec .. "." .. stat.mtime.nsec) or nil
+end
+
+local function text_at(root, baseline, path)
+  local key = baseline .. "\0" .. path
+  if baseline_text[key] == nil then
+    local result = vim.system({ "git", "show", baseline .. ":" .. path }, { cwd = root, text = true }):wait()
+    baseline_text[key] = result.code == 0 and result.stdout or ""
+  end
+  return baseline_text[key]
+end
+
+local function buffer_text(buf)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  return #lines > 0 and (table.concat(lines, "\n") .. "\n") or ""
+end
+
+local function mark(buf, line, text, group, line_hl)
+  pcall(vim.api.nvim_buf_set_extmark, buf, ns, line - 1, 0, {
+    sign_text = text,
+    sign_hl_group = group,
+    line_hl_group = line_hl,
+  })
+end
+
+local function place(buf, hunks)
+  local count = vim.api.nvim_buf_line_count(buf)
+  for _, h in ipairs(hunks) do
+    local count_a, start_b, count_b = h[2], h[3], h[4]
+    if count_b == 0 then
+      mark(buf, math.min(math.max(start_b, 1), count), "▁", "CodeviewLiveDelete")
+    else
+      local group = count_a == 0 and "CodeviewLiveAdd" or "CodeviewLiveChange"
+      for line = start_b, start_b + count_b - 1 do
+        mark(buf, line, "▍", group, "CodeviewLive")
+      end
+    end
+  end
+end
+
+-- Remembers when a file was last written, so a later change on disk is noticed.
+local function remember(args)
+  local name = vim.api.nvim_buf_get_name(args.buf)
+  local real = name ~= "" and vim.uv.fs_realpath(name) or nil
+  if real then
+    mtimes[real] = mtime_of(real)
+  end
+end
+
+local group = vim.api.nvim_create_augroup("codeview_live", { clear = true })
+vim.api.nvim_create_autocmd({ "BufReadPost", "BufWritePost", "FileChangedShellPost" }, { group = group, callback = remember })
+
+function M.clear()
+  if timer then
+    timer:stop()
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+    end
+  end
+  baseline_text, mtimes, warned = {}, {}, {}
+end
+
+-- Reloads the unmodified buffers inside root and marks their lines that differ from baseline.
+function M.refresh(root, baseline)
+  if type(baseline) ~= "string" or baseline == "" then
+    return
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+    end
+    local name = vim.api.nvim_buf_get_name(buf)
+    local real = vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buflisted and name ~= "" and not name:match("^codeview://")
+      and vim.uv.fs_realpath(name) or nil
+    local path = real and discover.relpath(root, real)
+    if path then
+      local seen = mtime_of(real)
+      if vim.bo[buf].modified then
+        local key = baseline .. "\0" .. path
+        if mtimes[real] and seen ~= mtimes[real] and not warned[key] then
+          warned[key] = true
+          vim.notify(("codeview: %s changed on disk; your unsaved edits are kept"):format(path), vim.log.levels.WARN)
+        end
+      else
+        local autoread = vim.bo[buf].autoread
+        vim.bo[buf].autoread = true
+        pcall(vim.cmd, "silent! checktime " .. buf)
+        vim.bo[buf].autoread = autoread
+        seen = mtime_of(real)
+      end
+      mtimes[real] = seen
+      local hunks = vim.diff(text_at(root, baseline, path), buffer_text(buf), { result_type = "indices" })
+      place(buf, hunks)
+    end
+  end
+end
+
+-- Runs fn once after a short pause, however often this is called meanwhile.
+function M.schedule(fn)
+  timer = timer or vim.uv.new_timer()
+  timer:stop()
+  timer:start(DEBOUNCE_MS, 0, vim.schedule_wrap(fn))
+end
+
+return M

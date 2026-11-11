@@ -155,6 +155,7 @@ describe("codeview extension", () => {
     expect(await settled(pending)).toBe(false);
     const status = (await client.request("status")).result;
     expect(status).toMatchObject({ mode: "review", root: repo.root, sessionId: "test-session", queued: 0 });
+    expect(status.baseline).toMatch(/^[0-9a-f]{40}$/);
     expect(status.openChunk).toMatchObject({ n: 1, note: "add a", agentFiles: ["a.txt"] });
     const get = (await client.request("get_chunk", { n: 1 })).result;
     expect(get.chunk.n).toBe(1);

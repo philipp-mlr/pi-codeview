@@ -436,6 +436,67 @@ end, 5)
     await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work · idle"), "idle");
   }, TIMEOUT_MS);
 
+  it("the agent's write shows in an open buffer with change marks", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "vibe" });
+    repo.write("a.txt", "one\n");
+    await repo.git("add", ".");
+    await repo.git("commit", "-q", "-m", "add a");
+    const nvim = runNvim(
+      repo,
+      `
+require("codeview").setup()
+vim.cmd("edit a.txt")
+require("codeview.session").ensure(function() end)
+vim.wait(5000, function() return require("codeview.session").connected() end)
+vim.notify("READY")
+vim.wait(15000, function()
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local marks = vim.api.nvim_buf_get_extmarks(0, vim.api.nvim_create_namespace("codeview_live"), 0, -1, {})
+  if #marks > 0 then
+    vim.notify("LIVE " .. table.concat(lines, "|") .. " " .. #marks)
+    return true
+  end
+end, 20)
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg === "READY"), "attached");
+    await agentWrite(fake, repo, "a.txt", "one\ntwo\n");
+    await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "write", result: {}, isError: false });
+    const note = await until(() => nvim.notifications().find((n) => n.msg.startsWith("LIVE")), "live marks");
+    expect(note.msg).toBe("LIVE one|two 2");
+  }, TIMEOUT_MS);
+
+  it("an unsaved buffer keeps its edit and warns once when the agent changes the file", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "vibe" });
+    repo.write("a.txt", "one\n");
+    await repo.git("add", ".");
+    await repo.git("commit", "-q", "-m", "add a");
+    const nvim = runNvim(
+      repo,
+      `
+require("codeview").setup()
+vim.cmd("edit a.txt")
+vim.api.nvim_buf_set_lines(0, 0, 1, false, { "mine" })
+require("codeview.session").ensure(function() end)
+vim.wait(5000, function() return require("codeview.session").connected() end)
+vim.notify("READY")
+vim.wait(1500, function() return false end, 20)
+vim.notify("DONE " .. vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg === "READY"), "attached");
+    await new Promise((r) => setTimeout(r, 1100));
+    await agentWrite(fake, repo, "a.txt", "agent\n");
+    await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "write", result: {}, isError: false });
+    await fake.fire("tool_execution_end", { toolCallId: "t2", toolName: "write", result: {}, isError: false });
+    await until(() => nvim.notifications().some((n) => n.msg.startsWith("DONE")), "done");
+    const notes = nvim.notifications().map((n) => n.msg);
+    expect(notes).toContain("DONE mine");
+    expect(notes.filter((m) => m === "codeview: a.txt changed on disk; your unsaved edits are kept")).toHaveLength(1);
+  }, TIMEOUT_MS);
+
   it("an nvim attaching late finds the earlier activity in the log buffer", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "vibe" });

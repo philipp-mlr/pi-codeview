@@ -355,6 +355,7 @@ export class ReviewLoop {
           root: this.root,
           sessionId: this.sessionId,
           name: this.ctx.sessionManager.getSessionName?.() ?? null,
+          baseline: this.state.baseline,
           openChunk: this.state.openChunk() ?? null,
           drafts: this.state.drafts,
           busy: !this.ctx.isIdle(),
