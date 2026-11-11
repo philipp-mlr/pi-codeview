@@ -136,4 +136,23 @@ M["a failing open is swallowed and the next update shows the badge"] = function(
   badge.close()
 end
 
+M["a tick retries after a failed first open, without an update"] = function()
+  reset()
+  local real = vim.api.nvim_open_win
+  local failed = false
+  vim.api.nvim_open_win = function(...)
+    if not failed then
+      failed = true
+      error("E11: invalid in cmdline window")
+    end
+    return real(...)
+  end
+  badge.update({ busy = true, tool = "edit", target = "a.ts" })
+  assert(failed and badge.window() == nil)
+  vim.wait(500, function() return badge.window() ~= nil end, 20)
+  vim.api.nvim_open_win = real
+  assert(badge.window() ~= nil, "the spinner tick should retry the open")
+  badge.close()
+end
+
 return M

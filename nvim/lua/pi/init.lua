@@ -33,27 +33,42 @@ local function relpath(buf, root)
   return real and discover.relpath(root, real) or nil
 end
 
+-- Keys setup actually mapped, by name; a key that is unmapped or skipped is named by its command.
+local mapped_keys = {}
+
 -- One notice when a run ends; reads the open chunk from a fresh status.
-local function notify_run_end(data)
-  if type(data) == "table" and data.aborted then
-    return vim.notify("pi: cancelled")
-  end
+function M.notify_run_end(data)
+  local aborted = type(data) == "table" and data.aborted
   local files = type(data) == "table" and data.files or 0
-  session.refresh_status(function(err, status)
-    local chunk = not err and type(status.openChunk) == "table" and status.openChunk or nil
+  local function report(chunk)
     if chunk then
-      vim.notify(("pi: chunk %s waiting for your review — <leader>pv to look, <leader>pr to continue"):format(chunk.n))
+      local look = mapped_keys.chunks or ":PiChunks"
+      local go = mapped_keys.send or ":PiSendAnnotations"
+      local waiting = ("chunk %s waiting for your review"):format(chunk.n)
+      if aborted then
+        vim.notify(("pi: cancelled — %s"):format(waiting))
+      else
+        vim.notify(("pi: %s — %s to look, %s to continue"):format(waiting, look, go))
+      end
+    elseif aborted then
+      vim.notify("pi: cancelled")
     elseif files == 0 then
       vim.notify("pi: done")
     else
       vim.notify(("pi: done — %d file%s changed"):format(files, files == 1 and "" or "s"))
     end
+  end
+  if not session.connected() then
+    return report(nil)
+  end
+  session.refresh_status(function(err, status)
+    report(not err and type(status.openChunk) == "table" and status.openChunk or nil)
   end)
 end
 
 local function on_event(name, data)
   if name == "run_settled" then
-    notify_run_end(data)
+    M.notify_run_end(data)
   end
   -- Only a tool end carries `mutating`; tool start, agent_start and agent_settled events do not reload.
   local mutating = name == "activity_current" and type(data) == "table" and data.mutating == true
@@ -138,7 +153,10 @@ function M.cancel()
     if err then
       return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
-    vim.notify(result.cancelled and "pi: cancelled" or "pi: nothing to cancel")
+    -- A cancel that took effect is announced once, by the run-end notice.
+    if not result.cancelled then
+      vim.notify("pi: nothing to cancel")
+    end
     session.refresh_status()
   end)
 end
@@ -391,6 +409,7 @@ function M.setup(opts)
   -- Default keys never replace an existing mapping (e.g. another plugin's <leader>p… key); keys passed in
   -- opts.keys always map.
   local skipped = {}
+  mapped_keys = {}
   local function map(modes, name, rhs, desc)
     local lhs = keys[name]
     if not lhs then
@@ -404,6 +423,7 @@ function M.setup(opts)
       end
     end
     vim.keymap.set(modes, lhs, rhs, { desc = desc })
+    mapped_keys[name] = lhs
   end
   map("n", "ask", "<cmd>PiAsk<CR>", "pi: ask with file context")
   map("x", "ask", ":PiAsk<CR>", "pi: ask with selection context")

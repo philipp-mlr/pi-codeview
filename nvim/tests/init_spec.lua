@@ -446,4 +446,51 @@ M["picker label truncates long text to 80 characters"] = function()
   annotations.clear()
 end
 
+local function run_end_notes(data, open_chunk, keys)
+  reset_maps()
+  capture_notify(function() pi.setup({ keys = keys }) end)
+  local session = require("pi.session")
+  local real_refresh, real_connected = session.refresh_status, session.connected
+  session.connected = function() return true end
+  session.refresh_status = function(cb) cb(nil, { openChunk = open_chunk }) end
+  local ok, notes = pcall(capture_notify, function() pi.notify_run_end(data) end)
+  session.refresh_status, session.connected = real_refresh, real_connected
+  assert(ok, notes)
+  return notes
+end
+
+M["run end: aborted with an open chunk names the chunk; aborted without says cancelled"] = function()
+  local notes = run_end_notes({ aborted = true }, { n = 3 })
+  assert(#notes == 1 and notes[1].msg == "pi: cancelled — chunk 3 waiting for your review", vim.inspect(notes))
+  notes = run_end_notes({ aborted = true }, nil)
+  assert(#notes == 1 and notes[1].msg == "pi: cancelled", vim.inspect(notes))
+end
+
+M["run end: the waiting-chunk notice names the keys setup mapped, else the commands"] = function()
+  local notes = run_end_notes({}, { n = 2 }, { chunks = "<leader>zz" })
+  assert(notes[1].msg == "pi: chunk 2 waiting for your review — <leader>zz to look, <leader>pr to continue", notes[1].msg)
+  notes = run_end_notes({}, { n = 2 }, { chunks = false, send = false })
+  assert(notes[1].msg == "pi: chunk 2 waiting for your review — :PiChunks to look, :PiSendAnnotations to continue", notes[1].msg)
+  reset_maps()
+end
+
+M["cancel: a cancel that took effect shows no notice itself; nothing to cancel is reported"] = function()
+  local session = require("pi.session")
+  local real_request, real_refresh = session.request, session.refresh_status
+  session.refresh_status = function() end
+  local function cancel_with(result)
+    session.request = function(_, _, cb) cb(nil, result) end
+    local ok, notes = pcall(capture_notify, function() pi.cancel() end)
+    session.request, session.refresh_status = real_request, real_refresh
+    assert(ok, notes)
+    session.refresh_status = function() end
+    return notes
+  end
+  local notes = cancel_with({ cancelled = true })
+  assert(#notes == 0, vim.inspect(notes))
+  notes = cancel_with({ cancelled = false })
+  assert(#notes == 1 and notes[1].msg == "pi: nothing to cancel", vim.inspect(notes))
+  session.request, session.refresh_status = real_request, real_refresh
+end
+
 return M

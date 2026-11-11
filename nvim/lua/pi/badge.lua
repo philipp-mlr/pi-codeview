@@ -52,7 +52,7 @@ local function stop_timer()
   end
 end
 
--- Never raises: it can run while Philipp types (textlock, cmdline, prompts); the next update or tick retries.
+-- Never raises: it can run while Philipp types (textlock, cmdline, prompts); a failed open leaves `win` nil, and the next tick, TabEnter/resize or update retries.
 local function draw()
   local line = text()
   local width = vim.fn.strdisplaywidth(line)
@@ -92,7 +92,7 @@ local function start_timer()
     FRAME_MS,
     FRAME_MS,
     vim.schedule_wrap(function()
-      if timer and spinning and win ~= nil then
+      if timer and spinning and label ~= nil then
         frame = frame % #FRAMES + 1
         draw()
       end
@@ -111,7 +111,7 @@ end
 
 -- Keeps the badge at the right edge after the screen size changed.
 function M.reposition()
-  if win ~= nil and label ~= nil then
+  if label ~= nil then
     draw()
   end
 end

@@ -122,9 +122,13 @@ attached to a session. `require("pi").status()` returns `"review N"`,
   never takes focus and is hidden when idle or not attached. Turn it off with
   `setup({ badge = false })`; colors come from the `PiBadge` highlight group
   (links to `PmenuSel`).
-- When a run ends you get one notice: `pi: done — N files changed`,
+- When a run ends you get one notice: `pi: done — N files changed`
+  (`1 file changed` for one), `pi: done` when nothing changed,
   `pi: cancelled`, or, with a chunk waiting,
-  `pi: chunk N waiting for your review — <leader>pv to look, <leader>pr to continue`.
+  `pi: chunk N waiting for your review — <leader>pv to look, <leader>pr to continue`
+  (`pi: cancelled — chunk N waiting for your review` after a cancel). The
+  notice names your configured keys, or `:PiChunks` / `:PiSendAnnotations`
+  when a key is not mapped.
 - Open buffers whose file the agent changed reload by themselves.
 - Changed lines get a sign and a light line highlight: `┃` marks added or
   changed lines (same column as gitsigns), `▁` marks lines deleted below that line. They compare
