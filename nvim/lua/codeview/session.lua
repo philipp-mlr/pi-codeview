@@ -80,10 +80,46 @@ function M.flush()
   end, 10)
 end
 
-local function dir_of_buffer(buf)
+-- Directory of buf's file; nil for buffers without a file on disk (panel, scratch, codeview://).
+local function file_dir(buf)
   local name = vim.api.nvim_buf_get_name(buf or 0)
   local real = name ~= "" and vim.uv.fs_realpath(name) or nil
-  return real and vim.fs.dirname(real) or vim.uv.cwd()
+  return real and vim.fs.dirname(real) or nil
+end
+
+local function dir_of_buffer(buf)
+  return file_dir(buf) or vim.uv.cwd()
+end
+
+-- Short human label for a session status: its pi session name, else the first 8 chars of the id.
+function M.label(status)
+  if type(status) ~= "table" then
+    return ""
+  end
+  if type(status.name) == "string" and status.name ~= "" then
+    return status.name
+  end
+  return tostring(status.sessionId or "?"):sub(1, 8)
+end
+
+local function describe(status)
+  local state = status.busy and "working" or "idle"
+  if type(status.openChunk) == "table" then
+    state = "review " .. status.openChunk.n
+  end
+  return ("%s  [%s, %s]  %s"):format(M.label(status), status.mode, state, status.root)
+end
+
+-- Drops the current attachment without the disconnect warning; pending drafts are saved first.
+function M.detach()
+  if not M.connected() then
+    return
+  end
+  M.flush()
+  local conn = M.conn
+  M.conn, M.root, M.cached = nil, nil, nil
+  conn:close()
+  redraw()
 end
 
 -- Opens a connection whose events and close reach this module only while it is the attached one.
@@ -117,78 +153,123 @@ local function attach(conn, root, status, cb)
   cb(conn, root)
 end
 
--- Calls cb(conn, root) once attached to a pi session for the repo of opts.buf (default: current buffer).
--- Only sessions whose root is this worktree count. With opts.quiet nothing is reported and no picker
--- is shown: the attach happens only when exactly one session matches.
-function M.ensure(cb, opts)
-  opts = opts or {}
-  if M.connected() then
-    return cb(M.conn, M.root)
-  end
-  local function fail(msg)
-    if not opts.quiet then
-      vim.notify(msg, vim.log.levels.ERROR)
-    end
-  end
-  local dir = dir_of_buffer(opts.buf)
-  local root = discover.root(dir)
-  if not root then
-    return fail("codeview: not inside a git repository")
-  end
-  local candidates = {}
+-- Connects to every live socket of dir's repo and calls done(candidates) with those whose session
+-- runs in this worktree (root); each candidate is { conn, status }. Candidates that don't match are
+-- closed here; the caller closes the ones it doesn't attach.
+local function collect(dir, root, done)
+  local all = {}
   for _, path in ipairs(discover.sockets(dir)) do
     local conn = open(path)
     if conn then
-      candidates[#candidates + 1] = { conn = conn }
+      all[#all + 1] = { conn = conn }
     end
   end
-  if #candidates == 0 then
-    return fail("codeview: no pi session with codeview for " .. root)
+  if #all == 0 then
+    return done({})
   end
-  local remaining = #candidates
-  local function choose()
-    local live = vim.tbl_filter(function(c)
-      return c.status ~= nil and type(c.status.root) == "string"
-        and (vim.uv.fs_realpath(c.status.root) or c.status.root) == root
-    end, candidates)
-    local function pick(choice)
-      for _, c in ipairs(candidates) do
-        if c ~= choice then
-          c.conn:close()
-        end
-      end
-      if choice then
-        attach(choice.conn, root, choice.status, cb)
-      end
-    end
-    if #live == 0 then
-      pick(nil)
-      return fail("codeview: no pi session with codeview for " .. root)
-    end
-    if #live == 1 then
-      return pick(live[1])
-    end
-    if opts.quiet then
-      return pick(nil)
-    end
-    vim.ui.select(live, {
-      prompt = "codeview: attach to which pi session?",
-      format_item = function(c)
-        return ("%s (%s) %s"):format(c.status.sessionId, c.status.mode, c.status.root)
-      end,
-    }, pick)
-  end
-  for _, c in ipairs(candidates) do
+  local remaining = #all
+  for _, c in ipairs(all) do
     c.conn:request("status", nil, function(err, result)
       if not err then
         c.status = result
       end
       remaining = remaining - 1
       if remaining == 0 then
-        choose()
+        local live = {}
+        for _, cand in ipairs(all) do
+          local r = cand.status and cand.status.root
+          if type(r) == "string" and (vim.uv.fs_realpath(r) or r) == root then
+            live[#live + 1] = cand
+          else
+            cand.conn:close()
+          end
+        end
+        done(live)
       end
     end)
   end
+end
+
+local function pick_from(live, choice, root, cb)
+  for _, c in ipairs(live) do
+    if c ~= choice then
+      c.conn:close()
+    end
+  end
+  if choice then
+    attach(choice.conn, root, choice.status, cb)
+  end
+end
+
+local function select_session(live, prompt, on_choice)
+  vim.ui.select(live, { prompt = prompt, format_item = function(c) return describe(c.status) end }, on_choice)
+end
+
+-- Calls cb(conn, root) once attached to a pi session for the worktree of opts.buf (default: current
+-- buffer). Only sessions running in that worktree count. When already attached to another worktree's
+-- session and the buffer is a file in this one, it switches. With opts.quiet nothing is reported and
+-- no picker is shown: the attach happens only when exactly one session matches.
+function M.ensure(cb, opts)
+  opts = opts or {}
+  local function fail(msg)
+    if not opts.quiet then
+      vim.notify(msg, vim.log.levels.ERROR)
+    end
+  end
+  if M.connected() then
+    local fdir = file_dir(opts.buf)
+    local froot = fdir and discover.root(fdir)
+    if not froot or froot == M.root then
+      return cb(M.conn, M.root)
+    end
+    M.detach()
+  end
+  local dir = dir_of_buffer(opts.buf)
+  local root = discover.root(dir)
+  if not root then
+    return fail("codeview: not inside a git repository")
+  end
+  collect(dir, root, function(live)
+    if #live == 0 then
+      return fail("codeview: no pi session with codeview for " .. root)
+    end
+    if #live == 1 then
+      return pick_from(live, live[1], root, cb)
+    end
+    if opts.quiet then
+      return pick_from(live, nil, root, cb)
+    end
+    select_session(live, "codeview: attach to which pi session?", function(choice)
+      pick_from(live, choice, root, cb)
+    end)
+  end)
+end
+
+-- Picks the session on purpose: lists the pi sessions for the current buffer's worktree (with name,
+-- mode and state) and attaches to the chosen one, replacing the current attachment.
+function M.choose(cb)
+  local dir = dir_of_buffer(0)
+  local root = discover.root(dir)
+  if not root then
+    return vim.notify("codeview: not inside a git repository", vim.log.levels.ERROR)
+  end
+  collect(dir, root, function(live)
+    if #live == 0 then
+      return vim.notify("codeview: no pi session with codeview for " .. root, vim.log.levels.ERROR)
+    end
+    select_session(live, "codeview: attach to which pi session?", function(choice)
+      if not choice then
+        return pick_from(live, nil, root, function() end)
+      end
+      M.detach()
+      pick_from(live, choice, root, function(conn, r)
+        vim.notify("codeview: attached to " .. M.label(choice.status))
+        if cb then
+          cb(conn, r)
+        end
+      end)
+    end)
+  end)
 end
 
 -- Attaches if needed, then sends one request; cb(err, result) is optional.
@@ -211,7 +292,7 @@ function M.mark_busy()
   end
 end
 
--- Statusline text from the cached status; never blocks.
+-- Statusline state from the cached status; never blocks.
 function M.status_line()
   if not M.connected() or not M.cached then
     return ""
@@ -224,6 +305,14 @@ function M.status_line()
     return "working"
   end
   return "idle"
+end
+
+-- Label of the attached session for the statusline; "" when not attached.
+function M.attached_label()
+  if not M.connected() or not M.cached then
+    return ""
+  end
+  return M.label(M.cached)
 end
 
 return M

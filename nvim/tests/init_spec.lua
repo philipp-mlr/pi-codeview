@@ -4,7 +4,7 @@ local annotations = require("codeview.annotations")
 local M = {}
 
 local function reset_maps()
-  for _, lhs in ipairs({ "<leader>cv", "<leader>cp", "<leader>ca", "<leader>cc", "<leader>cx", "<leader>cs" }) do
+  for _, lhs in ipairs({ "<leader>cv", "<leader>cp", "<leader>ca", "<leader>cc", "<leader>cx", "<leader>cs", "<leader>cm" }) do
     pcall(vim.keymap.del, "n", lhs)
     pcall(vim.keymap.del, "x", lhs)
   end
@@ -32,6 +32,17 @@ M["prompt defaults to <leader>cp, clear of the LSP code action key"] = function(
   reset_maps()
 end
 
+M["<leader>cm toggles the mode and :CodeviewMode accepts on/off"] = function()
+  reset_maps()
+  capture_notify(function() codeview.setup() end)
+  assert(vim.fn.maparg("<leader>cm", "n", false, true).desc == "codeview: toggle review/vibe mode", "mode key not mapped")
+  local complete = vim.fn.getcompletion("CodeviewMode ", "cmdline")
+  for _, want in ipairs({ "review", "vibe", "on", "off" }) do
+    assert(vim.tbl_contains(complete, want), "missing completion " .. want .. ": " .. vim.inspect(complete))
+  end
+  reset_maps()
+end
+
 M["setup keeps existing mappings for default keys and lists them in one INFO notify"] = function()
   reset_maps()
   vim.keymap.set("n", "<leader>cc", "<cmd>echo 'mine'<CR>", { desc = "mine" })
@@ -48,6 +59,38 @@ M["setup keeps existing mappings for default keys and lists them in one INFO not
   capture_notify(function() codeview.setup({ keys = { annotate = "<leader>cc" } }) end)
   assert(vim.fn.maparg("<leader>cc", "n", false, true).desc == "codeview: annotate line")
   reset_maps()
+end
+
+M["prompt_context sends the cursor line, the exact selection and the unsaved marker"] = function()
+  local dir = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()
+  vim.fn.mkdir(dir, "p")
+  dir = vim.uv.fs_realpath(dir)
+  vim.fn.writefile({ "local a = 1", "local bb = 22", "return a" }, dir .. "/x.lua")
+  local buf = vim.fn.bufadd(dir .. "/x.lua")
+  vim.fn.bufload(buf)
+  vim.api.nvim_set_current_buf(buf)
+
+  -- Normal mode: file and cursor line, no text, saved buffer.
+  local ctx = codeview.prompt_context(buf, dir, { line1 = 2, line2 = 2 })
+  assert(vim.deep_equal(ctx, { path = "x.lua", startLine = 2, endLine = 2 }), vim.inspect(ctx))
+
+  -- Characterwise selection inside one line quotes only the selected part.
+  vim.api.nvim_win_set_cursor(0, { 2, 6 })
+  vim.cmd("normal! v4l\27")
+  ctx = codeview.prompt_context(buf, dir, { line1 = 2, line2 = 2, visual = true })
+  assert(ctx.text == "bb = ", vim.inspect(ctx))
+
+  -- Linewise selection over two lines, taken from the buffer including an unsaved edit.
+  vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "local a = 100" })
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.cmd("normal! Vj\27")
+  ctx = codeview.prompt_context(buf, dir, { line1 = 1, line2 = 2, visual = true })
+  assert(ctx.text == "local a = 100\nlocal bb = 22", vim.inspect(ctx))
+  assert(ctx.unsaved == true and ctx.startLine == 1 and ctx.endLine == 2, vim.inspect(ctx))
+
+  -- A buffer outside the root gives no context.
+  assert(codeview.prompt_context(buf, dir .. "/elsewhere", { line1 = 1, line2 = 1 }) == nil)
+  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 M["annotate keeps the note when no pi session is reachable"] = function()

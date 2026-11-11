@@ -4,6 +4,7 @@ import {
   CHECKPOINT_GUIDELINES,
   humanChangedSteer,
   renderAnnotationPrompt,
+  renderPrompt,
   renderResume,
   renderReview,
 } from "../extensions/render.ts";
@@ -117,6 +118,30 @@ describe("renderAnnotationPrompt", () => {
 describe("humanChangedSteer", () => {
   it("humanChangedSteer equals the steer message for the path", () => {
     expect(humanChangedSteer("src/a.ts")).toBe("Philipp changed src/a.ts. Re-read it before editing it.");
+  });
+});
+
+describe("renderPrompt", () => {
+  it("returns the bare text without context", () => {
+    expect(renderPrompt("explain")).toBe("explain");
+  });
+
+  it("names only the file when no line is given", () => {
+    expect(renderPrompt("explain", { path: "a.ts" })).toBe("explain\n\nContext: a.ts");
+  });
+
+  it("names the cursor line for a single line", () => {
+    expect(renderPrompt("explain", { path: "a.ts", startLine: 42, endLine: 42 })).toBe("explain\n\nContext: a.ts:42");
+  });
+
+  it("quotes the selected text under the range, fenced past any backticks in it", () => {
+    const out = renderPrompt("why?", { path: "a.ts", startLine: 3, endLine: 4, text: "const s = ```x```;\nreturn s;" });
+    expect(out).toBe("why?\n\nContext: a.ts:3-4\n````\nconst s = ```x```;\nreturn s;\n````");
+  });
+
+  it("marks unsaved changes so the agent knows the file on disk may differ", () => {
+    const out = renderPrompt("fix", { path: "a.ts", startLine: 1, endLine: 2, text: "x", unsaved: true });
+    expect(out).toContain("Context: a.ts:1-2 (unsaved changes in Philipp's buffer; the file on disk may differ)");
   });
 });
 

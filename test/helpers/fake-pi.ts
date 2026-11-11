@@ -15,7 +15,7 @@ type ToolDef = {
 type CommandDef = { handler(args: string, ctx: any): Promise<void> | void };
 
 /** Minimal stand-in for pi's ExtensionAPI and ExtensionContext, enough for codeview.ts. */
-export function makeFakePi(cwd: string, opts: { sessionId?: string; entries?: FakeEntry[] } = {}) {
+export function makeFakePi(cwd: string, opts: { sessionId?: string; sessionName?: string; entries?: FakeEntry[] } = {}) {
   const handlers = new Map<string, Handler[]>();
   const tools = new Map<string, ToolDef>();
   const commands = new Map<string, CommandDef>();
@@ -62,6 +62,7 @@ export function makeFakePi(cwd: string, opts: { sessionId?: string; entries?: Fa
     },
     sessionManager: {
       getSessionId: () => opts.sessionId ?? "test-session",
+      getSessionName: () => opts.sessionName,
       getEntries: () => entries,
     },
     isIdle: () => idle,

@@ -57,11 +57,22 @@ skipped keys in one message; keys you pass in `keys` are always mapped.
 | Command | Default key | What it does |
 |---|---|---|
 | `:Codeview` | `<leader>cv` | Toggle the chunk panel (`<CR>` opens a chunk, `r` refreshes, `q` closes). |
-| `:CodeviewPrompt` | `<leader>cp` | Prompt the agent; normal mode sends the file as context, visual mode the selection. |
+| `:CodeviewPrompt` | `<leader>cp` | Prompt the agent. Normal mode sends the file and cursor line; visual mode sends the line range and the selected text exactly as in your buffer. Unsaved changes are flagged. |
 | `:CodeviewAnnotate` | `<leader>cc` | Annotate the current line or the visual range. |
 | `:CodeviewRemove` | `<leader>cx` | Remove the annotation under the cursor. |
 | `:CodeviewSend` | `<leader>cs` | Save all buffers, then send the annotations and an optional note. |
-| `:CodeviewMode review\|vibe` | | Switch the mode for this repository. |
+| `:CodeviewMode [review\|vibe\|on\|off]` | `<leader>cm` | Switch the mode for this repository; without an argument it toggles. |
+| `:CodeviewAttach` | `<leader>ct` | Choose the pi session to work with (listed by session name, mode and state). |
+
+### Which pi session nvim talks to
+
+nvim attaches to a pi session running in the same worktree as the current
+buffer. With one such session it attaches on first use; with several it asks.
+When you run a command from a buffer in a different worktree, it switches to
+that worktree's session. `<leader>ct` picks a session on purpose. Name your pi
+sessions (`/name` in pi) to tell them apart in the picker.
+`require("codeview").session_label()` gives the attached session's name for
+the statusline.
 
 In a chunk diff, `]f` and `[f` move to the next and previous file. For the
 chunk waiting for review the right side is the real file, so LSP and editing
@@ -75,7 +86,7 @@ In pi, `/codeview` shows the state, `/codeview on|off` switches review mode,
 
 ### The loop
 
-1. `/codeview on` in pi (or `:CodeviewMode review`).
+1. `/codeview on` in pi (or `<leader>cm` / `:CodeviewMode review`).
 2. `<leader>cp`: give the agent a task; it works in pi's window.
 3. The agent stops at a checkpoint; the panel opens with the new chunk.
 4. `<CR>` on the chunk: read the diff with LSP, edit the live file, `]f` for the next file.

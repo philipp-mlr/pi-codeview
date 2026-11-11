@@ -307,7 +307,7 @@ describe("codeview extension", () => {
     const fake = await start(repo, { mode: "review" });
     const client = await connect(repo);
     await client.request("prompt", { text: "explain", context: { path: "README.md", startLine: 1, endLine: 1 } });
-    expect(fake.sent).toEqual([{ kind: "user", content: "explain\n\nContext: README.md:1-1", options: undefined }]);
+    expect(fake.sent).toEqual([{ kind: "user", content: "explain\n\nContext: README.md:1", options: undefined }]);
     fake.setIdle(false);
     await client.request("prompt", { text: "more" });
     expect(fake.sent[1]).toEqual({ kind: "user", content: "more", options: { deliverAs: "followUp" } });
@@ -550,6 +550,21 @@ describe("codeview extension", () => {
     expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("vibe");
     await fake.runCommand("codeview", "");
     expect(fake.notifications.at(-1)?.message).toContain("mode vibe");
+  });
+
+  it("set_mode accepts on/off as aliases and refuses unknown modes", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    expect((await client.request("set_mode", { mode: "on" })).result).toEqual({ mode: "review" });
+    expect(fake.pi.getActiveTools()).toContain("checkpoint");
+    expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("review");
+    expect((await client.request("set_mode", { mode: "off" })).result).toEqual({ mode: "vibe" });
+    const bad = await client.request("set_mode", { mode: "banana" });
+    expect(bad.ok).toBe(false);
+    expect(bad.error).toContain("review or vibe");
+    expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("vibe");
+    expect((await client.request("status")).result.mode).toBe("vibe");
   });
 
   it("second session in the same worktree cannot enter review mode", async () => {

@@ -13,6 +13,8 @@ M.default_keys = {
   annotate = "<leader>cc",
   remove = "<leader>cx",
   send = "<leader>cs",
+  mode = "<leader>cm",
+  attach = "<leader>ct",
 }
 
 -- Repo-relative path of buf, or nil when it is not a file inside root.
@@ -53,6 +55,16 @@ end
 
 function M.status()
   return session.status_line()
+end
+
+-- Name (or short id) of the attached pi session; "" when not attached.
+function M.session_label()
+  return session.attached_label()
+end
+
+-- Lists the pi sessions of this worktree and attaches to the chosen one.
+function M.attach()
+  session.choose()
 end
 
 -- Sends text as a prompt; context is { path, startLine?, endLine? } or nil.
@@ -122,6 +134,17 @@ function M.set_mode(mode)
       return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
     end
     vim.notify("codeview: mode " .. result.mode)
+    session.refresh_status()
+  end)
+end
+
+-- Switches between review and vibe, based on the attached session's current mode.
+function M.toggle_mode()
+  session.refresh_status(function(err, status)
+    if err then
+      return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
+    end
+    M.set_mode(status.mode == "review" and "vibe" or "review")
   end)
 end
 
@@ -133,24 +156,46 @@ local function range_of(cmd)
   return line, line
 end
 
+-- Prompt context for buf: the line range, the selected text exactly as in the buffer (so unsaved
+-- edits and a selection inside one line come through), and whether the buffer has unsaved changes.
+-- sel = { line1, line2, visual = true|nil }; visual uses the '< '> marks and the last visual mode.
+function M.prompt_context(buf, root, sel)
+  local path = relpath(buf, root)
+  if not path then
+    return nil
+  end
+  local context = { path = path, startLine = sel.line1, endLine = sel.line2 }
+  if vim.bo[buf].modified then
+    context.unsaved = true
+  end
+  if sel.visual then
+    local ok, lines = pcall(vim.fn.getregion, vim.fn.getpos("'<"), vim.fn.getpos("'>"), { type = vim.fn.visualmode() })
+    if not ok then
+      lines = vim.api.nvim_buf_get_lines(buf, sel.line1 - 1, sel.line2, false)
+    end
+    context.text = table.concat(lines, "\n")
+  end
+  return context
+end
+
 local function prompt_command(cmd)
   local buf = vim.api.nvim_get_current_buf()
-  local start_line, end_line = cmd.line1, cmd.line2
-  local ranged = cmd.range > 0
+  local sel
+  if cmd.range > 0 then
+    -- A range that matches the last visual selection came from the visual-mode key.
+    local visual = cmd.line1 == vim.fn.line("'<") and cmd.line2 == vim.fn.line("'>")
+    sel = { line1 = cmd.line1, line2 = cmd.line2, visual = visual }
+  else
+    local line = vim.api.nvim_win_get_cursor(0)[1]
+    sel = { line1 = line, line2 = line }
+  end
   vim.ui.input({ prompt = "codeview prompt: " }, function(text)
     if not text or text == "" then
       return
     end
     session.ensure(function(_, root)
-      local path = relpath(buf, root)
-      local context = nil
-      if path and ranged then
-        context = { path = path, startLine = start_line, endLine = end_line }
-      elseif path then
-        context = { path = path }
-      end
-      M.prompt(text, context)
-    end)
+      M.prompt(text, M.prompt_context(buf, root, sel))
+    end, { buf = buf })
   end)
 end
 
@@ -211,14 +256,18 @@ function M.setup(opts)
   command("CodeviewSend", function()
     M.send()
   end, { desc = "codeview: send annotations and note" })
+  command("CodeviewAttach", M.attach, { desc = "codeview: choose the pi session to work with" })
   command("CodeviewMode", function(cmd)
+    if cmd.args == "" then
+      return M.toggle_mode()
+    end
     M.set_mode(cmd.args)
   end, {
-    nargs = 1,
+    nargs = "?",
     complete = function()
-      return { "review", "vibe" }
+      return { "review", "vibe", "on", "off" }
     end,
-    desc = "codeview: set mode review or vibe",
+    desc = "codeview: set mode review|vibe (on|off), toggle without argument",
   })
 
   -- Default keys never replace an existing mapping (e.g. an LSP <leader>c… key); keys passed in
@@ -245,6 +294,8 @@ function M.setup(opts)
   map("x", "annotate", ":CodeviewAnnotate<CR>", "codeview: annotate selection")
   map("n", "remove", "<cmd>CodeviewRemove<CR>", "codeview: remove annotation")
   map("n", "send", "<cmd>CodeviewSend<CR>", "codeview: send")
+  map("n", "mode", "<cmd>CodeviewMode<CR>", "codeview: toggle review/vibe mode")
+  map("n", "attach", "<cmd>CodeviewAttach<CR>", "codeview: choose pi session")
   if #skipped > 0 then
     vim.notify("codeview: kept existing mappings, not mapped: " .. table.concat(skipped, ", "), vim.log.levels.INFO)
   end

@@ -31,9 +31,12 @@ afterEach(async () => {
   fs.rmSync(scratchDir, { recursive: true, force: true });
 });
 
-async function start(repo: TestRepo, opts: { root?: string; sessionId?: string } = {}): Promise<FakePi> {
-  await repo.git("config", "pi-codeview.mode", "review");
-  const fake = makeFakePi(opts.root ?? repo.root, { sessionId: opts.sessionId });
+async function start(
+  repo: TestRepo,
+  opts: { root?: string; sessionId?: string; sessionName?: string; mode?: string } = {},
+): Promise<FakePi> {
+  await repo.git("config", "pi-codeview.mode", opts.mode ?? "review");
+  const fake = makeFakePi(opts.root ?? repo.root, { sessionId: opts.sessionId, sessionName: opts.sessionName });
   codeview(fake.pi);
   await fake.fire("session_start", { reason: "startup" });
   cleanups.push(() => fake.fire("session_shutdown", { reason: "quit" }).then(() => {}));
@@ -332,6 +335,71 @@ end)
     const wtAttached = await until(() => wtNvim.notifications().find((n) => n.msg.startsWith("ATTACHED") || n.level === ERROR), "attach in worktree");
     expect(wtAttached.msg).toBe(`ATTACHED other ${other}`);
     expect(inOther.sent).toEqual([]);
+  }, TIMEOUT_MS);
+
+  it("a command from a buffer in another worktree switches to that worktree's session", async () => {
+    const repo = await makeRepo();
+    const other = path.join(fs.realpathSync(scratchDir), "wt2");
+    await repo.git("worktree", "add", "-q", other, "-b", "other2");
+    await start(repo, { root: other, sessionId: "other" });
+    await new Promise((r) => setTimeout(r, 20));
+    await start(repo, { sessionId: "main" });
+
+    const nvim = runNvim(
+      repo,
+      `
+local session = require("codeview.session")
+require("codeview").setup()
+vim.cmd("edit README.md")
+session.ensure(function()
+  vim.notify("FIRST " .. session.cached.sessionId)
+  vim.cmd("edit ${other}/README.md")
+  session.ensure(function(_, root)
+    vim.notify("SECOND " .. session.cached.sessionId .. " " .. root)
+  end)
+end)
+`,
+    );
+    const second = await until(() => nvim.notifications().find((n) => n.msg.startsWith("SECOND") || n.level === ERROR), "switch");
+    expect(nvim.notifications().map((n) => n.msg)).toContain("FIRST main");
+    expect(second.msg).toBe(`SECOND other ${other}`);
+    // Switching on purpose drops the old session quietly: no disconnect warning.
+    expect(nvim.notifications().some((n) => n.msg.includes("disconnected"))).toBe(false);
+  }, TIMEOUT_MS);
+
+  it(":CodeviewAttach lists sessions by name and attaches to the chosen one", async () => {
+    const repo = await makeRepo();
+    await start(repo, { sessionId: "aaaa1111-x", sessionName: "refactor", mode: "vibe" });
+    await new Promise((r) => setTimeout(r, 20));
+    await start(repo, { sessionId: "bbbb2222-y", sessionName: "bugfix", mode: "vibe" });
+
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("codeview")
+local session = require("codeview.session")
+cv.setup()
+vim.cmd("edit README.md")
+vim.ui.select = function(items, opts, on_choice)
+  local labels = {}
+  for _, item in ipairs(items) do labels[#labels + 1] = opts.format_item(item) end
+  table.sort(labels)
+  vim.notify("LABELS " .. table.concat(labels, " | "))
+  for _, item in ipairs(items) do
+    if item.status.name == "bugfix" then return on_choice(item) end
+  end
+end
+cv.attach()
+vim.wait(5000, function() return session.cached ~= nil end)
+vim.notify("ATTACHED " .. cv.session_label() .. " " .. session.cached.sessionId)
+`,
+    );
+    const attached = await until(() => nvim.notifications().find((n) => n.msg.startsWith("ATTACHED") || n.level === ERROR), "attach");
+    const labels = nvim.notifications().find((n) => n.msg.startsWith("LABELS"))!.msg;
+    expect(labels).toContain("bugfix  [vibe, idle]");
+    expect(labels).toContain("refactor  [vibe, idle]");
+    expect(labels).not.toContain("aaaa1111-x");
+    expect(attached.msg).toBe("ATTACHED bugfix bbbb2222-y");
   }, TIMEOUT_MS);
 
   it("saving a file stores the drafts' moved positions", async () => {

@@ -1,8 +1,9 @@
-import type { Annotation, Mode } from "./state.ts";
+import type { Annotation } from "./state.ts";
 
 export const PROTOCOL_VERSION = 1;
 
-export type PromptContext = { path: string; startLine?: number; endLine?: number };
+// text: the selected text from Philipp's buffer; unsaved: the buffer differs from the file on disk.
+export type PromptContext = { path: string; startLine?: number; endLine?: number; text?: string; unsaved?: boolean };
 
 export type Request =
   | { id: number; type: "hello"; version: number }
@@ -13,7 +14,8 @@ export type Request =
   | { id: number; type: "send"; annotations: Annotation[]; note: string; viewed: boolean }
   | { id: number; type: "save_drafts"; annotations: Annotation[] }
   | { id: number; type: "human_write"; path: string }
-  | { id: number; type: "set_mode"; mode: Mode };
+  // "review" | "vibe", or the aliases "on" | "off"; validated by the server.
+  | { id: number; type: "set_mode"; mode: string };
 
 export type RequestType = Request["type"];
 

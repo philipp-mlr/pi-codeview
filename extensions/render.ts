@@ -1,3 +1,4 @@
+import type { PromptContext } from "./protocol.ts";
 import type { Annotation, Chunk } from "./state.ts";
 
 export const CHECKPOINT_GUIDELINES: string[] = [
@@ -50,6 +51,24 @@ export function renderResume(review: string, queued: string[]): string {
 export function renderAnnotationPrompt(annotations: Annotation[], instruction: string): string {
   if (annotations.length === 0) return instruction;
   return `${instruction}\n\n${formatAnnotations(annotations)}`;
+}
+
+/** A prompt from Neovim with its file, line range, selected text and unsaved marker. */
+export function renderPrompt(text: string, context?: PromptContext): string {
+  if (!context) return text;
+  const { startLine, endLine } = context;
+  let where = context.path;
+  if (startLine !== undefined) {
+    const end = endLine ?? startLine;
+    where += end === startLine ? `:${startLine}` : `:${startLine}-${end}`;
+  }
+  if (context.unsaved) where += " (unsaved changes in Philipp's buffer; the file on disk may differ)";
+  const lines = [`Context: ${where}`];
+  if (context.text !== undefined && context.text !== "") {
+    const fence = fenceFor(context.text);
+    lines.push(fence, context.text, fence);
+  }
+  return `${text}\n\n${lines.join("\n")}`;
 }
 
 export function humanChangedSteer(path: string): string {

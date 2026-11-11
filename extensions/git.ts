@@ -146,6 +146,13 @@ function positiveInt(value: string | null, fallback: number): number {
   return n > 0 ? n : fallback;
 }
 
+// Accepts the mode names and the on/off aliases used by `/codeview on|off`; anything else is null.
+export function parseMode(value: unknown): Mode | null {
+  if (value === "review" || value === "on") return "review";
+  if (value === "vibe" || value === "off") return "vibe";
+  return null;
+}
+
 export async function readConfig(root: string): Promise<CodeviewConfig> {
   const [mode, cap, retention] = await Promise.all([
     configValue(root, "pi-codeview.mode"),
@@ -153,7 +160,7 @@ export async function readConfig(root: string): Promise<CodeviewConfig> {
     configValue(root, "pi-codeview.retentionDays"),
   ]);
   return {
-    mode: mode === "review" ? "review" : "vibe",
+    mode: parseMode(mode) ?? "vibe",
     cap: positiveInt(cap, DEFAULT_CAP),
     retentionDays: positiveInt(retention, DEFAULT_RETENTION_DAYS),
   };

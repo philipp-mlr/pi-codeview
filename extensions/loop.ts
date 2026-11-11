@@ -2,11 +2,11 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { diffText, numstat, pruneRefs, readConfig, repoHash, showFile, snapshot, writeMode } from "./git.ts";
+import { diffText, numstat, parseMode, pruneRefs, readConfig, repoHash, showFile, snapshot, writeMode } from "./git.ts";
 import type { Mode } from "./git.ts";
 import { LineDecoder, PROTOCOL_VERSION, encode } from "./protocol.ts";
 import type { EventName, PromptContext, Request } from "./protocol.ts";
-import { humanChangedSteer, renderAnnotationPrompt, renderResume, renderReview } from "./render.ts";
+import { humanChangedSteer, renderAnnotationPrompt, renderPrompt, renderResume, renderReview } from "./render.ts";
 import { socketPath, startServer } from "./server.ts";
 import type { Server } from "./server.ts";
 import { CodeviewState } from "./state.ts";
@@ -54,12 +54,6 @@ function lastPersisted(ctx: ExtensionContext): PersistedState | undefined {
 
 function unique(items: string[]): string[] {
   return [...new Set(items)];
-}
-
-function withContext(text: string, context?: PromptContext): string {
-  if (!context) return text;
-  const range = context.startLine !== undefined ? `:${context.startLine}-${context.endLine ?? context.startLine}` : "";
-  return `${text}\n\nContext: ${context.path}${range}`;
 }
 
 /** Asks a socket for its `status`; null when it is dead, refuses, or does not answer in time. */
@@ -296,7 +290,7 @@ export class ReviewLoop {
 
   prompt(text: string, context?: PromptContext): { queued: boolean } {
     if (this.queueIfOpen(text)) return { queued: true };
-    this.pi.sendUserMessage(withContext(text, context), this.delivery());
+    this.pi.sendUserMessage(renderPrompt(text, context), this.delivery());
     return { queued: false };
   }
 
@@ -333,6 +327,7 @@ export class ReviewLoop {
           mode: this.state.mode,
           root: this.root,
           sessionId: this.sessionId,
+          name: this.ctx.sessionManager.getSessionName?.() ?? null,
           openChunk: this.state.openChunk() ?? null,
           drafts: this.state.drafts,
           busy: !this.ctx.isIdle(),
@@ -355,9 +350,12 @@ export class ReviewLoop {
         return { saved: this.state.drafts.length };
       case "human_write":
         return this.humanWrite(req.path);
-      case "set_mode":
-        await this.setMode(req.mode);
+      case "set_mode": {
+        const mode = parseMode(req.mode);
+        if (!mode) throw new Error(`unknown mode "${req.mode}": use review or vibe (on/off)`);
+        await this.setMode(mode);
         return { mode: this.state.mode };
+      }
       default:
         throw new Error(`unknown request ${(req as { type?: string }).type}`);
     }
