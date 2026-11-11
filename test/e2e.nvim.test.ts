@@ -60,7 +60,9 @@ local log = ${JSON.stringify(log)}
 local notes = {}
 vim.notify = function(msg, level)
   notes[#notes + 1] = { msg = tostring(msg), level = level or vim.log.levels.INFO }
-  vim.fn.writefile({ vim.json.encode(notes) }, log)
+  -- Write then rename, so the test never reads a half-written file.
+  vim.fn.writefile({ vim.json.encode(notes) }, log .. ".tmp")
+  vim.uv.fs_rename(log .. ".tmp", log)
 end
 local ok, err = xpcall(function()
 ${body}
@@ -77,11 +79,17 @@ if not ok then vim.notify("SCRIPT ERROR: " .. err, vim.log.levels.ERROR) end
     if (nvim.exitCode === null) nvim.kill("SIGKILL");
   });
   const exited = new Promise<void>((resolve) => nvim.once("exit", () => resolve()));
+  let last: Notification[] = [];
   return {
     exited,
     notifications() {
-      if (!fs.existsSync(log)) return [];
-      return JSON.parse(fs.readFileSync(log, "utf8")) as Notification[];
+      if (!fs.existsSync(log)) return last;
+      try {
+        last = JSON.parse(fs.readFileSync(log, "utf8")) as Notification[];
+      } catch {
+        // A read racing the rename on a slow machine: keep the previous complete list.
+      }
+      return last;
     },
   };
 }
