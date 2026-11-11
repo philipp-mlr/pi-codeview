@@ -170,9 +170,6 @@ function M.show(view, index)
   end
   if #virt > 0 then
     vim.api.nvim_buf_set_extmark(left, ns, 0, 0, { virt_lines = virt, virt_lines_above = true })
-    vim.api.nvim_win_call(view.left, function()
-      vim.fn.winrestview({ topline = 1, topfill = #virt })
-    end)
   end
 
   local winbar = ("chunk %d · %d/%d · %s · %s"):format(chunk.n, index, #view.files, file.path, file.label)
@@ -181,6 +178,12 @@ function M.show(view, index)
     map_file_keys(vim.api.nvim_win_get_buf(win))
     vim.api.nvim_win_call(win, function()
       vim.cmd("diffthis")
+    end)
+  end
+  -- diffthis resets the view, so the explanation is scrolled into sight only afterwards.
+  if #virt > 0 then
+    vim.api.nvim_win_call(view.left, function()
+      vim.fn.winrestview({ topline = 1, topfill = #virt })
     end)
   end
   M.cleanup()

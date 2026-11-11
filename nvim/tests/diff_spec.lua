@@ -81,9 +81,17 @@ M["diff view shows the note and why above the left buffer and updates on ]f"] = 
   diff.open(1)
   session.request = original
   local view_left = vim.fn.win_getid(1, vim.api.nvim_get_current_tabpage())
+  local function topfill()
+    vim.cmd("redraw")
+    return vim.api.nvim_win_call(view_left, function()
+      return vim.fn.winsaveview().topfill
+    end)
+  end
+  assert(topfill() == 2, "explanation not visible, topfill=" .. topfill())
   local left = vim.api.nvim_win_get_buf(view_left)
   assert(vim.deep_equal(why_text(left), { "  did things", "  why: because a" }), vim.inspect(why_text(left)))
   vim.cmd("normal ]f")
+  assert(topfill() == 1, "explanation not visible after ]f, topfill=" .. topfill())
   left = vim.api.nvim_win_get_buf(view_left)
   assert(vim.deep_equal(why_text(left), { "  did things" }), vim.inspect(why_text(left)))
   vim.cmd("tabclose")
