@@ -1,0 +1,20 @@
+-- Default highlight links for pi's groups. `:colorscheme` runs `:hi clear`, which drops them, so
+-- setup() calls this again from a ColorScheme autocmd.
+local M = {}
+
+local LINKS = {
+  PiAnnotation = "DiagnosticInfo",
+  PiAnnotationSign = "DiagnosticSignInfo",
+  PiLive = "CursorLine",
+  PiLiveAdd = "DiffAdd",
+  PiLiveChange = "DiffChange",
+  PiLiveDelete = "DiffDelete",
+}
+
+function M.define()
+  for name, target in pairs(LINKS) do
+    vim.api.nvim_set_hl(0, name, { default = true, link = target })
+  end
+end
+
+return M

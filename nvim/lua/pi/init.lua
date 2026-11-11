@@ -3,6 +3,7 @@ local annotations = require("pi.annotations")
 local diagnostics = require("pi.diagnostics")
 local diff = require("pi.diff")
 local discover = require("pi.discover")
+local highlights = require("pi.highlights")
 local live = require("pi.live")
 local panel = require("pi.panel")
 local session = require("pi.session")
@@ -306,8 +307,7 @@ function M.setup(opts)
   local keys = vim.tbl_extend("force", M.default_keys, opts.keys or {})
   session.on_event(on_event)
 
-  vim.api.nvim_set_hl(0, "PiAnnotation", { link = "DiagnosticInfo", default = true })
-  vim.api.nvim_set_hl(0, "PiAnnotationSign", { link = "DiagnosticSignInfo", default = true })
+  highlights.define()
 
   local command = vim.api.nvim_create_user_command
   command("PiChunks", M.toggle_panel, { desc = "pi: toggle the chunk panel" })
@@ -365,6 +365,7 @@ function M.setup(opts)
 
   local group = vim.api.nvim_create_augroup("pi", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", { group = group, callback = on_write })
+  vim.api.nvim_create_autocmd("ColorScheme", { group = group, callback = highlights.define })
   vim.api.nvim_create_autocmd("BufReadPost", {
     group = group,
     callback = function()

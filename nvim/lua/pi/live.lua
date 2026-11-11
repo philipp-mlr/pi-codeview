@@ -7,11 +7,6 @@ local M = {}
 local DEBOUNCE_MS = 150
 local ns = vim.api.nvim_create_namespace("pi_live")
 
-vim.api.nvim_set_hl(0, "PiLive", { default = true, link = "CursorLine" })
-vim.api.nvim_set_hl(0, "PiLiveAdd", { default = true, link = "DiffAdd" })
-vim.api.nvim_set_hl(0, "PiLiveChange", { default = true, link = "DiffChange" })
-vim.api.nvim_set_hl(0, "PiLiveDelete", { default = true, link = "DiffDelete" })
-
 local baseline_text = {} -- baseline .. "\0" .. path -> file text at that commit ("" when absent)
 local mtimes = {} -- absolute path -> last seen mtime "sec.nsec"
 local warned = {} -- baseline .. "\0" .. path -> true

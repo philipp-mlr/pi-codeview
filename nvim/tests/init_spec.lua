@@ -320,4 +320,12 @@ M["prompt_context attaches diagnostics: whole file in normal mode, the selection
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
+M["highlight links are restored after a colorscheme change"] = function()
+  pi.setup({})
+  vim.cmd("hi clear")
+  vim.cmd("doautocmd ColorScheme")
+  assert(vim.api.nvim_get_hl(0, { name = "PiAnnotation" }).link == "DiagnosticInfo")
+  assert(vim.api.nvim_get_hl(0, { name = "PiLive" }).link == "CursorLine")
+end
+
 return M
