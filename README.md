@@ -75,6 +75,25 @@ lualine_x = { function() return require("codeview").statusline() end }
 
 It shows `codeview: <session> · review N | working · <tool> <target> | working | idle`, and nothing when not attached.
 
+### While the agent works
+
+- The statusline shows the tool the agent is running; `<leader>cl` opens the
+  activity log with your prompts, the agent's messages, its tool calls and
+  checkpoint notes.
+- Open buffers whose file the agent changed reload by themselves, as long as
+  you have no unsaved edits in them.
+- Changed lines get a sign in the sign column and a light line highlight:
+  `▍` marks added or changed lines, `▁` marks lines deleted below that line.
+  They compare against the start of the open chunk in review mode, and the
+  start of the current run in vibe mode. Your own unsaved edits show as
+  marks too.
+- A buffer with unsaved edits is never reloaded. When the agent changes its
+  file you get one warning naming it, and your edits stay.
+- The highlight groups `CodeviewLive` (line), `CodeviewLiveAdd`,
+  `CodeviewLiveChange` and `CodeviewLiveDelete` (signs) can be overridden.
+- Above a chunk's diff you see the checkpoint note and the agent's one-line
+  reason for the current file.
+
 ### Which pi session nvim talks to
 
 nvim attaches to a pi session running in the same worktree as the current

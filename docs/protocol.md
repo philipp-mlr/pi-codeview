@@ -46,10 +46,13 @@ handler failures are returned as `ok:false`.
   `busy` is true while the agent is working; `queued` counts prompts waiting behind the open chunk.
   `activity` is the tool currently running (`{"tool":"edit","target":"a.ts"}`, the most recently started one when several run) or `null`;
   `activitySeq` is the seq of the latest activity item (0 when none). Both are additive fields.
+  `markBase` (additive) is the snapshot sha clients mark changed lines against: the open chunk's `fromSha`; without one,
+  `baseline` in review mode and in vibe mode the `baseline` at the start of the current or last agent run (kept in memory, so
+  `baseline` again after a restart). Older extensions omit it; clients fall back to `baseline`.
 - `get_activity`: array of activity items with `seq > since` (all when omitted), oldest first. The log is in memory only and keeps the last 200 items.
   Item: `{"seq":42,"kind":"prompt"|"text"|"tool"|"checkpoint"|"settled","text":"…","tool":"edit","target":"a.ts","at":<ms epoch>}`;
   `tool`/`target` only on `tool` items. `text` is a whitespace-collapsed excerpt (300 chars, `…` when cut) for `prompt`/`text`,
-  `<tool> <target>` for `tool`, the note for `checkpoint`, `settled` or `aborted` for `settled`.
+  `<tool> <target>` for `tool` (a `command` target is whitespace-collapsed and cut at 60 chars), the note for `checkpoint` (collapsed and cut like an excerpt), `settled` or `aborted` for `settled`.
 - `prompt`: `{"queued":true}` when a chunk is open and the prompt waits for its review, else `{"queued":false}` (sent to the agent).
 - `list_chunks`: array of chunks. `get_chunk`: `{"chunk":<chunk>,"diff":"<unified diff fromSha..toSha>"}`.
 - A chunk may carry `why`: `{"<repo-relative path>":"<one short line, max 200 chars>"}`, set from the `files` argument of the agent's `checkpoint` call. Only paths changed in the chunk are kept; the field is absent when empty. Clients must tolerate its absence.
@@ -69,6 +72,7 @@ handler failures are returned as `ok:false`.
 
 `activity` (additive): `{"event":"activity","data":{"seq":42,"kind":"tool","text":"edit a.ts","tool":"edit","target":"a.ts","at":1,"current":{"tool":"edit","target":"a.ts"}|null}}`,
 one per added activity item; `current` is the same value as `status.activity`.
-`activity_current` (additive): `{"event":"activity_current","data":{"current":{"tool":"edit","target":"a.ts"}|null}}`, sent when a tool ends without adding an item.
+`activity_current` (additive): `{"event":"activity_current","data":{"current":{"tool":"edit","target":"a.ts"}|null,"mutating":true}}`, sent when a tool ends without adding an item.
+`mutating` is false when the tool that ended cannot change files (e.g. `read`); clients reload buffers only when it is not false (older extensions omit it).
 
 `chunk_reviewed` is also sent for a discarded chunk (`status: "discarded"`).
