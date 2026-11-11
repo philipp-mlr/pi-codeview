@@ -402,6 +402,65 @@ vim.notify("ATTACHED " .. cv.session_label() .. " " .. session.cached.sessionId)
     expect(attached.msg).toBe("ATTACHED bugfix bbbb2222-y");
   }, TIMEOUT_MS);
 
+  it("statusline follows the agent's activity", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { sessionName: "work", mode: "vibe" });
+    fake.setIdle(false);
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("codeview")
+cv.setup()
+vim.cmd("edit README.md")
+require("codeview.session").ensure(function() end)
+vim.wait(5000, function() return cv.statusline() ~= "" end)
+vim.notify("S0 " .. cv.statusline())
+local last = ""
+vim.wait(15000, function()
+  local now = cv.statusline()
+  if now ~= last then
+    last = now
+    vim.notify("S " .. now)
+  end
+  return false
+end, 5)
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg.startsWith("S0")), "attached");
+    await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "edit", args: { path: "a.ts" } });
+    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work · working · edit a.ts"), "working · edit a.ts");
+    await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "edit", result: {}, isError: false });
+    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work · working"), "working");
+    fake.setIdle(true);
+    await fake.fire("agent_settled", { aborted: false });
+    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work · idle"), "idle");
+  }, TIMEOUT_MS);
+
+  it("an nvim attaching late finds the earlier activity in the log buffer", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "vibe" });
+    for (const f of ["a.ts", "b.ts", "c.ts"]) {
+      await fake.fire("tool_execution_start", { toolCallId: f, toolName: "read", args: { path: f } });
+      await fake.fire("tool_execution_end", { toolCallId: f, toolName: "read", result: {}, isError: false });
+    }
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("codeview")
+cv.setup()
+vim.cmd("edit README.md")
+require("codeview.session").ensure(function() end)
+vim.wait(5000, function()
+  local b = vim.fn.bufnr("codeview://log")
+  return b > 0 and #vim.api.nvim_buf_get_lines(b, 0, -1, false) >= 3
+end)
+vim.notify("LOG " .. table.concat(vim.api.nvim_buf_get_lines(vim.fn.bufnr("codeview://log"), 0, -1, false), "|"))
+`,
+    );
+    const note = await until(() => nvim.notifications().find((n) => n.msg.startsWith("LOG")), "log");
+    expect(note.msg).toBe("LOG tool    ▸ read a.ts|tool    ▸ read b.ts|tool    ▸ read c.ts");
+  }, TIMEOUT_MS);
+
   it("saving a file stores the drafts' moved positions", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);

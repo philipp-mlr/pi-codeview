@@ -63,6 +63,17 @@ skipped keys in one message; keys you pass in `keys` are always mapped.
 | `:CodeviewSend` | `<leader>cs` | Save all buffers, then send the annotations and an optional note. |
 | `:CodeviewMode [review\|vibe\|on\|off]` | `<leader>cm` | Switch the mode for this repository; without an argument it toggles. |
 | `:CodeviewAttach` | `<leader>ct` | Choose the pi session to work with (listed by session name, mode and state). |
+| `:CodeviewLog` | `<leader>cl` | Toggle the activity log: your prompts, the agent's messages, tool calls, checkpoints (`q` closes). |
+
+### Statusline
+
+With lualine:
+
+```lua
+lualine_x = { function() return require("codeview").statusline() end }
+```
+
+It shows `codeview: <session> · review N | working · <tool> <target> | working | idle`, and nothing when not attached.
 
 ### Which pi session nvim talks to
 

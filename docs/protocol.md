@@ -68,5 +68,6 @@ handler failures are returned as `ok:false`.
 
 `activity` (additive): `{"event":"activity","data":{"seq":42,"kind":"tool","text":"edit a.ts","tool":"edit","target":"a.ts","at":1,"current":{"tool":"edit","target":"a.ts"}|null}}`,
 one per added activity item; `current` is the same value as `status.activity`.
+`activity_current` (additive): `{"event":"activity_current","data":{"current":{"tool":"edit","target":"a.ts"}|null}}`, sent when a tool ends without adding an item.
 
 `chunk_reviewed` is also sent for a discarded chunk (`status: "discarded"`).

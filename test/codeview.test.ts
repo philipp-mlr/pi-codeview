@@ -611,6 +611,20 @@ describe("codeview activity", () => {
     expect(tail.map((i: any) => i.seq)).toEqual([4, 5]);
   });
 
+  it("broadcasts activity_current when a tool ends; a parallel tool stays current", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    await fake.fire("tool_execution_start", { toolCallId: "a", toolName: "read", args: { path: "a.ts" } });
+    await fake.fire("tool_execution_start", { toolCallId: "b", toolName: "read", args: { path: "b.ts" } });
+    await fake.fire("tool_execution_end", { toolCallId: "b", toolName: "read", result: {}, isError: false });
+    await until(() => client.events.filter((e) => e.event === "activity_current").length === 1);
+    expect(client.events.filter((e) => e.event === "activity_current")[0].data).toEqual({ current: { tool: "read", target: "a.ts" } });
+    await fake.fire("tool_execution_end", { toolCallId: "a", toolName: "read", result: {}, isError: false });
+    await until(() => client.events.filter((e) => e.event === "activity_current").length === 2);
+    expect(client.events.filter((e) => e.event === "activity_current")[1].data).toEqual({ current: null });
+  });
+
   it("logs the checkpoint note instead of a generic tool line", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "review" });

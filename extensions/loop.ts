@@ -214,6 +214,7 @@ export class ReviewLoop {
 
   activityToolEnd(toolCallId: string): void {
     this.activity.endTool(toolCallId);
+    this.broadcast("activity_current", { current: this.activity.current() });
   }
 
   /** Adds a `text` item for an assistant message or a `prompt` item for a user message; other roles are ignored. */
