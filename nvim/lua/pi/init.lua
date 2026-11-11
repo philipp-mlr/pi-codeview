@@ -1,5 +1,6 @@
 -- pi.nvim: commands, keys and autocommands over session, panel and diff.
 local annotations = require("pi.annotations")
+local badge = require("pi.badge")
 local diagnostics = require("pi.diagnostics")
 local diff = require("pi.diff")
 local discover = require("pi.discover")
@@ -32,7 +33,28 @@ local function relpath(buf, root)
   return real and discover.relpath(root, real) or nil
 end
 
+-- One notice when a run ends; reads the open chunk from a fresh status.
+local function notify_run_end(data)
+  if type(data) == "table" and data.aborted then
+    return vim.notify("pi: cancelled")
+  end
+  local files = type(data) == "table" and data.files or 0
+  session.refresh_status(function(err, status)
+    local chunk = not err and type(status.openChunk) == "table" and status.openChunk or nil
+    if chunk then
+      vim.notify(("pi: chunk %s waiting for your review — <leader>pv to look, <leader>pr to continue"):format(chunk.n))
+    elseif files == 0 then
+      vim.notify("pi: done")
+    else
+      vim.notify(("pi: done — %d file%s changed"):format(files, files == 1 and "" or "s"))
+    end
+  end)
+end
+
 local function on_event(name, data)
+  if name == "run_settled" then
+    notify_run_end(data)
+  end
   -- Only a tool end carries `mutating`; tool start, agent_start and agent_settled events do not reload.
   local mutating = name == "activity_current" and type(data) == "table" and data.mutating == true
   if mutating or name == "chunk_ready" or name == "chunk_reviewed" then
@@ -295,7 +317,8 @@ end
 local function edit_command()
   pick_annotation("pi: edit which annotation?", function(item)
     vim.ui.input({ prompt = "pi annotation: ", default = item.note }, function(text)
-      if text and text ~= "" then
+      text = text and vim.trim(text) or ""
+      if text ~= "" then
         annotations.edit(item, text)
       end
     end)
@@ -336,6 +359,10 @@ function M.setup(opts)
   session.on_event(on_event)
 
   highlights.define()
+  badge.enabled = opts.badge ~= false
+  if not badge.enabled then
+    badge.close()
+  end
 
   local command = vim.api.nvim_create_user_command
   command("PiChunks", M.toggle_panel, { desc = "pi: toggle the chunk panel" })
@@ -404,7 +431,14 @@ function M.setup(opts)
       end
     end,
   })
-  vim.api.nvim_create_autocmd("VimLeavePre", { group = group, callback = session.flush })
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = group,
+    callback = function()
+      badge.close()
+      session.flush()
+    end,
+  })
+  vim.api.nvim_create_autocmd("VimResized", { group = group, callback = badge.reposition })
   vim.api.nvim_create_autocmd("TabClosed", { group = group, callback = diff.cleanup })
 end
 

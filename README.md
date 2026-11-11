@@ -70,7 +70,7 @@ settings.packages = [ "${inputs.pi-nvim}" ];
 to `false` to leave it unmapped. A default key that is already mapped by
 another plugin is left alone, and `setup()` lists the skipped keys in one
 message. Keys you pass in `keys` are always mapped. The key names are `ask`,
-`cancel`, `session`, `annotate`, `remove`, `send`, `chunks`, `checkpoints`.
+`cancel`, `session`, `annotate`, `remove`, `edit`, `send`, `chunks`, `checkpoints`.
 
 ## Keys and commands
 
@@ -116,6 +116,15 @@ session name while checkpoint mode is on. It is empty when Neovim is not
 attached to a session. `require("pi").status()` returns `"review N"`,
 `"working"`, `"idle"` or `""`.
 
+- A small badge in the top-right corner shows that the agent works:
+  `⠋ pi · <tool> <target>` or `⠋ pi · working`, with a spinner. While a chunk
+  waits for your review it reads `pi · chunk N waiting for your review`. It
+  never takes focus and is hidden when idle or not attached. Turn it off with
+  `setup({ badge = false })`; colors come from the `PiBadge` highlight group
+  (links to `PmenuSel`).
+- When a run ends you get one notice: `pi: done — N files changed`,
+  `pi: cancelled`, or, with a chunk waiting,
+  `pi: chunk N waiting for your review — <leader>pv to look, <leader>pr to continue`.
 - Open buffers whose file the agent changed reload by themselves.
 - Changed lines get a sign and a light line highlight: `┃` marks added or
   changed lines (same column as gitsigns), `▁` marks lines deleted below that line. They compare

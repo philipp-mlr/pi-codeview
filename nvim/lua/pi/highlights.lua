@@ -3,6 +3,7 @@
 local M = {}
 
 local LINKS = {
+  PiBadge = "PmenuSel",
   PiAnnotation = "DiagnosticInfo",
   PiAnnotationSign = "DiagnosticSignInfo",
   PiLive = "CursorLine",

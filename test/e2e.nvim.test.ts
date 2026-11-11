@@ -540,6 +540,55 @@ end, 5)
     await until(() => nvim.notifications().some((n) => n.msg === "S pi: work · idle"), "idle");
   }, TIMEOUT_MS);
 
+  it("run_settled gives one notice: files changed, cancelled, or the waiting chunk", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "off" });
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("pi")
+cv.setup()
+vim.cmd("edit README.md")
+require("pi.session").ensure(function() vim.notify("ATTACHED") end)
+vim.wait(15000, function() return false end, 20)
+`,
+    );
+    const has = (msg: string) => nvim.notifications().some((n) => n.msg === msg);
+    await until(() => has("ATTACHED"), "attached");
+    await fake.fire("agent_start", {});
+    await agentWrite(fake, repo, "a.txt", "one\n");
+    await agentWrite(fake, repo, "b.txt", "two\n");
+    await fake.fire("turn_end", { turnIndex: 0 });
+    await fake.fire("agent_settled", { aborted: false });
+    await until(() => has("pi: done — 2 files changed"), "done notice");
+    await fake.fire("agent_settled", { aborted: true });
+    await until(() => has("pi: cancelled"), "cancelled notice");
+  }, TIMEOUT_MS);
+
+  it("run_settled with a chunk open names the chunk and the keys", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("pi")
+cv.setup()
+vim.cmd("edit README.md")
+require("pi.session").ensure(function() vim.notify("ATTACHED") end)
+vim.wait(15000, function() return false end, 20)
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg === "ATTACHED"), "attached");
+    await agentWrite(fake, repo, "a.txt", "one\n");
+    void fake.callTool("checkpoint", { note: "add a" });
+    await new Promise((r) => setTimeout(r, 300));
+    await fake.fire("agent_settled", { aborted: false });
+    await until(
+      () => nvim.notifications().some((n) => n.msg === "pi: chunk 1 waiting for your review — <leader>pv to look, <leader>pr to continue"),
+      "waiting notice",
+    );
+  }, TIMEOUT_MS);
+
   it("<leader>pm toggles checkpoint mode before any other command, says which mode is on and shows it in the statusline", async () => {
     const repo = await makeRepo();
     await start(repo, { sessionName: "work", mode: "off" });

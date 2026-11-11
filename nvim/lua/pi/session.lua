@@ -1,5 +1,6 @@
 -- The connection to one pi session and its cached status.
 local annotations = require("pi.annotations")
+local badge = require("pi.badge")
 local client = require("pi.client")
 local discover = require("pi.discover")
 local live = require("pi.live")
@@ -18,7 +19,23 @@ function M.connected()
   return M.conn ~= nil and not M.conn.closed
 end
 
+-- Badge state from the cached status; nil when not attached.
+local function update_badge()
+  local cached = M.cached
+  if not M.connected() or not cached then
+    return badge.update(nil)
+  end
+  local activity = type(cached.activity) == "table" and cached.activity or {}
+  badge.update({
+    busy = cached.busy,
+    tool = activity.tool,
+    target = activity.target,
+    chunk = type(cached.openChunk) == "table" and cached.openChunk.n or nil,
+  })
+end
+
 local function redraw()
+  update_badge()
   pcall(vim.cmd, "redrawstatus!")
 end
 

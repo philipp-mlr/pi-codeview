@@ -427,7 +427,7 @@ M["PiAnnotationEdit changes text and the virtual line; cancelled or empty input 
   assert(vim.tbl_contains(virt(), "  ✎ " .. annotations.at_cursor()[3].note), vim.inspect(virt()))
   assert(not vim.tbl_contains(virt(), "  ✎ second"), vim.inspect(virt()))
   restore()
-  for _, value in ipairs({ "", false }) do
+  for _, value in ipairs({ "", "   ", false }) do
     local before = notes_of(dir)
     local _, r = stub_ui(1, value or nil)
     vim.cmd("PiAnnotationEdit")
