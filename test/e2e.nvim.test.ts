@@ -467,6 +467,105 @@ end, 20)
     expect(note.msg).toBe("LIVE one|two 2");
   }, TIMEOUT_MS);
 
+  it("marks stay when the chunk opens for review and clear after send", async () => {
+    const repo = await makeRepo();
+    repo.write("a.txt", "one\n");
+    await repo.git("add", ".");
+    await repo.git("commit", "-q", "-m", "add a");
+    const fake = await start(repo);
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("codeview")
+cv.setup()
+vim.cmd("edit a.txt")
+local buf = vim.api.nvim_get_current_buf()
+local ns = vim.api.nvim_create_namespace("codeview_live")
+local function count() return #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}) end
+require("codeview.session").ensure(function() end)
+vim.wait(5000, function() return require("codeview.session").connected() end)
+vim.notify("READY")
+vim.wait(15000, function() return count() == 1 end, 20)
+vim.notify("WRITTEN " .. count())
+vim.wait(15000, function() return require("codeview.panel").visible() end, 20)
+vim.wait(1500, function() return count() ~= 1 end, 20)
+vim.notify("OPEN " .. count())
+cv.send({ note = "ok" })
+vim.wait(5000, function() return count() == 0 end, 20)
+vim.notify("SENT " .. count())
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg === "READY"), "attached");
+    await agentWrite(fake, repo, "a.txt", "one\ntwo\n");
+    await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "write", result: {}, isError: false });
+    await until(() => nvim.notifications().some((n) => n.msg.startsWith("WRITTEN")), "marks after the write");
+    const pending = fake.callTool("checkpoint", { note: "add two" });
+    expect(text(await pending)).toContain('Review of chunk 1 ("add two")');
+    await until(() => nvim.notifications().some((n) => n.msg.startsWith("SENT")), "sent");
+    const notes = nvim.notifications().map((n) => n.msg);
+    expect(notes).toContain("WRITTEN 1");
+    expect(notes).toContain("OPEN 1");
+    expect(notes).toContain("SENT 0");
+  }, TIMEOUT_MS);
+
+  it("marks show on attach and in a buffer opened after attach, without a tool event", async () => {
+    const repo = await makeRepo();
+    repo.write("a.txt", "one\n");
+    repo.write("b.txt", "bee\n");
+    await repo.git("add", ".");
+    await repo.git("commit", "-q", "-m", "add a and b");
+    const fake = await start(repo);
+    await agentWrite(fake, repo, "a.txt", "one\ntwo\n");
+    await agentWrite(fake, repo, "b.txt", "bee\nsting\n");
+    const nvim = runNvim(
+      repo,
+      `
+require("codeview").setup()
+local ns = vim.api.nvim_create_namespace("codeview_live")
+local function count(buf) return #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}) end
+vim.cmd("edit a.txt")
+local a = vim.api.nvim_get_current_buf()
+require("codeview.session").ensure(function() end)
+vim.wait(5000, function() return count(a) > 0 end, 20)
+vim.notify("ATTACHED " .. count(a))
+vim.cmd("edit b.txt")
+local b = vim.api.nvim_get_current_buf()
+vim.wait(5000, function() return count(b) > 0 end, 20)
+vim.notify("OPENED " .. count(b))
+`,
+    );
+    const opened = await until(() => nvim.notifications().find((n) => n.msg.startsWith("OPENED")), "opened");
+    expect(nvim.notifications().map((n) => n.msg)).toContain("ATTACHED 1");
+    expect(opened.msg).toBe("OPENED 1");
+  }, TIMEOUT_MS);
+
+  it("activity_current for a read-only tool reloads nothing", async () => {
+    const repo = await makeRepo();
+    repo.write("a.txt", "one\n");
+    await repo.git("add", ".");
+    await repo.git("commit", "-q", "-m", "add a");
+    const fake = await start(repo, { mode: "vibe" });
+    const nvim = runNvim(
+      repo,
+      `
+require("codeview").setup()
+vim.cmd("edit a.txt")
+require("codeview.session").ensure(function() end)
+vim.wait(5000, function() return require("codeview.session").connected() end)
+vim.wait(500)
+vim.notify("READY")
+vim.wait(1500, function() return false end, 20)
+vim.notify("DONE " .. table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "|"))
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg === "READY"), "attached");
+    await new Promise((r) => setTimeout(r, 1100));
+    repo.write("a.txt", "one\ntwo\n");
+    await fake.fire("tool_execution_end", { toolCallId: "r1", toolName: "read", result: {}, isError: false });
+    const done = await until(() => nvim.notifications().find((n) => n.msg.startsWith("DONE")), "done");
+    expect(done.msg).toBe("DONE one");
+  }, TIMEOUT_MS);
+
   it("an unsaved buffer keeps its edit and warns once when the agent changes the file", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "vibe" });

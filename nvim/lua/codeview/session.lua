@@ -72,6 +72,17 @@ function M.refresh_status(cb)
   end)
 end
 
+-- Reloads and marks the open buffers against the status' mark base (after a status refresh, since
+-- it moves when a chunk is reviewed or a run starts). Older extensions send only `baseline`.
+function M.refresh_live()
+  M.refresh_status(function(err, status)
+    local base = not err and (status.markBase or status.baseline)
+    if M.root and type(base) == "string" then
+      live.refresh(M.root, base)
+    end
+  end)
+end
+
 local function save_drafts(cb)
   if not M.connected() then
     return
@@ -204,6 +215,7 @@ local function attach(conn, root, status, cb)
     M.schedule_save()
   end
   redraw()
+  live.schedule(M.refresh_live)
   cb(conn, root)
 end
 

@@ -30,19 +30,11 @@ local function relpath(buf, root)
   return real and discover.relpath(root, real) or nil
 end
 
--- Reloads and marks the open buffers against the current baseline (after a status refresh, since a
--- review moves it).
-local function refresh_live()
-  session.refresh_status(function(err, status)
-    if not err and session.root and type(status.baseline) == "string" then
-      live.refresh(session.root, status.baseline)
-    end
-  end)
-end
-
 local function on_event(name, data)
-  if name == "activity_current" or name == "chunk_ready" or name == "chunk_reviewed" then
-    live.schedule(refresh_live)
+  -- A tool that cannot change files triggers no reload; `mutating` is absent from older extensions.
+  local mutating = name == "activity_current" and not (type(data) == "table" and data.mutating == false)
+  if mutating or name == "chunk_ready" or name == "chunk_reviewed" then
+    live.schedule(session.refresh_live)
   end
   if name == "chunk_ready" then
     -- The server sends { chunk = {...} }.
@@ -329,6 +321,14 @@ function M.setup(opts)
 
   local group = vim.api.nvim_create_augroup("codeview", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", { group = group, callback = on_write })
+  vim.api.nvim_create_autocmd("BufReadPost", {
+    group = group,
+    callback = function()
+      if session.connected() then
+        live.schedule(session.refresh_live)
+      end
+    end,
+  })
   vim.api.nvim_create_autocmd("VimLeavePre", { group = group, callback = session.flush })
   vim.api.nvim_create_autocmd("TabClosed", { group = group, callback = diff.cleanup })
 end

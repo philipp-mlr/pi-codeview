@@ -1,5 +1,5 @@
 -- Live view of the agent's changes in open buffers: reloads untouched buffers and marks the lines
--- that differ from the start of the current chunk (the baseline commit).
+-- that differ from the mark base (the open chunk's start, or the start of the run in vibe mode).
 local discover = require("codeview.discover")
 
 local M = {}

@@ -112,4 +112,69 @@ M["annotate keeps the note when no pi session is reachable"] = function()
   annotations.clear()
 end
 
+-- A git repo with a.txt and b.txt committed and then changed on disk; returns root and the commit.
+local function changed_repo()
+  local root = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()
+  vim.fn.mkdir(root, "p")
+  root = vim.uv.fs_realpath(root)
+  local function git(...)
+    local r = vim.system({ "git", "-C", root, ... }, { text = true }):wait()
+    assert(r.code == 0, r.stderr)
+    return vim.trim(r.stdout)
+  end
+  git("init", "-q")
+  git("config", "user.email", "t@t")
+  git("config", "user.name", "t")
+  vim.fn.writefile({ "one" }, root .. "/a.txt")
+  vim.fn.writefile({ "bee" }, root .. "/b.txt")
+  git("add", ".")
+  git("commit", "-q", "-m", "init")
+  local base = git("rev-parse", "HEAD")
+  vim.fn.writefile({ "one", "two" }, root .. "/a.txt")
+  vim.fn.writefile({ "bee", "sting" }, root .. "/b.txt")
+  return root, base
+end
+
+-- Pretends to be attached to a session whose `status` returns status.
+local function fake_attach(root, status)
+  local session = require("codeview.session")
+  session.conn = { closed = false, request = function(_, type, _, cb) if type == "status" and cb then cb(nil, status) end end }
+  session.root = root
+  return function()
+    session.conn, session.root, session.cached = nil, nil, nil
+    require("codeview.live").clear()
+  end
+end
+
+local live_ns = vim.api.nvim_create_namespace("codeview_live")
+
+local function live_marks(buf)
+  return #vim.api.nvim_buf_get_extmarks(buf, live_ns, 0, -1, {})
+end
+
+M["a buffer opened while attached gets marks against markBase without a tool event"] = function()
+  reset_maps()
+  capture_notify(function() codeview.setup() end)
+  local root, base = changed_repo()
+  -- baseline points elsewhere: the marks must follow markBase.
+  local detach = fake_attach(root, { markBase = base, baseline = "0000000000000000000000000000000000000000" })
+  vim.cmd("edit " .. vim.fn.fnameescape(root .. "/a.txt"))
+  local buf = vim.api.nvim_get_current_buf()
+  assert(vim.wait(3000, function() return live_marks(buf) == 1 end, 10), "no marks: " .. live_marks(buf))
+  detach()
+  vim.api.nvim_buf_delete(buf, { force = true })
+  reset_maps()
+end
+
+M["marks fall back to baseline when the extension sends no markBase"] = function()
+  local root, base = changed_repo()
+  local detach = fake_attach(root, { baseline = base })
+  vim.cmd("edit " .. vim.fn.fnameescape(root .. "/b.txt"))
+  local buf = vim.api.nvim_get_current_buf()
+  require("codeview.session").refresh_live()
+  assert(vim.wait(3000, function() return live_marks(buf) == 1 end, 10), "no marks: " .. live_marks(buf))
+  detach()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 return M
