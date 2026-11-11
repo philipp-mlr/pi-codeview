@@ -102,6 +102,14 @@ async function until<T>(fn: () => T | undefined | null | false, what: string): P
   throw new Error(`timed out waiting for ${what}`);
 }
 
+/** Waits until the extension has an open chunk, so nvim never asks for a chunk that doesn't exist yet. */
+async function chunkOpen(fake: FakePi): Promise<void> {
+  await until(() => {
+    const last = fake.entries.filter((e) => e.customType === "pi-nvim-state").at(-1);
+    return (last?.data as { chunks?: { status: string }[] } | undefined)?.chunks?.some((c) => c.status === "open");
+  }, "open chunk");
+}
+
 async function settled<T>(p: Promise<T>, ms = 200): Promise<boolean> {
   let done = false;
   void p.then(() => (done = true));
@@ -122,6 +130,7 @@ describe("pi.nvim end to end", () => {
     await agentWrite(fake, repo, "a.txt", "one\ntwo\n");
     await agentWrite(fake, repo, "b.txt", "bee\n");
     const pending = fake.callTool("checkpoint", { note: "add a" });
+    await chunkOpen(fake);
 
     const nvim = runNvim(
       repo,
@@ -202,6 +211,7 @@ vim.cmd("write")
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\n");
     const pending = fake.callTool("checkpoint", { note: "add a" });
+    await chunkOpen(fake);
 
     const nvim = runNvim(
       repo,
@@ -209,14 +219,6 @@ vim.cmd("write")
 local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
-local session = require("pi.session")
--- Send only once the chunk is open: on a slow machine nvim can attach before the checkpoint
--- call has created it, and then there is nothing to confirm.
-session.ensure(function() end)
-vim.wait(5000, function()
-  session.refresh_status()
-  return session.cached ~= nil and type(session.cached.openChunk) == "table"
-end, 50)
 vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 1 end
 cv.send({ note = "" })
 `,
@@ -232,6 +234,7 @@ cv.send({ note = "" })
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\n");
     const pending = fake.callTool("checkpoint", { note: "add a" });
+    await chunkOpen(fake);
 
     const nvim = runNvim(
       repo,
@@ -239,14 +242,6 @@ cv.send({ note = "" })
 local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
-local session = require("pi.session")
--- Send only once the chunk is open: on a slow machine nvim can attach before the checkpoint
--- call has created it, and then there is nothing to confirm.
-session.ensure(function() end)
-vim.wait(5000, function()
-  session.refresh_status()
-  return session.cached ~= nil and type(session.cached.openChunk) == "table"
-end, 50)
 vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 2 end
 cv.send({ note = "" })
 `,
@@ -312,6 +307,7 @@ cv.send()
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\ntwo\n");
     const pending = fake.callTool("checkpoint", { note: "add a" });
+    await chunkOpen(fake);
     const nvim = runNvim(
       repo,
       `
@@ -372,6 +368,7 @@ end)
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\n");
     void fake.callTool("checkpoint", { note: "add a" });
+    await chunkOpen(fake);
 
     const nvim = runNvim(
       repo,
@@ -606,6 +603,7 @@ end, 20)
     await until(() => nvim.notifications().some((n) => n.msg === "ATTACHED"), "attached");
     await agentWrite(fake, repo, "a.txt", "one\n");
     void fake.callTool("checkpoint", { note: "add a" });
+    await chunkOpen(fake);
     await until(() => nvim.notifications().some((n) => n.msg === "CHUNK_OPEN"), "chunk open");
     await fake.fire("agent_settled", { aborted: false });
     await until(
@@ -707,6 +705,7 @@ vim.notify("SENT " .. count())
     await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "write", result: {}, isError: false });
     await until(() => nvim.notifications().some((n) => n.msg.startsWith("WRITTEN")), "marks after the write");
     const pending = fake.callTool("checkpoint", { note: "add two" });
+    await chunkOpen(fake);
     expect(text(await pending)).toContain('Review of chunk 1 ("add two")');
     await until(() => nvim.notifications().some((n) => n.msg.startsWith("SENT")), "sent");
     const notes = nvim.notifications().map((n) => n.msg);
