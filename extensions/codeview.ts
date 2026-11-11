@@ -87,7 +87,11 @@ export default function codeview(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_execution_end", (event) => {
-    loop?.activityToolEnd(event.toolCallId);
+    loop?.activityToolEnd(event.toolCallId, event.toolName);
+  });
+
+  pi.on("agent_start", () => {
+    loop?.runStarted();
   });
 
   pi.on("message_end", (event) => {

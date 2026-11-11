@@ -59,15 +59,24 @@ export function excerpt(message: { content?: unknown }): string | null {
       if (block?.type === "text" && typeof block.text === "string") parts.push(block.text);
     }
   }
-  const text = parts.join(" ").replace(/\s+/g, " ").trim();
-  if (text === "") return null;
-  return text.length > EXCERPT_CHARS ? text.slice(0, EXCERPT_CHARS) + "…" : text;
+  const text = shorten(parts.join(" "));
+  return text === "" ? null : text;
 }
 
-/** `path` argument if present, else the first 60 chars of `command`, else empty. */
+function collapse(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** `text` whitespace-collapsed and cut at 300 chars with an ellipsis. */
+export function shorten(text: string): string {
+  const collapsed = collapse(text);
+  return collapsed.length > EXCERPT_CHARS ? collapsed.slice(0, EXCERPT_CHARS) + "…" : collapsed;
+}
+
+/** `path` argument if present, else the first 60 chars of the whitespace-collapsed `command`, else empty. */
 export function toolLine(toolName: string, args: unknown): { tool: string; target: string } {
   const a = (args && typeof args === "object" ? args : {}) as { path?: unknown; command?: unknown };
   if (typeof a.path === "string" && a.path !== "") return { tool: toolName, target: a.path };
-  if (typeof a.command === "string") return { tool: toolName, target: a.command.slice(0, TARGET_COMMAND_CHARS) };
+  if (typeof a.command === "string") return { tool: toolName, target: collapse(a.command).slice(0, TARGET_COMMAND_CHARS) };
   return { tool: toolName, target: "" };
 }

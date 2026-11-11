@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { ActivityLog, excerpt, toolLine } from "./activity.ts";
+import { ActivityLog, excerpt, shorten, toolLine } from "./activity.ts";
 import { diffText, numstat, parseMode, pruneRefs, readConfig, repoHash, showFile, snapshot, writeMode } from "./git.ts";
 import type { Mode } from "./git.ts";
 import { LineDecoder, PROTOCOL_VERSION, encode } from "./protocol.ts";
@@ -101,6 +101,8 @@ export class ReviewLoop {
   private lock: Promise<unknown> = Promise.resolve();
   /** Whether a mutating tool ran or a human_write arrived since the last vibe turn_end snapshot. */
   private mayHaveChanged = false;
+  /** `state.baseline` when the current or last agent run started (vibe-mode mark base); in memory only. */
+  private runBaseline: string | null = null;
 
   private constructor(
     private readonly pi: ExtensionAPI,
@@ -206,15 +208,31 @@ export class ReviewLoop {
     this.activity.startTool(toolCallId, tool, target);
     const note = (args as { note?: unknown } | null)?.note;
     if (toolName === CHECKPOINT_TOOL && typeof note === "string") {
-      this.addActivity({ kind: "checkpoint", text: note });
+      this.addActivity({ kind: "checkpoint", text: shorten(note) });
     } else {
       this.addActivity({ kind: "tool", text: target === "" ? tool : `${tool} ${target}`, tool, target });
     }
   }
 
-  activityToolEnd(toolCallId: string): void {
+  activityToolEnd(toolCallId: string, toolName: string): void {
     this.activity.endTool(toolCallId);
-    this.broadcast("activity_current", { current: this.activity.current() });
+    this.broadcast("activity_current", { current: this.activity.current(), mutating: !isReadOnlyTool(toolName) });
+  }
+
+  /** Pins the vibe-mode mark base: turn chunks move the baseline, the marks stay against the run's start. */
+  runStarted(): void {
+    this.runBaseline = this.state.baseline;
+  }
+
+  /**
+   * The snapshot nvim marks changed lines against: the open chunk's start, else in review mode the
+   * baseline, in vibe mode the baseline when the current or last run started.
+   */
+  markBase(): string {
+    const open = this.state.openChunk();
+    if (open) return open.fromSha;
+    if (this.state.mode === "review") return this.state.baseline;
+    return this.runBaseline ?? this.state.baseline;
   }
 
   /** Adds a `text` item for an assistant message or a `prompt` item for a user message; other roles are ignored. */
@@ -332,6 +350,7 @@ export class ReviewLoop {
       if (mode === "review" && this.state.mode !== "review" && !this.state.openChunk()) {
         this.state.setBaseline(await this.snapshot());
       }
+      if (this.state.mode !== mode) this.runBaseline = null;
       this.state.mode = mode;
       this.applyTools();
       this.persist();
@@ -356,6 +375,7 @@ export class ReviewLoop {
           sessionId: this.sessionId,
           name: this.ctx.sessionManager.getSessionName?.() ?? null,
           baseline: this.state.baseline,
+          markBase: this.markBase(),
           openChunk: this.state.openChunk() ?? null,
           drafts: this.state.drafts,
           busy: !this.ctx.isIdle(),

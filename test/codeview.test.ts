@@ -183,6 +183,44 @@ describe("codeview extension", () => {
     expect((await client.request("list_chunks")).result[0].status).toBe("reviewed");
   });
 
+  it("markBase: review mode marks against the open chunk's start, then the baseline after send", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "review" });
+    const client = await connect(repo);
+    const before = (await client.request("status")).result;
+    expect(before.markBase).toBe(before.baseline);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    void fake.callTool("checkpoint", { note: "add a" });
+    await until(() => client.events.find((e) => e.event === "chunk_ready"));
+    const open = (await client.request("status")).result;
+    expect(open.markBase).toBe(open.openChunk.fromSha);
+    expect(open.markBase).toBe(before.baseline);
+    expect(open.baseline).not.toBe(open.markBase);
+    expect((await client.request("send", { annotations: [], note: "ok", viewed: true })).ok).toBe(true);
+    const after = (await client.request("status")).result;
+    expect(after.markBase).toBe(after.baseline);
+    expect(after.markBase).toBe(open.openChunk.toSha);
+  });
+
+  it("markBase: vibe mode keeps the run-start baseline across turn chunks, moves on the next agent_start", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    const start0 = (await client.request("status")).result.baseline;
+    await fake.fire("agent_start", {});
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    await fake.fire("turn_end", { turnIndex: 0 });
+    await agentWrite(fake, repo, "b.txt", "b\n");
+    await fake.fire("turn_end", { turnIndex: 1 });
+    const status = (await client.request("status")).result;
+    expect((await client.request("list_chunks")).result).toHaveLength(2);
+    expect(status.baseline).not.toBe(start0);
+    expect(status.markBase).toBe(start0);
+    await fake.fire("agent_start", {});
+    const next = (await client.request("status")).result;
+    expect(next.markBase).toBe(status.baseline);
+  });
+
   it("abort while waiting leaves the chunk open and persisted; send later resumes via sendUserMessage with renderResume", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "review" });
@@ -632,10 +670,25 @@ describe("codeview activity", () => {
     await fake.fire("tool_execution_start", { toolCallId: "b", toolName: "read", args: { path: "b.ts" } });
     await fake.fire("tool_execution_end", { toolCallId: "b", toolName: "read", result: {}, isError: false });
     await until(() => client.events.filter((e) => e.event === "activity_current").length === 1);
-    expect(client.events.filter((e) => e.event === "activity_current")[0].data).toEqual({ current: { tool: "read", target: "a.ts" } });
+    expect(client.events.filter((e) => e.event === "activity_current")[0].data).toEqual({
+      current: { tool: "read", target: "a.ts" },
+      mutating: false,
+    });
     await fake.fire("tool_execution_end", { toolCallId: "a", toolName: "read", result: {}, isError: false });
     await until(() => client.events.filter((e) => e.event === "activity_current").length === 2);
-    expect(client.events.filter((e) => e.event === "activity_current")[1].data).toEqual({ current: null });
+    expect(client.events.filter((e) => e.event === "activity_current")[1].data).toEqual({ current: null, mutating: false });
+  });
+
+  it("activity_current says whether the ended tool may have changed files", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    await fake.fire("tool_execution_start", { toolCallId: "w", toolName: "write", args: { path: "a.ts" } });
+    await fake.fire("tool_execution_end", { toolCallId: "w", toolName: "write", result: {}, isError: false });
+    await fake.fire("tool_execution_start", { toolCallId: "l", toolName: "lens_diagnostics", args: {} });
+    await fake.fire("tool_execution_end", { toolCallId: "l", toolName: "lens_diagnostics", result: {}, isError: false });
+    await until(() => client.events.filter((e) => e.event === "activity_current").length === 2);
+    expect(client.events.filter((e) => e.event === "activity_current").map((e) => e.data.mutating)).toEqual([true, false]);
   });
 
   it("logs the checkpoint note instead of a generic tool line", async () => {
@@ -646,6 +699,16 @@ describe("codeview activity", () => {
     const items = (await client.request("get_activity")).result;
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "checkpoint", text: "add a" });
+  });
+
+  it("collapses whitespace in the checkpoint note and cuts it at 300 chars", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "review" });
+    const client = await connect(repo);
+    await fake.fire("tool_execution_start", { toolCallId: "c1", toolName: "checkpoint", args: { note: "add\n\n  a " } });
+    await fake.fire("tool_execution_start", { toolCallId: "c2", toolName: "checkpoint", args: { note: "x".repeat(350) } });
+    const items = (await client.request("get_activity")).result;
+    expect(items.map((i: any) => i.text)).toEqual(["add a", "x".repeat(300) + "…"]);
   });
 
   it("keeps only the last 200 of 250 tool events", async () => {
