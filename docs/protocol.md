@@ -34,7 +34,7 @@ handler failures are returned as `ok:false`.
 | `send` | `{"id":6,"type":"send","annotations":[{"path":"a.ts","startLine":3,"endLine":4,"note":"rename","quote":"foo"}],"note":"overall","viewed":true}` |
 | `save_drafts` | `{"id":7,"type":"save_drafts","annotations":[{"path":"a.ts","startLine":3,"endLine":4,"note":"wip"}]}` |
 | `human_write` | `{"id":8,"type":"human_write","path":"a.ts"}` |
-| `set_mode` (`checkpoints` or `off`; also accepts `on`, `review`, `vibe`) | `{"id":9,"type":"set_mode","mode":"checkpoints"}` |
+| `set_mode` (`checkpoints` or `off`; also accepts `on`, `review`) | `{"id":9,"type":"set_mode","mode":"checkpoints"}` |
 | `cancel` | `{"id":10,"type":"cancel"}` |
 
 `prompt.context` is optional; `startLine`/`endLine` inside it are optional.
@@ -45,13 +45,14 @@ The extension renders them under the context or the annotation's note as a `Diag
 
 ### Results
 
-- `status`: `{"mode":"checkpoints","root":"/abs/worktree","sessionId":"…","openChunk":<chunk>|null,"drafts":[<annotation>],"busy":false,"queued":0}`.
+- `status`: `{"mode":"checkpoints","root":"/abs/worktree","sessionId":"…","name":"my session"|null,"baseline":"<sha>","markBase":"<sha>","openChunk":<chunk>|null,"drafts":[<annotation>],"busy":false,"queued":0,"activity":{"tool":"edit","target":"a.ts"}|null}`.
+  `mode` is `checkpoints` or `off` (checkpoint mode on or off). `name` is the pi session name or `null`. `baseline` is the sha of the latest recorded snapshot.
   `root` is the worktree the session runs in; clients attach only to sessions whose `root` is their own worktree.
   `busy` is true while the agent is working (`activity_current` events carry it too); `queued` counts prompts waiting behind the open chunk.
-  `activity` is the tool currently running (`{"tool":"edit","target":"a.ts"}`, the most recently started one when several run) or `null` (an additive field).
-  `markBase` (additive) is the snapshot sha clients mark changed lines against: the open chunk's `fromSha`; without one,
+  `activity` is the tool currently running (`{"tool":"edit","target":"a.ts"}`, the most recently started one when several run) or `null`.
+  `markBase` is the snapshot sha clients mark changed lines against: the open chunk's `fromSha`; without one,
   `baseline` in checkpoint mode and with checkpoints off the `baseline` at the start of the current or last agent run (kept in memory, so
-  `baseline` again after a restart). Older extensions omit it; clients fall back to `baseline`.
+  `baseline` again after a restart).
 - `cancel`: `{"cancelled":true}` after aborting the agent's run (pi's abort, as Escape), `{"cancelled":false}` when pi is idle. A waiting `checkpoint` call returns "Review pending", the chunk stays open.
 - `prompt`: `{"queued":true}` when a chunk is open and the prompt waits for its review, else `{"queued":false}` (sent to the agent).
 - `list_chunks`: array of chunks. `get_chunk`: `{"chunk":<chunk>,"diff":"<unified diff fromSha..toSha>"}`.
@@ -69,9 +70,9 @@ The extension renders them under the context or the annotation's note as a `Diag
 | `chunk_reviewed` | `{"event":"chunk_reviewed","data":{"chunk":{"n":2,"status":"reviewed","...":"..."}}}` |
 | `mode_changed` | `{"event":"mode_changed","data":{"mode":"checkpoints"}}` |
 | `run_settled` | `{"event":"run_settled","data":{"aborted":false}}` |
+| `activity_current` | `{"event":"activity_current","data":{"current":{"tool":"edit","target":"a.ts"},"mutating":true,"busy":true}}` |
 
-`activity_current` (additive): `{"event":"activity_current","data":{"current":{"tool":"edit","target":"a.ts"}|null,"mutating":true,"busy":true}}`,
-sent on tool start (`busy` true, `current` the tool), tool end (`current` the still-running tool or `null`; `mutating` only here), `agent_start` (`busy` true, `current` null) and `agent_settled` (`busy` false, `current` null).
+`activity_current` is sent on tool start (`busy` true, `current` the tool), tool end (`current` the still-running tool or `null`; `mutating` only here), `agent_start` (`busy` true, `current` null) and `agent_settled` (`busy` false, `current` null).
 `mutating` is false when the tool that ended cannot change files (e.g. `read`); clients reload buffers only when it is true.
 
 `chunk_reviewed` is also sent for a discarded chunk (`status: "discarded"`).

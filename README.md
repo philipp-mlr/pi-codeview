@@ -1,24 +1,14 @@
 # pi.nvim
 
-Keep the code in view while a coding agent works on it.
+Ask [pi](https://pi.dev) from Neovim with real context, watch the agent work
+in your buffers, annotate lines and send the annotations back.
 
-pi.nvim is a [pi](https://pi.dev) extension plus a Neovim plugin. In
-checkpoint mode the agent works in small chunks and stops at the end of each
-one. You read the chunk in Neovim with your usual tools, then comment on
-it, edit it, or ask about it. Your feedback goes back to the agent before
-its next step. Checkpoint mode is off by default and switched per
-repository.
+pi.nvim is a pi extension plus a Neovim plugin. pi keeps running in its own
+window; Neovim talks to that session over a local socket. An optional
+checkpoint mode makes the agent stop after each chunk of work so you can
+review it before it continues.
 
-You drive it from Neovim: send the agent a task, annotate as many lines
-across as many files as you like, review its chunks, send the next task.
-pi keeps running in its own window.
-
-Status: design phase. See
-[docs/superpowers/specs/2026-11-11-pi-nvim-design.md](docs/superpowers/specs/2026-11-11-pi-nvim-design.md).
-
-## Usage
-
-### Install
+## Install
 
 pi side, as a pi package:
 
@@ -26,103 +16,173 @@ pi side, as a pi package:
 pi install /path/to/pi-nvim
 ```
 
-Neovim side (Neovim 0.10 or newer): put the repo's `nvim/` directory on the
+Neovim side, minimum Neovim 0.10. Put the repo's `nvim/` directory on the
 runtimepath and call `setup()`.
+
+With lazy.nvim:
+
+```lua
+{
+  dir = "/path/to/pi-nvim/nvim",
+  config = function()
+    require("pi").setup({})
+  end,
+}
+```
+
+Or with a plain runtimepath:
 
 ```lua
 vim.opt.rtp:append("/path/to/pi-nvim/nvim")
-require("pi").setup()
+require("pi").setup({})
 ```
 
-With nixvim:
+With nixvim, using a flake input `pi-nvim = github:philipp-mlr/pi-nvim`
+(`flake = false`):
 
 ```nix
 extraPlugins = [
   (pkgs.vimUtils.buildVimPlugin {
     pname = "pi-nvim";
     version = "0.1.0";
-    src = "${pi-nvim}/nvim"; # the flake input or a path to this repository
+    src = "${pi-nvim}/nvim";
   })
 ];
-extraConfigLua = ''require("pi").setup()'';
+extraConfigLua = ''require("pi").setup({})'';
 ```
 
 `setup({ keys = { send = "<leader>rs" } })` overrides single keys; set a key
-to `false` to leave it unmapped. A default key that is already mapped (for
-example `<leader>pn` by another plugin) is left alone, and `setup()` lists the
-skipped keys in one message; keys you pass in `keys` are always mapped.
+to `false` to leave it unmapped. A default key that is already mapped by
+another plugin is left alone, and `setup()` lists the skipped keys in one
+message. Keys you pass in `keys` are always mapped. The key names are `ask`,
+`cancel`, `session`, `annotate`, `remove`, `send`, `chunks`, `checkpoints`.
 
-### Commands and keys
+## Keys and commands
 
-| Command | Default key | What it does |
+| Key | Command | What it does |
 |---|---|---|
-| `:PiAsk` | `<leader>pa` | Ask pi. Normal mode sends the file and cursor line; visual mode sends the line range and the selected text exactly as in your buffer. Unsaved changes are flagged. |
-| `:PiSession` | `<leader>ps` | Choose the pi session to work with (listed by session name and state). |
-| `:PiAnnotate` | `<leader>pn` | Annotate the current line or the visual range. |
-| `:PiAnnotationRemove` | `<leader>px` | Remove the annotation under the cursor. |
-| `:PiSendAnnotations` | `<leader>pr` | Save all buffers, then send the annotations and an optional note. |
-| `:PiChunks` | `<leader>pv` | Toggle the chunk panel (`<CR>` opens a chunk, `r` refreshes, `q` closes). |
-| `:PiCheckpoints [on\|off]` | `<leader>pm` | Switch checkpoint mode for this repository; without an argument it toggles. |
+| `<leader>pa` | `:PiAsk` | Ask pi. Normal mode sends the file and cursor line; visual mode sends the line range and the selected text. |
+| `<leader>pc` | `:PiCancel` | Cancel the agent's current run (like Escape in pi). |
+| `<leader>ps` | `:PiSession` | Choose the pi session to work with. |
+| `<leader>pn` | `:PiAnnotate` | Annotate the current line or the visual range. |
+| `<leader>px` | `:PiAnnotationRemove` | Remove the annotation under the cursor. |
+| `<leader>pr` | `:PiSendAnnotations` | Save all buffers, then send the annotations and an optional message. |
+| `<leader>pv` | `:PiChunks` | Toggle the chunk panel (checkpoint mode). |
+| `<leader>pm` | `:PiCheckpoints [on\|off]` | Switch checkpoint mode for this repository; without an argument it toggles. |
 
-### Statusline
+## Asking
 
-With lualine:
+`<leader>pa` opens a prompt and sends your text with context:
+
+- The file path (relative to the repository).
+- Normal mode: the cursor line. Visual mode: the line range and the selected
+  text exactly as it is in your buffer, so unsaved edits come through.
+- A marker when the buffer has unsaved changes. The whole buffer is not sent.
+- LSP diagnostics (errors and warnings only). Normal mode: those of the whole
+  file. Visual mode: those on the selected lines. At most 20, errors first,
+  then by line.
+
+If pi is idle the text starts a run; if it is busy the text is delivered as a
+follow-up. In checkpoint mode with a chunk open, the prompt waits until the
+chunk is reviewed.
+
+## While the agent works
+
+Statusline, with lualine:
 
 ```lua
 lualine_x = { function() return require("pi").statusline() end }
 ```
 
-It shows `pi: <session> · review N | working · <tool> <target> | working | idle`, with `[checkpoints]` after the session while checkpoint mode is on, and nothing when not attached. Switching the mode with `<leader>pm` also says which mode is now on.
+It shows `pi: <session> · working · <tool> <target>`, `· working`,
+`· review N` (a chunk is open) or `· idle`. `[checkpoints]` follows the
+session name while checkpoint mode is on. It is empty when Neovim is not
+attached to a session. `require("pi").status()` returns `"review N"`,
+`"working"`, `"idle"` or `""`.
 
-### While the agent works
-
-- The statusline shows the tool the agent is running.
-- Open buffers whose file the agent changed reload by themselves, as long as
-  you have no unsaved edits in them.
-- Changed lines get a sign in the sign column and a light line highlight:
-  `▍` marks added or changed lines, `▁` marks lines deleted below that line.
-  They compare against the start of the open chunk in checkpoint mode, and the
-  start of the current run otherwise. Your own unsaved edits show as
-  marks too.
+- Open buffers whose file the agent changed reload by themselves.
+- Changed lines get a sign and a light line highlight: `▍` marks added or
+  changed lines, `▁` marks lines deleted below that line. They compare
+  against the start of the open chunk in checkpoint mode, and against the
+  start of the current (or last) agent run otherwise. Your own unsaved edits
+  show as marks too.
 - A buffer with unsaved edits is never reloaded. When the agent changes its
   file you get one warning naming it, and your edits stay.
-- The highlight groups `PiLive` (line), `PiLiveAdd`,
-  `PiLiveChange` and `PiLiveDelete` (signs) can be overridden.
-- Above a chunk's diff you see the checkpoint note and the agent's one-line
-  reason for the current file.
+- The highlight groups `PiLive` (line), `PiLiveAdd`, `PiLiveChange` and
+  `PiLiveDelete` (signs) can be overridden.
 
-### Which pi session nvim talks to
+## Annotations
 
-nvim attaches to a pi session running in the same worktree as the current
-buffer. With one such session it attaches on first use; with several it asks.
-When you run a command from a buffer in a different worktree, it switches to
-that worktree's session. `<leader>ps` picks a session on purpose. Name your pi
-sessions (`/name` in pi) to tell them apart in the picker.
-`require("pi").session_label()` gives the attached session's name for
-the statusline.
+`<leader>pn` on a line, or on a visual range, asks for a note. The note
+shows on its own line below the range as `✎ <text>` (highlight
+`PiAnnotation`), with a `✎` sign on the first line and the line numbers of
+the range highlighted (`PiAnnotationSign`). `<leader>px` removes the one
+under the cursor.
 
-In a chunk diff, `]f` and `[f` move to the next and previous file. For the
-chunk waiting for review the right side is the real file, so LSP and editing
-work; past chunks open read-only. For the statusline,
-`require("pi").status()` returns `"review N"`, `"working"`, `"idle"`, or
-`""` when not connected.
+`<leader>pr` sends all annotations of the worktree and an optional message.
+The prompt says how many it sends (`pi: send 3 annotations — optional
+message:`) and afterwards `pi: 3 annotations sent`. Buffers are saved first.
+With no annotations and no open chunk nothing is sent. Each annotation
+carries the LSP errors and warnings on its lines, under a `Diagnostics:`
+heading in the agent's message.
 
-In pi, `/checkpoints` shows the state, `/checkpoints on|off` switches checkpoint mode,
-`/checkpoints continue <note>` sends a review without Neovim, and
-`/checkpoints discard <note>` throws the open chunk away.
+## Sessions
 
-### The loop
+Neovim attaches to a pi session running in the same worktree as the current
+buffer. With one such session it attaches on first use; with several it
+asks. Running a command from a buffer in another worktree switches to that
+worktree's session. `<leader>ps` (`:PiSession`) picks a session on purpose.
+Name your pi sessions (`/name` in pi) to tell them apart in the picker.
+`require("pi").session_label()` gives the attached session's name.
 
-1. `/checkpoints on` in pi (or `<leader>pm` / `:PiCheckpoints on`).
-2. `<leader>pa`: give the agent a task; it works in pi's window.
-3. The agent stops at a checkpoint; the panel opens with the new chunk.
-4. `<CR>` on the chunk: read the diff with LSP, edit the live file, `]f` for the next file.
-5. `<leader>pn` on lines you have something to say about.
-6. `<leader>pr`: the review goes to the agent and it continues.
+## Checkpoint mode
 
-## Why
+In checkpoint mode the agent works in small chunks and stops at the end of
+each one, using a `checkpoint` tool, or when it passes a size cap
+(`pi-nvim.cap`, default 150 changed lines). You read the chunk, comment on
+it, edit it, or ask about it, and your feedback goes back before the next
+step. Use it when you want to be forced to look at every step, for example
+at the start of a new codebase. It is off by default and set per repository
+(git config `pi-nvim.checkpoints`).
 
-Agent harnesses like pi hide the codebase. The agent reads, writes and
+Switch it with `<leader>pm` / `:PiCheckpoints on|off` in Neovim, or in pi:
+
+- `/checkpoints` shows the state.
+- `/checkpoints on|off` switches the mode.
+- `/checkpoints continue <note>` sends a review without Neovim.
+- `/checkpoints discard <note>` throws the open chunk away.
+
+Review flow:
+
+1. Turn checkpoint mode on and give the agent a task with `<leader>pa`.
+2. The agent stops at a checkpoint. The chunk panel (`<leader>pv`) opens with
+   the new chunk; `<CR>` opens a chunk, `r` refreshes, `q` closes.
+3. The chunk opens as a diff view. Above the diff you see the checkpoint
+   note and the agent's one-line reason for the current file. `]f` and `[f`
+   move to the next and previous file. For the open chunk the right side is
+   the real file, so LSP and editing work; past chunks are read-only.
+4. Annotate lines with `<leader>pn`.
+5. `<leader>pr` sends the review: your annotations, your own edits and an
+   optional note. The chunk closes and the agent continues. There is no
+   accept button. Prompts sent meanwhile are queued behind the review.
+
+`<leader>pc` cancels the run; a waiting chunk stays open.
+
+## Upgrading from pi-codeview
+
+The project was called pi-codeview. Settings and saved sessions migrate
+automatically: the git config `pi-codeview.mode`, `.cap` and `.retentionDays`
+are read while the `pi-nvim.*` ones are unset, saved chunk state is restored
+from the old session entry, and old snapshot refs are pruned as before.
+Update your config to `require("pi")`, `:Pi*` commands and the `<leader>p`
+keys, and to `/checkpoints` in pi.
+
+If you use pablopunk's pi.nvim, remove it. Both plugins use `require("pi")`
+and `<leader>p` keys.
+
+## Why seeing the code matters
+
+Agent harnesses hide the codebase. The agent reads, writes and
 runs things, and you see the result in a chat. Often you only see the
 actual change once it has been committed.
 
@@ -133,7 +193,7 @@ the code is a by-product. You build that theory by reading, judging and
 changing code. When an agent does all of that for you, the code keeps
 growing and your theory of it doesn't.
 
-The problems this project addresses:
+The problems this plugin works against:
 
 1. **Changes land unseen.** There is no point between "the agent is
    working" and "it's committed" where you naturally look at the code.
@@ -149,9 +209,9 @@ The problems this project addresses:
    invariants. If nobody holds them, the agent defends locally against
    every failure and complexity piles up.
 
-## What the research says
+### What the research says
 
-### Understanding suffers when the agent does the work
+#### Understanding suffers when the agent does the work
 
 - **Anthropic, "How AI assistance impacts the formation of coding skills"
   (Jan 2026).** Randomised trial, 52 mostly junior developers learning a
@@ -179,7 +239,7 @@ The problems this project addresses:
   yourself. The authors argue it has to be designed back in.
   <https://arxiv.org/html/2607.06101v1>
 
-### The bottleneck moved to review
+#### The bottleneck moved to review
 
 - **Chen & Stratton (Harvard), Jellyfish data from 700+ firms (Oct 2026).**
   After agents were introduced: about +30% lines of code, +20% commits,
@@ -193,7 +253,7 @@ The problems this project addresses:
   <https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/>,
   <https://metr.org/blog/2026-02-24-uplift-update/>
 
-### What practitioners do about it
+#### What practitioners do about it
 
 - **"The unit of review is the unit of comprehension"**: never generate
   more than you can review in one sitting (cognitive-debt review).
@@ -210,7 +270,7 @@ The problems this project addresses:
 - **Mitchell Hashimoto**: decide deliberately what to delegate and what to
   keep doing yourself; you decide when to check on the agent, not the
   other way round. <https://mitchellh.com/writing/my-ai-adoption-journey>
-- **Simon Willison, vibe engineering**: tests, version control and a
+- **Simon Willison, engineering with agents**: tests, version control and a
   culture of code review matter more with agents, not less.
   <https://simonwillison.net/2025/Oct/7/vibe-engineering/>
 - **Naur and the agent era**: Peter Naur, "Programming as Theory
@@ -218,16 +278,17 @@ The problems this project addresses:
   Goedecke on applying it to agents,
   <https://www.seangoedecke.com/programming-with-ai-agents-as-theory-building/>
 
-## How pi.nvim responds
+### What pi.nvim does about it
 
-| Problem | Response |
-|---|---|
-| Changes land unseen | Every agent turn is snapshotted to a hidden git ref, so any turn can be opened in Neovim before anything is committed, even with checkpoint mode off. |
-| Passive acceptance | There is no accept button. A chunk closes when you send a review: comments, your own edits, or a note. |
-| Volume beats review | The agent stops at each logical step (`checkpoint` tool) and is held after a size cap, so chunks stay review-sized and can't pile up. |
-| Feedback has nowhere to go | Annotations on any number of lines and files, plus your own edits, go straight into the agent's next step, during review or as a new task. |
-| Early design drift | Small chunks and a stop before every next step give you the chance to hold the invariants while they are still forming. |
-| Not every project needs this | Checkpoint mode is per repository; the default is off. |
+- Changes land unseen: live reload and change marks put every edit in your
+  buffers while the agent works. Every agent turn is also snapshotted to a
+  hidden git ref (`refs/pi-nvim/…`), even with checkpoint mode off.
+- Feedback has nowhere to go: annotations on any number of lines and files,
+  with the diagnostics on them, go straight to the agent.
+- Volume and passive acceptance: checkpoint mode stops the agent at each
+  logical step and after a size cap, and a chunk closes only when you send
+  a review. There is no accept button. It is off by default and switched per
+  repository, because not every project needs it.
 
 ## Related tools
 
