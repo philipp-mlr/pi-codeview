@@ -92,4 +92,48 @@ M["is never focusable and never the current window"] = function()
   badge.close()
 end
 
+M["follows the current tab and leaves no orphan float behind"] = function()
+  reset()
+  require("pi").setup()
+  local tab1 = vim.api.nvim_get_current_tabpage()
+  badge.update({ busy = true, tool = "edit", target = "a.ts" })
+  assert(badge.window() and float_count() == 1)
+  vim.cmd("tabnew")
+  local tab2 = vim.api.nvim_get_current_tabpage()
+  assert(badge.window() ~= nil, "TabEnter should show the badge on tab 2")
+  assert(vim.api.nvim_win_get_tabpage(badge.window()) == tab2)
+  badge.update({ busy = true, tool = "edit", target = "a.ts" })
+  assert(float_count() == 1, "orphan float: " .. float_count())
+  vim.api.nvim_set_current_tabpage(tab1)
+  assert(badge.window() ~= nil and vim.api.nvim_win_get_tabpage(badge.window()) == tab1)
+  assert(float_count() == 1)
+  vim.cmd("tabnew")
+  assert(badge.window() ~= nil)
+  vim.cmd("tabclose")
+  badge.update({ busy = true, tool = "edit", target = "a.ts" })
+  assert(badge.window() ~= nil and float_count() == 1)
+  vim.cmd("tabonly")
+  badge.close()
+end
+
+M["a failing open is swallowed and the next update shows the badge"] = function()
+  reset()
+  local real = vim.api.nvim_open_win
+  local failed = false
+  vim.api.nvim_open_win = function(...)
+    if not failed then
+      failed = true
+      error("E565: not allowed")
+    end
+    return real(...)
+  end
+  local ok, err = pcall(badge.update, { busy = true, tool = "edit", target = "a.ts" })
+  vim.api.nvim_open_win = real
+  assert(ok, tostring(err))
+  assert(failed and badge.window() == nil)
+  badge.update({ busy = true, tool = "edit", target = "a.ts" })
+  assert(badge.window() ~= nil)
+  badge.close()
+end
+
 return M

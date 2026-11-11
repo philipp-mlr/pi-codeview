@@ -80,7 +80,7 @@ M["diff view shows the note and why above the left buffer and updates on ]f"] = 
   end
   diff.open(1)
   session.request = original
-  local view_left = vim.fn.win_getid(1, vim.api.nvim_get_current_tabpage())
+  local view_left = vim.fn.win_getid(1, vim.fn.tabpagenr())
   local function topfill()
     vim.cmd("redraw")
     return vim.api.nvim_win_call(view_left, function()

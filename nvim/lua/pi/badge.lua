@@ -12,8 +12,18 @@ local frame = 1
 local spinning = false
 local label = nil -- the text after the spinner, or the whole text when not spinning
 
+-- A float belongs to the tabpage it was opened in; the badge counts as shown only on the current one.
 local function shown()
-  return win ~= nil and vim.api.nvim_win_is_valid(win)
+  return win ~= nil
+    and vim.api.nvim_win_is_valid(win)
+    and vim.api.nvim_win_get_tabpage(win) == vim.api.nvim_get_current_tabpage()
+end
+
+local function close_win()
+  if win ~= nil and vim.api.nvim_win_is_valid(win) then
+    pcall(vim.api.nvim_win_close, win, true)
+  end
+  win = nil
 end
 
 local function text()
@@ -42,23 +52,31 @@ local function stop_timer()
   end
 end
 
+-- Never raises: it can run while Philipp types (textlock, cmdline, prompts); the next update or tick retries.
 local function draw()
   local line = text()
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
   local width = vim.fn.strdisplaywidth(line)
-  if shown() then
-    vim.api.nvim_win_set_config(win, config(width))
-  else
-    win = vim.api.nvim_open_win(buf, false, config(width))
-    vim.wo[win].winhighlight = "Normal:PiBadge,NormalFloat:PiBadge"
-  end
+  pcall(function()
+    if not shown() then
+      close_win() -- bufhidden=wipe may wipe the buffer, so recreate it below
+    end
+    if not buf or not vim.api.nvim_buf_is_valid(buf) then
+      buf = vim.api.nvim_create_buf(false, true)
+      vim.bo[buf].bufhidden = "wipe"
+    end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
+    if shown() then
+      vim.api.nvim_win_set_config(win, config(width))
+    else
+      win = vim.api.nvim_open_win(buf, false, config(width))
+      vim.wo[win].winhighlight = "Normal:PiBadge,NormalFloat:PiBadge"
+    end
+  end)
 end
 
 function M.close()
   stop_timer()
-  if shown() then
-    pcall(vim.api.nvim_win_close, win, true)
-  end
+  close_win()
   if buf and vim.api.nvim_buf_is_valid(buf) then
     pcall(vim.api.nvim_buf_delete, buf, { force = true })
   end
@@ -74,7 +92,7 @@ local function start_timer()
     FRAME_MS,
     FRAME_MS,
     vim.schedule_wrap(function()
-      if timer and spinning and shown() then
+      if timer and spinning and win ~= nil then
         frame = frame % #FRAMES + 1
         draw()
       end
@@ -93,7 +111,7 @@ end
 
 -- Keeps the badge at the right edge after the screen size changed.
 function M.reposition()
-  if shown() then
+  if win ~= nil and label ~= nil then
     draw()
   end
 end
@@ -125,10 +143,6 @@ function M.update(state)
     start_timer()
   else
     return M.close()
-  end
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then
-    buf = vim.api.nvim_create_buf(false, true)
-    vim.bo[buf].bufhidden = "wipe"
   end
   draw()
 end

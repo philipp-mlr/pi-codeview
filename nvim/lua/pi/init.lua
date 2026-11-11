@@ -438,7 +438,7 @@ function M.setup(opts)
       session.flush()
     end,
   })
-  vim.api.nvim_create_autocmd("VimResized", { group = group, callback = badge.reposition })
+  vim.api.nvim_create_autocmd({ "VimResized", "TabEnter" }, { group = group, callback = badge.reposition })
   vim.api.nvim_create_autocmd("TabClosed", { group = group, callback = diff.cleanup })
 end
 

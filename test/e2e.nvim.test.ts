@@ -575,13 +575,22 @@ local cv = require("pi")
 cv.setup()
 vim.cmd("edit README.md")
 require("pi.session").ensure(function() vim.notify("ATTACHED") end)
-vim.wait(15000, function() return false end, 20)
+local announced = false
+local session = require("pi.session")
+vim.wait(15000, function()
+  session.refresh_status()
+  if not announced and session.cached and type(session.cached.openChunk) == "table" then
+    announced = true
+    vim.notify("CHUNK_OPEN")
+  end
+  return false
+end, 20)
 `,
     );
     await until(() => nvim.notifications().some((n) => n.msg === "ATTACHED"), "attached");
     await agentWrite(fake, repo, "a.txt", "one\n");
     void fake.callTool("checkpoint", { note: "add a" });
-    await new Promise((r) => setTimeout(r, 300));
+    await until(() => nvim.notifications().some((n) => n.msg === "CHUNK_OPEN"), "chunk open");
     await fake.fire("agent_settled", { aborted: false });
     await until(
       () => nvim.notifications().some((n) => n.msg === "pi: chunk 1 waiting for your review — <leader>pv to look, <leader>pr to continue"),
