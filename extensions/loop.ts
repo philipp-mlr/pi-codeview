@@ -10,17 +10,19 @@ import type { EventName, PromptContext, Request } from "./protocol.ts";
 import { humanChangedSteer, renderAnnotationPrompt, renderPrompt, renderResume, renderReview } from "./render.ts";
 import { socketPath, startServer } from "./server.ts";
 import type { Server } from "./server.ts";
-import { CodeviewState } from "./state.ts";
+import { PiNvimState } from "./state.ts";
 import type { Annotation, Author, Chunk, Serialized } from "./state.ts";
 
-export const STATE_ENTRY = "pi-codeview-state";
-export const STATUS_KEY = "codeview";
+export const STATE_ENTRY = "pi-nvim-state";
+/** Migration: the entry type written before the rename, read when no `pi-nvim-state` entry exists. */
+export const OLD_STATE_ENTRY = "pi-codeview-state";
+export const STATUS_KEY = "pi-nvim";
 export const CHECKPOINT_TOOL = "checkpoint";
 export const REVIEW_PENDING = "Review pending. Philipp will send it later.";
 export const END_OF_RUN_NOTE = "end of run, no checkpoint";
 export const SEND_REFUSED = "open at least one file of the chunk or add a note";
 export const ONE_REVIEW_SESSION =
-  "another pi session is in review mode for this worktree (one review-mode session per worktree)";
+  "another pi session is in checkpoint mode for this worktree (one checkpoint-mode session per worktree)";
 
 const READ_ONLY_TOOLS = new Set([
   "read",
@@ -40,7 +42,7 @@ export function isReadOnlyTool(name: string): boolean {
   return READ_ONLY_TOOLS.has(name) || name.startsWith("lens_");
 }
 
-/** What is stored in each `pi-codeview-state` entry: the state plus the next snapshot ref number. */
+/** What is stored in each `pi-nvim-state` entry: the state plus the next snapshot ref number. */
 export type PersistedState = Serialized & { snapshotSeq: number };
 
 export type SendInput = { annotations: Annotation[]; note: string; viewed: boolean };
@@ -49,7 +51,8 @@ type Waiter = { n: number; resolve(text: string): void };
 
 function lastPersisted(ctx: ExtensionContext): PersistedState | undefined {
   const entries = ctx.sessionManager.getEntries() as { type: string; customType?: string; data?: unknown }[];
-  const last = entries.filter((e) => e.type === "custom" && e.customType === STATE_ENTRY).at(-1);
+  const lastOf = (type: string) => entries.filter((e) => e.type === "custom" && e.customType === type).at(-1);
+  const last = lastOf(STATE_ENTRY) ?? lastOf(OLD_STATE_ENTRY);
   return last?.data as PersistedState | undefined;
 }
 
@@ -92,16 +95,16 @@ function probeStatus(sockPath: string): Promise<{ root?: string; mode?: string }
 
 /** The review loop for one pi session in one git worktree. */
 export class ReviewLoop {
-  readonly state: CodeviewState;
+  readonly state: PiNvimState;
   private readonly activity = new ActivityLog();
   private snapshotSeq: number;
   /** Every checkpoint call waiting for the open chunk's review; parallel calls share one review. */
   private waiters: Waiter[] = [];
   private server: Server | null = null;
   private lock: Promise<unknown> = Promise.resolve();
-  /** Whether a mutating tool ran or a human_write arrived since the last vibe turn_end snapshot. */
+  /** Whether a mutating tool ran or a human_write arrived since the last checkpoints-off turn_end snapshot. */
   private mayHaveChanged = false;
-  /** `state.baseline` when the current or last agent run started (vibe-mode mark base); in memory only. */
+  /** `state.baseline` when the current or last agent run started (mark base with checkpoints off); in memory only. */
   private runBaseline: string | null = null;
 
   private constructor(
@@ -113,7 +116,7 @@ export class ReviewLoop {
     private readonly cap: number,
     saved: PersistedState | undefined,
   ) {
-    this.state = new CodeviewState(saved);
+    this.state = new PiNvimState(saved);
     this.snapshotSeq = saved?.snapshotSeq ?? 0;
   }
 
@@ -125,9 +128,9 @@ export class ReviewLoop {
     const saved = lastPersisted(ctx);
     const loop = new ReviewLoop(pi, ctx, root, sessionId, sockPath, config.cap, saved);
     loop.state.mode = config.mode;
-    if (config.mode === "review" && (await loop.otherReviewSession())) {
-      loop.state.mode = "vibe";
-      loop.notify(`codeview: staying in vibe mode, ${ONE_REVIEW_SESSION}`, "warning");
+    if (config.mode === "checkpoints" && (await loop.otherReviewSession())) {
+      loop.state.mode = "off";
+      loop.notify(`pi: checkpoint mode stays off, ${ONE_REVIEW_SESSION}`, "warning");
     }
     // A restored session keeps its chunks and steps; changes made while pi was down land on the agent's side.
     if (saved) await loop.recordSince("agent");
@@ -164,7 +167,7 @@ export class ReviewLoop {
 
   /** Block reason for a tool call, or undefined when it may run. */
   capBlock(toolName: string): string | undefined {
-    if (this.state.mode !== "review" || isReadOnlyTool(toolName)) return undefined;
+    if (this.state.mode !== "checkpoints" || isReadOnlyTool(toolName)) return undefined;
     if (this.state.agentLines() <= this.cap) return undefined;
     return `Changed lines since the last checkpoint exceed ${this.cap}. Call checkpoint with a note first.`;
   }
@@ -172,15 +175,15 @@ export class ReviewLoop {
   async afterTool(toolName: string): Promise<void> {
     if (isReadOnlyTool(toolName)) return;
     this.mayHaveChanged = true;
-    // Vibe mode records at turn_end only, so mutating tools stay cheap.
-    if (this.state.mode !== "review") return;
+    // With checkpoints off, changes are recorded at turn_end only, so mutating tools stay cheap.
+    if (this.state.mode !== "checkpoints") return;
     await this.serial(async () => {
       if ((await this.recordSince("agent")).files.length > 0) this.persist();
     });
   }
 
   async endOfRun(): Promise<void> {
-    if (this.state.mode !== "review") return;
+    if (this.state.mode !== "checkpoints") return;
     await this.serial(async () => {
       if (this.state.openChunk()) return;
       const { sha } = await this.recordSince("agent");
@@ -192,7 +195,7 @@ export class ReviewLoop {
   }
 
   async turnEnd(turnIndex: number): Promise<void> {
-    if (this.state.mode !== "vibe" || !this.mayHaveChanged) return;
+    if (this.state.mode !== "off" || !this.mayHaveChanged) return;
     this.mayHaveChanged = false;
     await this.serial(async () => {
       const { sha } = await this.recordSince("agent");
@@ -214,20 +217,20 @@ export class ReviewLoop {
     this.broadcast("activity_current", { current: this.activity.current(), mutating: !isReadOnlyTool(toolName), busy: true });
   }
 
-  /** Pins the vibe-mode mark base: turn chunks move the baseline, the marks stay against the run's start. */
+  /** Pins the mark base with checkpoints off: turn chunks move the baseline, the marks stay against the run's start. */
   runStarted(): void {
     this.runBaseline = this.state.baseline;
     this.broadcast("activity_current", { current: null, busy: true });
   }
 
   /**
-   * The snapshot nvim marks changed lines against: the open chunk's start, else in review mode the
-   * baseline, in vibe mode the baseline when the current or last run started.
+   * The snapshot nvim marks changed lines against: the open chunk's start, else in checkpoint mode the
+   * baseline, with checkpoints off the baseline when the current or last run started.
    */
   markBase(): string {
     const open = this.state.openChunk();
     if (open) return open.fromSha;
-    if (this.state.mode === "review") return this.state.baseline;
+    if (this.state.mode === "checkpoints") return this.state.baseline;
     return this.runBaseline ?? this.state.baseline;
   }
 
@@ -289,13 +292,13 @@ export class ReviewLoop {
   }
 
   async continueWith(note: string): Promise<void> {
-    if (!note) throw new Error("continue needs a note: /codeview continue <note>");
+    if (!note) throw new Error("continue needs a note: /checkpoints continue <note>");
     if (!this.state.openChunk()) throw new Error("no open chunk");
     await this.send({ annotations: this.state.drafts, note, viewed: true });
   }
 
   async discard(note: string): Promise<void> {
-    if (!note) throw new Error("discard needs a note: /codeview discard <note>");
+    if (!note) throw new Error("discard needs a note: /checkpoints discard <note>");
     await this.serial(async () => {
       const open = this.state.openChunk();
       if (!open) throw new Error("no open chunk");
@@ -314,7 +317,7 @@ export class ReviewLoop {
       if (files.length > 0) this.persist();
       if (this.state.agentFiles().includes(file)) {
         this.pi.sendMessage(
-          { customType: "pi-codeview", content: humanChangedSteer(file), display: true },
+          { customType: "pi-nvim", content: humanChangedSteer(file), display: true },
           { deliverAs: "steer" },
         );
       }
@@ -330,13 +333,13 @@ export class ReviewLoop {
 
   async setMode(mode: Mode): Promise<void> {
     const open = this.state.openChunk();
-    if (mode === "vibe" && open) {
-      throw new Error(`chunk ${open.n} is open — send a review or /codeview discard <note> first`);
+    if (mode === "off" && open) {
+      throw new Error(`chunk ${open.n} is open — send a review or /checkpoints discard <note> first`);
     }
-    if (mode === "review" && (await this.otherReviewSession())) throw new Error(ONE_REVIEW_SESSION);
+    if (mode === "checkpoints" && (await this.otherReviewSession())) throw new Error(ONE_REVIEW_SESSION);
     await writeMode(this.root, mode);
     await this.serial(async () => {
-      if (mode === "review" && this.state.mode !== "review" && !this.state.openChunk()) {
+      if (mode === "checkpoints" && this.state.mode !== "checkpoints" && !this.state.openChunk()) {
         this.state.setBaseline(await this.snapshot());
       }
       if (this.state.mode !== mode) this.runBaseline = null;
@@ -350,7 +353,8 @@ export class ReviewLoop {
   describe(): string {
     const open = this.state.openChunk();
     const chunk = open ? `chunk ${open.n} open ("${open.note}")` : "no open chunk";
-    return `codeview: mode ${this.state.mode}, ${chunk}, socket ${this.sockPath}`;
+    const mode = this.state.mode === "checkpoints" ? "checkpoint mode on" : "checkpoint mode off";
+    return `pi: ${mode}, ${chunk}, socket ${this.sockPath}`;
   }
 
   // --- socket requests ----------------------------------------------------
@@ -390,7 +394,7 @@ export class ReviewLoop {
         return this.humanWrite(req.path);
       case "set_mode": {
         const mode = parseMode(req.mode);
-        if (!mode) throw new Error(`unknown mode "${req.mode}": use review or vibe (on/off)`);
+        if (!mode) throw new Error(`unknown mode "${req.mode}": use checkpoints or off (on/off)`);
         await this.setMode(mode);
         return { mode: this.state.mode };
       }
@@ -409,8 +413,8 @@ export class ReviewLoop {
   }
 
   private snapshot(): Promise<string> {
-    const ref = `refs/pi-codeview/${this.sessionId}/${this.snapshotSeq++}`;
-    return snapshot(this.root, ref, "pi-codeview snapshot");
+    const ref = `refs/pi-nvim/${this.sessionId}/${this.snapshotSeq++}`;
+    return snapshot(this.root, ref, "pi-nvim snapshot");
   }
 
   /**
@@ -491,14 +495,14 @@ export class ReviewLoop {
       : [];
     for (const file of others) {
       const status = await probeStatus(path.join(dir, file));
-      if (status?.root === this.root && status.mode === "review") return true;
+      if (status?.root === this.root && status.mode === "checkpoints") return true;
     }
     return false;
   }
 
   private applyTools(): void {
     const others = this.pi.getActiveTools().filter((t) => t !== CHECKPOINT_TOOL);
-    this.pi.setActiveTools(this.state.mode === "review" ? [...others, CHECKPOINT_TOOL] : others);
+    this.pi.setActiveTools(this.state.mode === "checkpoints" ? [...others, CHECKPOINT_TOOL] : others);
   }
 
   private persist(): void {
@@ -506,9 +510,9 @@ export class ReviewLoop {
     this.pi.appendEntry(STATE_ENTRY, data);
     const open = this.state.openChunk();
     const status = open
-      ? `codeview: chunk ${open.n} waiting for review`
-      : this.state.mode === "review"
-        ? "codeview: review"
+      ? `pi: chunk ${open.n} waiting for review`
+      : this.state.mode === "checkpoints"
+        ? "pi: checkpoints"
         : undefined;
     if (this.ctx.hasUI) this.ctx.ui.setStatus(STATUS_KEY, status);
   }

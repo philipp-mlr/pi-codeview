@@ -14,7 +14,7 @@ type ToolDef = {
 };
 type CommandDef = { handler(args: string, ctx: any): Promise<void> | void };
 
-/** Minimal stand-in for pi's ExtensionAPI and ExtensionContext, enough for codeview.ts. */
+/** Minimal stand-in for pi's ExtensionAPI and ExtensionContext, enough for pi-nvim.ts. */
 export function makeFakePi(cwd: string, opts: { sessionId?: string; sessionName?: string; entries?: FakeEntry[] } = {}) {
   const handlers = new Map<string, Handler[]>();
   const tools = new Map<string, ToolDef>();

@@ -1,6 +1,6 @@
 local tests_dir = vim.fs.dirname(vim.fs.normalize(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
 package.path = vim.fs.dirname(tests_dir) .. "/lua/?.lua;" .. vim.fs.dirname(tests_dir) .. "/lua/?/init.lua;" .. package.path
--- Nvim's runtimepath loader runs before package.path, so an installed codeview.nvim (e.g. from a
+-- Nvim's runtimepath loader runs before package.path, so an installed pi.nvim (e.g. from a
 -- Nix pack dir) would shadow this checkout. Put the checkout first on the runtimepath.
 vim.opt.runtimepath:prepend(vim.fs.dirname(tests_dir))
 

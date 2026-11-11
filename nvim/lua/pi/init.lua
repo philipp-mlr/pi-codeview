@@ -1,27 +1,27 @@
--- codeview.nvim: commands, keys and autocommands over session, panel and diff.
-local annotations = require("codeview.annotations")
-local diff = require("codeview.diff")
-local discover = require("codeview.discover")
-local live = require("codeview.live")
-local panel = require("codeview.panel")
-local session = require("codeview.session")
+-- pi.nvim: commands, keys and autocommands over session, panel and diff.
+local annotations = require("pi.annotations")
+local diff = require("pi.diff")
+local discover = require("pi.discover")
+local live = require("pi.live")
+local panel = require("pi.panel")
+local session = require("pi.session")
 
 local M = {}
 
 M.default_keys = {
-  panel = "<leader>cv",
-  prompt = "<leader>cp",
-  annotate = "<leader>cc",
-  remove = "<leader>cx",
-  send = "<leader>cs",
-  mode = "<leader>cm",
-  attach = "<leader>ct",
+  ask = "<leader>pa",
+  session = "<leader>ps",
+  annotate = "<leader>pn",
+  remove = "<leader>px",
+  send = "<leader>pr",
+  chunks = "<leader>pv",
+  checkpoints = "<leader>pm",
 }
 
 -- Repo-relative path of buf, or nil when it is not a file inside root.
 local function relpath(buf, root)
   local name = vim.api.nvim_buf_get_name(buf)
-  if name == "" or name:match("^codeview://") then
+  if name == "" or name:match("^pi://") then
     return nil
   end
   local real = vim.uv.fs_realpath(name)
@@ -38,7 +38,7 @@ local function on_event(name, data)
     -- The server sends { chunk = {...} }.
     local n = data and (data.chunk and data.chunk.n) or "?"
     if panel.visible() or diff.is_diff_window(vim.api.nvim_get_current_win()) then
-      vim.notify(("codeview: chunk %s ready"):format(n))
+      vim.notify(("pi: chunk %s ready"):format(n))
     else
       panel.open()
     end
@@ -63,7 +63,7 @@ function M.status()
   return session.status_line()
 end
 
--- "codeview: <label> · <state>" for the statusline; "" when not attached. Reads cached state only.
+-- "pi: <label>[ [checkpoints]] · <state>" for the statusline; "" when not attached. Reads cached state only.
 function M.statusline()
   return session.statusline()
 end
@@ -82,10 +82,10 @@ end
 function M.prompt(text, context)
   session.request("prompt", { text = text, context = context }, function(err, result)
     if err then
-      return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
+      return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
     if result and result.queued then
-      vim.notify("codeview: prompt queued until the open chunk is reviewed")
+      vim.notify("pi: prompt queued until the open chunk is reviewed")
     else
       session.mark_busy()
     end
@@ -113,7 +113,7 @@ function M.send(opts)
       end
       session.refresh_status(function(status_err, status)
         if status_err then
-          return vim.notify("codeview: " .. status_err, vim.log.levels.ERROR)
+          return vim.notify("pi: " .. status_err, vim.log.levels.ERROR)
         end
         local open_chunk = type(status.openChunk) == "table" and status.openChunk or nil
         local payload = {
@@ -123,10 +123,10 @@ function M.send(opts)
         }
         conn:request("send", payload, function(err)
           if err then
-            return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
+            return vim.notify("pi: " .. err, vim.log.levels.ERROR)
           end
           annotations.clear_root(root)
-          vim.notify(open_chunk and ("codeview: review of chunk %d sent"):format(open_chunk.n) or "codeview: annotations sent")
+          vim.notify(open_chunk and ("pi: review of chunk %d sent"):format(open_chunk.n) or "pi: annotations sent")
           session.refresh_status()
         end)
       end)
@@ -134,34 +134,34 @@ function M.send(opts)
     if opts.note ~= nil then
       deliver(opts.note)
     else
-      vim.ui.input({ prompt = "codeview note (optional): " }, deliver)
+      vim.ui.input({ prompt = "pi note (optional): " }, deliver)
     end
   end)
 end
 
 local MODE_TEXT = {
-  review = "codeview: review mode — the agent stops at each checkpoint for your review",
-  vibe = "codeview: vibe mode — no checkpoints, changes are only recorded",
+  checkpoints = "pi: checkpoint mode on — the agent stops at each checkpoint for your review",
+  off = "pi: checkpoint mode off",
 }
 
 function M.set_mode(mode)
   session.request("set_mode", { mode = mode }, function(err, result)
     if err then
-      return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
+      return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
-    vim.notify(MODE_TEXT[result.mode] or ("codeview: mode " .. tostring(result.mode)))
+    vim.notify(MODE_TEXT[result.mode] or ("pi: mode " .. tostring(result.mode)))
     session.refresh_status()
   end)
 end
 
--- Switches between review and vibe, based on the session's current mode. Attaches first when
--- needed, so it works as the very first codeview command.
+-- Switches checkpoint mode on or off, based on the session's current mode. Attaches first when
+-- needed, so it works as the very first pi command.
 function M.toggle_mode()
   session.request("status", nil, function(err, status)
     if err then
-      return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
+      return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
-    M.set_mode(status.mode == "review" and "vibe" or "review")
+    M.set_mode(status.mode == "checkpoints" and "off" or "checkpoints")
   end)
 end
 
@@ -206,7 +206,7 @@ local function prompt_command(cmd)
     local line = vim.api.nvim_win_get_cursor(0)[1]
     sel = { line1 = line, line2 = line }
   end
-  vim.ui.input({ prompt = "codeview prompt: " }, function(text)
+  vim.ui.input({ prompt = "pi ask: " }, function(text)
     if not text or text == "" then
       return
     end
@@ -219,7 +219,7 @@ end
 local function annotate_command(cmd)
   local buf = vim.api.nvim_get_current_buf()
   local start_line, end_line = range_of(cmd)
-  vim.ui.input({ prompt = "codeview annotation: " }, function(note)
+  vim.ui.input({ prompt = "pi annotation: " }, function(note)
     if note and note ~= "" then
       M.annotate(buf, start_line, end_line, note)
     end
@@ -228,7 +228,7 @@ end
 
 local function remove_command()
   if annotations.remove_at_cursor() == 0 then
-    vim.notify("codeview: no annotation at the cursor")
+    vim.notify("pi: no annotation at the cursor")
   end
 end
 
@@ -248,7 +248,7 @@ local function on_write(args)
     return report_write(args.buf)
   end
   local name = vim.api.nvim_buf_get_name(args.buf)
-  if name == "" or name:match("^codeview://") then
+  if name == "" or name:match("^pi://") then
     return
   end
   local real = vim.uv.fs_realpath(name)
@@ -266,15 +266,15 @@ function M.setup(opts)
   session.on_event(on_event)
 
   local command = vim.api.nvim_create_user_command
-  command("Codeview", M.toggle_panel, { desc = "codeview: toggle the chunk panel" })
-  command("CodeviewPrompt", prompt_command, { range = true, desc = "codeview: prompt the agent" })
-  command("CodeviewAnnotate", annotate_command, { range = true, desc = "codeview: annotate lines" })
-  command("CodeviewRemove", remove_command, { desc = "codeview: remove the annotation at the cursor" })
-  command("CodeviewSend", function()
+  command("PiChunks", M.toggle_panel, { desc = "pi: toggle the chunk panel" })
+  command("PiAsk", prompt_command, { range = true, desc = "pi: ask pi" })
+  command("PiAnnotate", annotate_command, { range = true, desc = "pi: annotate lines" })
+  command("PiAnnotationRemove", remove_command, { desc = "pi: remove the annotation at the cursor" })
+  command("PiSendAnnotations", function()
     M.send()
-  end, { desc = "codeview: send annotations and note" })
-  command("CodeviewAttach", M.attach, { desc = "codeview: choose the pi session to work with" })
-  command("CodeviewMode", function(cmd)
+  end, { desc = "pi: send annotations" })
+  command("PiSession", M.attach, { desc = "pi: choose the pi session to work with" })
+  command("PiCheckpoints", function(cmd)
     if cmd.args == "" then
       return M.toggle_mode()
     end
@@ -282,12 +282,12 @@ function M.setup(opts)
   end, {
     nargs = "?",
     complete = function()
-      return { "review", "vibe", "on", "off" }
+      return { "on", "off" }
     end,
-    desc = "codeview: set mode review|vibe (on|off), toggle without argument",
+    desc = "pi: checkpoint mode on|off, toggle without argument",
   })
 
-  -- Default keys never replace an existing mapping (e.g. an LSP <leader>c… key); keys passed in
+  -- Default keys never replace an existing mapping (e.g. another plugin's <leader>p… key); keys passed in
   -- opts.keys always map.
   local skipped = {}
   local function map(modes, name, rhs, desc)
@@ -297,27 +297,27 @@ function M.setup(opts)
     end
     if (opts.keys or {})[name] == nil then
       local existing = vim.fn.maparg(lhs, modes, false, true)
-      if not vim.tbl_isempty(existing) and not vim.startswith(existing.desc or "", "codeview:") then
+      if not vim.tbl_isempty(existing) and not vim.startswith(existing.desc or "", "pi:") then
         skipped[#skipped + 1] = ("%s (%s)"):format(lhs, modes)
         return
       end
     end
     vim.keymap.set(modes, lhs, rhs, { desc = desc })
   end
-  map("n", "panel", "<cmd>Codeview<CR>", "codeview: toggle panel")
-  map("n", "prompt", "<cmd>CodeviewPrompt<CR>", "codeview: prompt with file context")
-  map("x", "prompt", ":CodeviewPrompt<CR>", "codeview: prompt with selection context")
-  map("n", "annotate", "<cmd>CodeviewAnnotate<CR>", "codeview: annotate line")
-  map("x", "annotate", ":CodeviewAnnotate<CR>", "codeview: annotate selection")
-  map("n", "remove", "<cmd>CodeviewRemove<CR>", "codeview: remove annotation")
-  map("n", "send", "<cmd>CodeviewSend<CR>", "codeview: send")
-  map("n", "mode", "<cmd>CodeviewMode<CR>", "codeview: toggle review/vibe mode")
-  map("n", "attach", "<cmd>CodeviewAttach<CR>", "codeview: choose pi session")
+  map("n", "ask", "<cmd>PiAsk<CR>", "pi: ask with file context")
+  map("x", "ask", ":PiAsk<CR>", "pi: ask with selection context")
+  map("n", "session", "<cmd>PiSession<CR>", "pi: choose pi session")
+  map("n", "annotate", "<cmd>PiAnnotate<CR>", "pi: annotate line")
+  map("x", "annotate", ":PiAnnotate<CR>", "pi: annotate selection")
+  map("n", "remove", "<cmd>PiAnnotationRemove<CR>", "pi: remove annotation")
+  map("n", "send", "<cmd>PiSendAnnotations<CR>", "pi: send annotations")
+  map("n", "chunks", "<cmd>PiChunks<CR>", "pi: toggle chunk panel")
+  map("n", "checkpoints", "<cmd>PiCheckpoints<CR>", "pi: toggle checkpoint mode")
   if #skipped > 0 then
-    vim.notify("codeview: kept existing mappings, not mapped: " .. table.concat(skipped, ", "), vim.log.levels.INFO)
+    vim.notify("pi: kept existing mappings, not mapped: " .. table.concat(skipped, ", "), vim.log.levels.INFO)
   end
 
-  local group = vim.api.nvim_create_augroup("codeview", { clear = true })
+  local group = vim.api.nvim_create_augroup("pi", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", { group = group, callback = on_write })
   vim.api.nvim_create_autocmd("BufReadPost", {
     group = group,

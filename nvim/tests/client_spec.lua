@@ -1,4 +1,4 @@
-local client = require("codeview.client")
+local client = require("pi.client")
 
 local uv = vim.uv
 local M = {}

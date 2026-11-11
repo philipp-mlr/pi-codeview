@@ -1,16 +1,16 @@
 -- Live view of the agent's changes in open buffers: reloads untouched buffers and marks the lines
--- that differ from the mark base (the open chunk's start, or the start of the run in vibe mode).
-local discover = require("codeview.discover")
+-- that differ from the mark base (the open chunk's start, or the start of the run with checkpoints off).
+local discover = require("pi.discover")
 
 local M = {}
 
 local DEBOUNCE_MS = 150
-local ns = vim.api.nvim_create_namespace("codeview_live")
+local ns = vim.api.nvim_create_namespace("pi_live")
 
-vim.api.nvim_set_hl(0, "CodeviewLive", { default = true, link = "CursorLine" })
-vim.api.nvim_set_hl(0, "CodeviewLiveAdd", { default = true, link = "DiffAdd" })
-vim.api.nvim_set_hl(0, "CodeviewLiveChange", { default = true, link = "DiffChange" })
-vim.api.nvim_set_hl(0, "CodeviewLiveDelete", { default = true, link = "DiffDelete" })
+vim.api.nvim_set_hl(0, "PiLive", { default = true, link = "CursorLine" })
+vim.api.nvim_set_hl(0, "PiLiveAdd", { default = true, link = "DiffAdd" })
+vim.api.nvim_set_hl(0, "PiLiveChange", { default = true, link = "DiffChange" })
+vim.api.nvim_set_hl(0, "PiLiveDelete", { default = true, link = "DiffDelete" })
 
 local baseline_text = {} -- baseline .. "\0" .. path -> file text at that commit ("" when absent)
 local mtimes = {} -- absolute path -> last seen mtime "sec.nsec"
@@ -75,11 +75,11 @@ local function place(buf, hunks)
   for _, h in ipairs(hunks) do
     local count_a, start_b, count_b = h[2], h[3], h[4]
     if count_b == 0 then
-      mark(buf, math.min(math.max(start_b, 1), count), "▁", "CodeviewLiveDelete")
+      mark(buf, math.min(math.max(start_b, 1), count), "▁", "PiLiveDelete")
     else
-      local group = count_a == 0 and "CodeviewLiveAdd" or "CodeviewLiveChange"
+      local group = count_a == 0 and "PiLiveAdd" or "PiLiveChange"
       for line = start_b, start_b + count_b - 1 do
-        mark(buf, line, "▍", group, "CodeviewLive")
+        mark(buf, line, "▍", group, "PiLive")
       end
     end
   end
@@ -94,7 +94,7 @@ local function remember(args)
   end
 end
 
-local group = vim.api.nvim_create_augroup("codeview_live", { clear = true })
+local group = vim.api.nvim_create_augroup("pi_live", { clear = true })
 vim.api.nvim_create_autocmd({ "BufReadPost", "BufWritePost", "FileChangedShellPost" }, { group = group, callback = remember })
 
 function M.clear()
@@ -121,7 +121,7 @@ function M.refresh(root, baseline)
   end
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     local name = vim.api.nvim_buf_get_name(buf)
-    local real = vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buflisted and name ~= "" and not name:match("^codeview://")
+    local real = vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buflisted and name ~= "" and not name:match("^pi://")
       and vim.uv.fs_realpath(name) or nil
     local path = real and discover.relpath(root, real)
     if path then
@@ -130,7 +130,7 @@ function M.refresh(root, baseline)
         local key = baseline .. "\0" .. path
         if mtimes[real] and seen ~= mtimes[real] and not warned[key] then
           warned[key] = true
-          vim.notify(("codeview: %s changed on disk; your unsaved edits are kept"):format(path), vim.log.levels.WARN)
+          vim.notify(("pi: %s changed on disk; your unsaved edits are kept"):format(path), vim.log.levels.WARN)
         end
       else
         local autoread = vim.bo[buf].autoread

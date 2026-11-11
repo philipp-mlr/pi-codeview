@@ -10,6 +10,6 @@ describe("protocol", () => {
   });
   it("encode adds trailing newline", () => {
     expect(encode({ a: 1 })).toBe('{"a":1}\n');
-    expect(PROTOCOL_VERSION).toBe(1);
+    expect(PROTOCOL_VERSION).toBe(2);
   });
 });

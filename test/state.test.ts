@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CodeviewState } from "../extensions/state.ts";
+import { PiNvimState } from "../extensions/state.ts";
 
-describe("CodeviewState", () => {
+describe("PiNvimState", () => {
   it("createChunk attributes steps", () => {
-    const s = new CodeviewState();
+    const s = new PiNvimState();
     s.setBaseline("base");
     s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts"], lines: 10 });
     s.recordStep({ from: "f2", sha: "2", author: "agent", files: ["b.ts"], lines: 5 });
@@ -16,7 +16,7 @@ describe("CodeviewState", () => {
     expect(s.steps).toEqual([]);
   });
   it("createChunk keeps why only for chunk files, normalizes ./ and caps length", () => {
-    const s = new CodeviewState();
+    const s = new PiNvimState();
     s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts"], lines: 1 });
     const c = s.createChunk("n", "t", "open", [
       { path: "./a.ts", why: "x".repeat(300) },
@@ -25,7 +25,7 @@ describe("CodeviewState", () => {
     expect(c.why).toEqual({ "a.ts": "x".repeat(200) });
   });
   it("createChunk collapses whitespace in why and drops blank ones", () => {
-    const s = new CodeviewState();
+    const s = new PiNvimState();
     s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts", "b.ts"], lines: 1 });
     const c = s.createChunk("n", "t", "open", [
       { path: "a.ts", why: "  line one\n  line two\t\n" },
@@ -34,18 +34,18 @@ describe("CodeviewState", () => {
     expect(c.why).toEqual({ "a.ts": "line one line two" });
   });
   it("createChunk omits why when empty and restores chunks persisted without it", () => {
-    const s = new CodeviewState();
+    const s = new PiNvimState();
     s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts"], lines: 1 });
     expect("why" in s.createChunk("n", "t", "open", [{ path: "nope", why: "w" }])).toBe(false);
-    expect(new CodeviewState(s.serialize()).chunks[0]!.why).toBeUndefined();
+    expect(new PiNvimState(s.serialize()).chunks[0]!.why).toBeUndefined();
   });
   it("human lines do not count toward agentLines", () => {
-    const s = new CodeviewState();
+    const s = new PiNvimState();
     s.recordStep({ from: "f1", sha: "1", author: "human", files: ["a.ts"], lines: 99 });
     expect(s.agentLines()).toBe(0);
   });
   it("only one open chunk", () => {
-    const s = new CodeviewState();
+    const s = new PiNvimState();
     s.createChunk("a", "x");
     expect(() => s.createChunk("b", "y")).toThrow("chunk already open");
     expect(s.createChunk("c", "z", "recorded").n).toBe(2);
@@ -56,14 +56,14 @@ describe("CodeviewState", () => {
     expect(s.openChunk()).toBeUndefined();
   });
   it("canSend refuses an empty, unviewed review", () => {
-    const s = new CodeviewState();
+    const s = new PiNvimState();
     expect(s.canSend({ annotations: 0, note: "", humanEdits: 0, viewed: false })).toBe(false);
     expect(s.canSend({ annotations: 0, note: "", humanEdits: 0, viewed: true })).toBe(true);
     expect(s.canSend({ annotations: 1, note: "", humanEdits: 0, viewed: false })).toBe(true);
   });
   it("serialize/restore round-trips", () => {
-    const s = new CodeviewState();
-    s.mode = "review";
+    const s = new PiNvimState();
+    s.mode = "checkpoints";
     s.setBaseline("b");
     s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts"], lines: 3 });
     s.createChunk("n", "t");
@@ -71,23 +71,23 @@ describe("CodeviewState", () => {
     s.setDrafts([{ path: "a.ts", startLine: 1, endLine: 2, note: "x" }]);
     s.queuePrompt("p");
     const data = JSON.parse(JSON.stringify(s.serialize()));
-    const r = new CodeviewState(data);
+    const r = new PiNvimState(data);
     expect(r.serialize()).toEqual(s.serialize());
-    expect(r.mode).toBe("review");
+    expect(r.mode).toBe("checkpoints");
     expect(r.chunks).toHaveLength(1);
     expect(r.drafts).toHaveLength(1);
     expect(r.queuedPrompts).toEqual(["p"]);
-    expect(new CodeviewState().serialize()).toMatchObject({ mode: "vibe", baseline: "" });
+    expect(new PiNvimState().serialize()).toMatchObject({ mode: "off", baseline: "" });
   });
   it("restores steps persisted without from, chaining them from the baseline", () => {
-    const r = new CodeviewState({
-      mode: "review", baseline: "b", chunks: [], drafts: [], queuedPrompts: [],
+    const r = new PiNvimState({
+      mode: "checkpoints", baseline: "b", chunks: [], drafts: [], queuedPrompts: [],
       steps: [{ sha: "1", author: "agent", files: ["a.ts"], lines: 1 }, { sha: "2", author: "human", files: ["a.ts"], lines: 1 }] as any,
     });
     expect(r.steps.map((s) => s.from)).toEqual(["b", "1"]);
   });
   it("advanceAfterReview keeps agent steps recorded during review and marks human ones reported", () => {
-    const s = new CodeviewState();
+    const s = new PiNvimState();
     s.setBaseline("b");
     s.createChunk("n", "t");
     s.recordStep({ from: "t", sha: "1", author: "agent", files: ["a.ts"], lines: 4 });
@@ -100,13 +100,18 @@ describe("CodeviewState", () => {
     s.recordStep({ from: "2", sha: "3", author: "human", files: ["h.ts"], lines: 1 });
     expect(s.humanSteps().map((x) => x.sha)).toEqual(["3"]);
     expect(s.createChunk("next", "3")).toMatchObject({ agentFiles: ["a.ts"], humanFiles: ["h.ts"], humanSteps: [{ sha: "3" }] });
-    const s2 = new CodeviewState();
+    const s2 = new PiNvimState();
     s2.recordStep({ from: "t", sha: "1", author: "human", files: ["h.ts"], lines: 1 });
     s2.advanceAfterReview("1");
     expect(s2).toMatchObject({ baseline: "1", steps: [] });
   });
+  it("migration: restores the old persisted mode names review/vibe as checkpoints/off", () => {
+    const old = (mode: string) => ({ mode, baseline: "b", chunks: [], steps: [], drafts: [], queuedPrompts: [] }) as any;
+    expect(new PiNvimState(old("review")).mode).toBe("checkpoints");
+    expect(new PiNvimState(old("vibe")).mode).toBe("off");
+  });
   it("takeQueuedPrompts drains the queue", () => {
-    const s = new CodeviewState();
+    const s = new PiNvimState();
     s.queuePrompt("a");
     s.queuePrompt("b");
     expect(s.takeQueuedPrompts()).toEqual(["a", "b"]);

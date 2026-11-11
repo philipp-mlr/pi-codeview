@@ -4,9 +4,9 @@ import { copyFile, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-export type Mode = "review" | "vibe";
+export type Mode = "checkpoints" | "off";
 
-export interface CodeviewConfig {
+export interface PiNvimConfig {
   mode: Mode;
   cap: number;
   retentionDays: number;
@@ -15,10 +15,10 @@ export interface CodeviewConfig {
 const DEFAULT_CAP = 150;
 const DEFAULT_RETENTION_DAYS = 14;
 const SNAPSHOT_IDENTITY = {
-  GIT_AUTHOR_NAME: "pi-codeview",
-  GIT_AUTHOR_EMAIL: "pi-codeview@localhost",
-  GIT_COMMITTER_NAME: "pi-codeview",
-  GIT_COMMITTER_EMAIL: "pi-codeview@localhost",
+  GIT_AUTHOR_NAME: "pi-nvim",
+  GIT_AUTHOR_EMAIL: "pi-nvim@localhost",
+  GIT_COMMITTER_NAME: "pi-nvim",
+  GIT_COMMITTER_EMAIL: "pi-nvim@localhost",
 };
 
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
@@ -60,7 +60,7 @@ export async function seedIndex(root: string, dest: string): Promise<void> {
 }
 
 export async function snapshot(root: string, ref: string, message: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "codeview-index-"));
+  const dir = await mkdtemp(join(tmpdir(), "pi-nvim-index-"));
   try {
     const env = { GIT_INDEX_FILE: join(dir, "index"), ...SNAPSHOT_IDENTITY };
     await seedIndex(root, env.GIT_INDEX_FILE);
@@ -116,6 +116,8 @@ export async function pruneRefs(root: string, olderThanDays: number): Promise<nu
   const out = await git(root, [
     "for-each-ref",
     "--format=%(refname) %(committerdate:unix)",
+    "refs/pi-nvim/",
+    // Migration: snapshots written before the rename.
     "refs/pi-codeview/",
   ]);
   const cutoff = Date.now() / 1000 - olderThanDays * 86400;
@@ -146,26 +148,40 @@ function positiveInt(value: string | null, fallback: number): number {
   return n > 0 ? n : fallback;
 }
 
-// Accepts the mode names and the on/off aliases used by `/codeview on|off`; anything else is null.
+// Accepts the mode names, the on/off aliases used by `/checkpoints on|off` and the pre-rename names
+// review/vibe (old persisted state, old clients); anything else is null.
 export function parseMode(value: unknown): Mode | null {
-  if (value === "review" || value === "on") return "review";
-  if (value === "vibe" || value === "off") return "vibe";
+  if (value === "checkpoints" || value === "on" || value === "review") return "checkpoints";
+  if (value === "off" || value === "vibe") return "off";
   return null;
 }
 
-export async function readConfig(root: string): Promise<CodeviewConfig> {
-  const [mode, cap, retention] = await Promise.all([
+/** `pi-nvim.checkpoints` as a mode; null when unset or not a boolean. */
+function checkpointsMode(value: string | null): Mode | null {
+  if (value === "true") return "checkpoints";
+  if (value === "false") return "off";
+  return null;
+}
+
+export async function readConfig(root: string): Promise<PiNvimConfig> {
+  const [checkpoints, cap, retention, oldMode, oldCap, oldRetention] = await Promise.all([
+    configValue(root, "pi-nvim.checkpoints"),
+    configValue(root, "pi-nvim.cap"),
+    configValue(root, "pi-nvim.retentionDays"),
+    // Migration: the pre-rename keys count only while the new ones are unset.
     configValue(root, "pi-codeview.mode"),
     configValue(root, "pi-codeview.cap"),
     configValue(root, "pi-codeview.retentionDays"),
   ]);
+  const mode = checkpoints !== null ? checkpointsMode(checkpoints) : oldMode === "review" || oldMode === "on" ? "checkpoints" : null;
   return {
-    mode: parseMode(mode) ?? "vibe",
-    cap: positiveInt(cap, DEFAULT_CAP),
-    retentionDays: positiveInt(retention, DEFAULT_RETENTION_DAYS),
+    mode: mode ?? "off",
+    cap: positiveInt(cap ?? oldCap, DEFAULT_CAP),
+    retentionDays: positiveInt(retention ?? oldRetention, DEFAULT_RETENTION_DAYS),
   };
 }
 
+/** Always writes `pi-nvim.checkpoints` explicitly, so the old `pi-codeview.mode` never overrides a later choice. */
 export async function writeMode(root: string, mode: Mode): Promise<void> {
-  await git(root, ["config", "--local", "pi-codeview.mode", mode]);
+  await git(root, ["config", "--local", "pi-nvim.checkpoints", mode === "checkpoints" ? "true" : "false"]);
 }

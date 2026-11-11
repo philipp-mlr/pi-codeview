@@ -7,7 +7,7 @@ import type { Event, Request, Response } from "./protocol.ts";
 
 export function socketPath(repoHash: string, sessionId: string, runtimeDir?: string): string {
   const base = runtimeDir ?? process.env.XDG_RUNTIME_DIR ?? os.tmpdir();
-  return path.join(base, "pi-codeview", repoHash, `${sessionId}.sock`);
+  return path.join(base, "pi-nvim", repoHash, `${sessionId}.sock`);
 }
 
 export type Server = { broadcast(e: Event): void; close(): Promise<void> };

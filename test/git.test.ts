@@ -23,7 +23,7 @@ describe("snapshot", () => {
   it("works in a repo with no commits", async () => {
     const r = await makeRepo({ commit: false });
     r.write("a.ts", "const a = 1;\n");
-    const sha = await snapshot(r.root, "refs/pi-codeview/s/0", "snap");
+    const sha = await snapshot(r.root, "refs/pi-nvim/s/0", "snap");
     expect(await showFile(r.root, sha, "a.ts")).toBe("const a = 1;\n");
     await expect(r.git("rev-parse", "HEAD")).rejects.toThrow();
   });
@@ -33,7 +33,7 @@ describe("snapshot", () => {
     const head = (await r.git("rev-parse", "HEAD")).trim();
     r.write("b.ts", "x\n");
     await r.git("add", "b.ts");
-    await snapshot(r.root, "refs/pi-codeview/s/0", "snap");
+    await snapshot(r.root, "refs/pi-nvim/s/0", "snap");
     expect((await r.git("diff", "--cached", "--name-only")).trim()).toBe("b.ts");
     expect((await r.git("rev-parse", "HEAD")).trim()).toBe(head);
   });
@@ -46,7 +46,7 @@ describe("snapshot", () => {
     r.write("c.ts", "c\n");
     const index = join(r.root, ".git", "index");
     const before = readFileSync(index);
-    const sha = await snapshot(r.root, "refs/pi-codeview/s/0", "snap");
+    const sha = await snapshot(r.root, "refs/pi-nvim/s/0", "snap");
     expect(readFileSync(index).equals(before)).toBe(true);
     expect(await showFile(r.root, sha, "README.md")).toBe("changed\n");
     expect(await showFile(r.root, sha, "b.ts")).toBe("x\n");
@@ -55,11 +55,11 @@ describe("snapshot", () => {
 
   it("seedIndex copies the real index (cached stat data, no rehash) and leaves no file without one", async () => {
     const r = await makeRepo();
-    const dest = join(realpathSync(mkdtempSync(join(tmpdir(), "codeview-seed-"))), "index");
+    const dest = join(realpathSync(mkdtempSync(join(tmpdir(), "pi-nvim-seed-"))), "index");
     await seedIndex(r.root, dest);
     expect(readFileSync(dest).equals(readFileSync(join(r.root, ".git", "index")))).toBe(true);
     const empty = await makeRepo({ commit: false });
-    const dest2 = join(realpathSync(mkdtempSync(join(tmpdir(), "codeview-seed-"))), "index");
+    const dest2 = join(realpathSync(mkdtempSync(join(tmpdir(), "pi-nvim-seed-"))), "index");
     await seedIndex(empty.root, dest2);
     expect(existsSync(dest2)).toBe(false);
   });
@@ -70,7 +70,7 @@ describe("snapshot", () => {
     await r.git("add", "b.ts");
     // A path removed from the real index but still on disk is untracked; it stays in the snapshot.
     await r.git("rm", "-q", "--cached", "README.md");
-    const sha = await snapshot(r.root, "refs/pi-codeview/s/0", "snap");
+    const sha = await snapshot(r.root, "refs/pi-nvim/s/0", "snap");
     expect(await showFile(r.root, sha, "README.md")).toBe("hello\n");
     expect(await showFile(r.root, sha, "b.ts")).toBe("x\n");
   });
@@ -80,7 +80,7 @@ describe("snapshot", () => {
     r.write(".gitignore", "out/\n");
     r.write("new.ts", "n\n");
     r.write("out/x.js", "x\n");
-    const sha = await snapshot(r.root, "refs/pi-codeview/s/0", "snap");
+    const sha = await snapshot(r.root, "refs/pi-nvim/s/0", "snap");
     expect(await showFile(r.root, sha, "new.ts")).toBe("n\n");
     expect(await showFile(r.root, sha, "out/x.js")).toBeNull();
   });
@@ -89,11 +89,11 @@ describe("snapshot", () => {
 describe("numstat", () => {
   it("counts added+deleted, binary as 0, handles spaces and unicode", async () => {
     const r = await makeRepo();
-    const a = await snapshot(r.root, "refs/pi-codeview/s/0", "a");
+    const a = await snapshot(r.root, "refs/pi-nvim/s/0", "a");
     r.write("my file.ts", "1\n2\n3\n");
     r.write("ä.ts", "x\n");
     writeFileSync(join(r.root, "img.bin"), Buffer.from([0, 1, 2, 0, 255, 0]));
-    const b = await snapshot(r.root, "refs/pi-codeview/s/1", "b");
+    const b = await snapshot(r.root, "refs/pi-nvim/s/1", "b");
     const stat = await numstat(r.root, a, b);
     const by = Object.fromEntries(stat.map((s) => [s.path, s.lines]));
     expect(by["my file.ts"]).toBe(3);
@@ -104,19 +104,19 @@ describe("numstat", () => {
   it("reports deletions", async () => {
     const r = await makeRepo();
     r.write("d.ts", "1\n2\n");
-    const a = await snapshot(r.root, "refs/pi-codeview/s/0", "a");
+    const a = await snapshot(r.root, "refs/pi-nvim/s/0", "a");
     r.rm("d.ts");
-    const b = await snapshot(r.root, "refs/pi-codeview/s/1", "b");
+    const b = await snapshot(r.root, "refs/pi-nvim/s/1", "b");
     expect(await numstat(r.root, a, b)).toEqual([{ path: "d.ts", lines: 2 }]);
   });
 
   it("shows a rename as delete plus add", async () => {
     const r = await makeRepo();
     r.write("old.ts", "1\n2\n");
-    const a = await snapshot(r.root, "refs/pi-codeview/s/0", "a");
+    const a = await snapshot(r.root, "refs/pi-nvim/s/0", "a");
     r.rm("old.ts");
     r.write("new name.ts", "1\n2\n");
-    const b = await snapshot(r.root, "refs/pi-codeview/s/1", "b");
+    const b = await snapshot(r.root, "refs/pi-nvim/s/1", "b");
     const stat = await numstat(r.root, a, b);
     expect(stat.map((s) => s.path).sort()).toEqual(["new name.ts", "old.ts"]);
   });
@@ -130,7 +130,7 @@ describe("findRoot", () => {
   });
 
   it("returns null outside a repo", async () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), "codeview-norepo-")));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-nvim-norepo-")));
     expect(await findRoot(dir)).toBeNull();
   });
 });
@@ -138,7 +138,7 @@ describe("findRoot", () => {
 describe("repoHash", () => {
   it("is equal for two worktrees of one repo", async () => {
     const r = await makeRepo();
-    const wt = join(realpathSync(mkdtempSync(join(tmpdir(), "codeview-wt-"))), "wt");
+    const wt = join(realpathSync(mkdtempSync(join(tmpdir(), "pi-nvim-wt-"))), "wt");
     await r.git("worktree", "add", "-q", wt, "-b", "other");
     const h1 = await repoHash(r.root);
     expect(h1).toMatch(/^[0-9a-f]{12}$/);
@@ -147,37 +147,91 @@ describe("repoHash", () => {
 });
 
 describe("pruneRefs", () => {
-  it("deletes only old refs", async () => {
-    const r = await makeRepo();
+  async function oldCommit(r: Awaited<ReturnType<typeof makeRepo>>): Promise<string> {
     const tree = (await r.git("rev-parse", "HEAD^{tree}")).trim();
     const old = new Date(Date.now() - 20 * 86400_000).toISOString();
     const env = { ...process.env, GIT_COMMITTER_DATE: old, GIT_AUTHOR_DATE: old };
     const { stdout } = await execFileAsync("git", ["commit-tree", tree, "-m", "old"], { cwd: r.root, env });
-    await r.git("update-ref", "refs/pi-codeview/s/0", stdout.trim());
-    await snapshot(r.root, "refs/pi-codeview/s/1", "new");
+    return stdout.trim();
+  }
+
+  it("deletes only old refs", async () => {
+    const r = await makeRepo();
+    await r.git("update-ref", "refs/pi-nvim/s/0", await oldCommit(r));
+    await snapshot(r.root, "refs/pi-nvim/s/1", "new");
     expect(await pruneRefs(r.root, 14)).toBe(1);
-    const refs = (await r.git("for-each-ref", "--format=%(refname)", "refs/pi-codeview/")).trim();
+    const refs = (await r.git("for-each-ref", "--format=%(refname)", "refs/pi-nvim/")).trim();
+    expect(refs).toBe("refs/pi-nvim/s/1");
+  });
+
+  it("migration: also prunes old refs left under refs/pi-codeview/", async () => {
+    const r = await makeRepo();
+    const sha = await oldCommit(r);
+    await r.git("update-ref", "refs/pi-codeview/s/0", sha);
+    await r.git("update-ref", "refs/pi-nvim/s/0", sha);
+    await snapshot(r.root, "refs/pi-codeview/s/1", "new");
+    expect(await pruneRefs(r.root, 14)).toBe(2);
+    const refs = (await r.git("for-each-ref", "--format=%(refname)", "refs/pi-codeview/", "refs/pi-nvim/")).trim();
     expect(refs).toBe("refs/pi-codeview/s/1");
   });
 });
 
 describe("config", () => {
-  it("readConfig defaults to vibe/150/14", async () => {
+  it("readConfig defaults to off/150/14", async () => {
     const r = await makeRepo();
-    expect(await readConfig(r.root)).toEqual({ mode: "vibe", cap: 150, retentionDays: 14 });
+    expect(await readConfig(r.root)).toEqual({ mode: "off", cap: 150, retentionDays: 14 });
   });
 
   it("falls back to defaults on invalid values", async () => {
     const r = await makeRepo();
-    await r.git("config", "--local", "pi-codeview.mode", "foo");
-    await r.git("config", "--local", "pi-codeview.cap", "abc");
-    expect(await readConfig(r.root)).toEqual({ mode: "vibe", cap: 150, retentionDays: 14 });
+    await r.git("config", "--local", "pi-nvim.checkpoints", "foo");
+    await r.git("config", "--local", "pi-nvim.cap", "abc");
+    expect(await readConfig(r.root)).toEqual({ mode: "off", cap: 150, retentionDays: 14 });
   });
 
-  it("writeMode persists to local git config", async () => {
+  it("reads pi-nvim.checkpoints, cap and retentionDays", async () => {
     const r = await makeRepo();
-    await writeMode(r.root, "review");
+    await r.git("config", "--local", "pi-nvim.checkpoints", "true");
+    await r.git("config", "--local", "pi-nvim.cap", "40");
+    await r.git("config", "--local", "pi-nvim.retentionDays", "3");
+    expect(await readConfig(r.root)).toEqual({ mode: "checkpoints", cap: 40, retentionDays: 3 });
+  });
+
+  it("writeMode writes pi-nvim.checkpoints explicitly", async () => {
+    const r = await makeRepo();
+    await writeMode(r.root, "checkpoints");
+    expect((await r.git("config", "--local", "pi-nvim.checkpoints")).trim()).toBe("true");
+    expect((await readConfig(r.root)).mode).toBe("checkpoints");
+    await writeMode(r.root, "off");
+    expect((await r.git("config", "--local", "pi-nvim.checkpoints")).trim()).toBe("false");
+    expect((await readConfig(r.root)).mode).toBe("off");
+  });
+});
+
+describe("config migration from pi-codeview", () => {
+  for (const [old, mode] of [["review", "checkpoints"], ["on", "checkpoints"], ["vibe", "off"], ["off", "off"]] as const) {
+    it(`unset pi-nvim.checkpoints falls back to pi-codeview.mode=${old} → ${mode}`, async () => {
+      const r = await makeRepo();
+      await r.git("config", "--local", "pi-codeview.mode", old);
+      expect((await readConfig(r.root)).mode).toBe(mode);
+    });
+  }
+
+  it("falls back to pi-codeview.cap and pi-codeview.retentionDays when the new keys are unset", async () => {
+    const r = await makeRepo();
+    await r.git("config", "--local", "pi-codeview.cap", "60");
+    await r.git("config", "--local", "pi-codeview.retentionDays", "5");
+    expect(await readConfig(r.root)).toEqual({ mode: "off", cap: 60, retentionDays: 5 });
+    await r.git("config", "--local", "pi-nvim.cap", "70");
+    expect((await readConfig(r.root)).cap).toBe(70);
+  });
+
+  it("switching writes pi-nvim.checkpoints, which wins over the old key, and leaves the old key untouched", async () => {
+    const r = await makeRepo();
+    await r.git("config", "--local", "pi-codeview.mode", "review");
+    await writeMode(r.root, "off");
+    expect((await r.git("config", "--local", "pi-nvim.checkpoints")).trim()).toBe("false");
     expect((await r.git("config", "--local", "pi-codeview.mode")).trim()).toBe("review");
-    expect((await readConfig(r.root)).mode).toBe("review");
+    expect((await readConfig(r.root)).mode).toBe("off");
   });
 });

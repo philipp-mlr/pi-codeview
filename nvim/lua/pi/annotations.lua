@@ -1,8 +1,8 @@
-local discover = require("codeview.discover")
+local discover = require("pi.discover")
 
 local M = {}
 
-local ns = vim.api.nvim_create_namespace("codeview")
+local ns = vim.api.nvim_create_namespace("pi_annotations")
 local items = {}
 local unplaced = {} -- drafts whose file is missing; kept verbatim so save round-trips never drop them
 local next_id = 0

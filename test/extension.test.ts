@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import codeview, { isReadOnlyTool } from "../extensions/codeview.ts";
+import piNvim, { isReadOnlyTool } from "../extensions/pi-nvim.ts";
 import { repoHash } from "../extensions/git.ts";
 import { LineDecoder, encode } from "../extensions/protocol.ts";
 import { renderResume, humanChangedSteer } from "../extensions/render.ts";
@@ -33,12 +33,12 @@ afterEach(async () => {
 
 async function start(
   repo: TestRepo | string,
-  opts: { mode?: "review" | "vibe"; sessionId?: string; entries?: FakeEntry[] } = {},
+  opts: { mode?: "checkpoints" | "off"; sessionId?: string; entries?: FakeEntry[] } = {},
 ): Promise<FakePi> {
   const cwd = typeof repo === "string" ? repo : repo.root;
-  if (opts.mode && typeof repo !== "string") await repo.git("config", "pi-codeview.mode", opts.mode);
+  if (opts.mode && typeof repo !== "string") await repo.git("config", "pi-nvim.checkpoints", String(opts.mode === "checkpoints"));
   const fake = makeFakePi(cwd, { sessionId: opts.sessionId, entries: opts.entries });
-  codeview(fake.pi);
+  piNvim(fake.pi);
   await fake.fire("session_start", { reason: "startup" });
   cleanups.push(() => fake.fire("session_shutdown", { reason: "quit" }).then(() => {}));
   return fake;
@@ -73,7 +73,7 @@ async function connect(repo: TestRepo, sessionId = "test-session"): Promise<Clie
     close: () => sock.destroy(),
   };
   cleanups.push(() => client.close());
-  const hello = await client.request("hello", { version: 1 });
+  const hello = await client.request("hello", { version: 2 });
   expect(hello.ok).toBe(true);
   return client;
 }
@@ -117,19 +117,19 @@ describe("isReadOnlyTool", () => {
   });
 });
 
-describe("codeview extension", () => {
+describe("pi-nvim extension", () => {
   it("inactive outside a git repo", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cv-nogit-"));
     cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
     const fake = await start(dir);
-    expect(fs.existsSync(path.join(runtimeDir, "pi-codeview"))).toBe(false);
+    expect(fs.existsSync(path.join(runtimeDir, "pi-nvim"))).toBe(false);
     expect(fake.entries).toEqual([]);
     expect(await fake.fire("tool_call", { toolName: "write", input: {} })).toEqual([undefined]);
-    await fake.runCommand("codeview", "");
+    await fake.runCommand("checkpoints", "");
     expect(fake.notifications.at(-1)?.message).toContain("not a git repository");
   });
 
-  it("vibe mode: checkpoint tool inactive, turn_end records a chunk", async () => {
+  it("checkpoints off: checkpoint tool inactive, turn_end records a chunk", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     expect(fake.pi.getActiveTools()).not.toContain("checkpoint");
@@ -145,7 +145,7 @@ describe("codeview extension", () => {
 
   it("checkpoint files store why on the chunk", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "a\n");
     void fake.callTool("checkpoint", { note: "add a", files: [{ path: "./a.txt", why: "new file" }, { path: "x", why: "?" }] });
@@ -157,16 +157,16 @@ describe("codeview extension", () => {
 
   it("checkpoint blocks until send, returns the rendered review", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     expect(fake.pi.getActiveTools()).toContain("checkpoint");
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "a\n");
     const pending = fake.callTool("checkpoint", { note: "add a" });
     await until(() => client.events.find((e) => e.event === "chunk_ready"));
-    expect(fake.statuses.get("codeview")).toBe("codeview: chunk 1 waiting for review");
+    expect(fake.statuses.get("pi-nvim")).toBe("pi: chunk 1 waiting for review");
     expect(await settled(pending)).toBe(false);
     const status = (await client.request("status")).result;
-    expect(status).toMatchObject({ mode: "review", root: repo.root, sessionId: "test-session", queued: 0 });
+    expect(status).toMatchObject({ mode: "checkpoints", root: repo.root, sessionId: "test-session", queued: 0 });
     expect(status.baseline).toMatch(/^[0-9a-f]{40}$/);
     expect(status.openChunk).toMatchObject({ n: 1, note: "add a", agentFiles: ["a.txt"] });
     const get = (await client.request("get_chunk", { n: 1 })).result;
@@ -178,14 +178,14 @@ describe("codeview extension", () => {
     const out = text(await pending);
     expect(out).toContain('Review of chunk 1 ("add a")');
     expect(out).toContain("looks fine");
-    expect(fake.statuses.get("codeview")).toBe("codeview: review");
+    expect(fake.statuses.get("pi-nvim")).toBe("pi: checkpoints");
     await until(() => client.events.find((e) => e.event === "chunk_reviewed"));
     expect((await client.request("list_chunks")).result[0].status).toBe("reviewed");
   });
 
-  it("markBase: review mode marks against the open chunk's start, then the baseline after send", async () => {
+  it("markBase: checkpoint mode marks against the open chunk's start, then the baseline after send", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     const before = (await client.request("status")).result;
     expect(before.markBase).toBe(before.baseline);
@@ -202,7 +202,7 @@ describe("codeview extension", () => {
     expect(after.markBase).toBe(open.openChunk.toSha);
   });
 
-  it("markBase: vibe mode keeps the run-start baseline across turn chunks, moves on the next agent_start", async () => {
+  it("markBase: checkpoints off keeps the run-start baseline across turn chunks, moves on the next agent_start", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     const client = await connect(repo);
@@ -223,7 +223,7 @@ describe("codeview extension", () => {
 
   it("abort while waiting leaves the chunk open and persisted; send later resumes via sendUserMessage with renderResume", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "alpha\n");
     const abort = new AbortController();
@@ -255,7 +255,7 @@ describe("codeview extension", () => {
 
   it("parallel checkpoint calls share the open chunk and all resolve with the review", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "a\n");
     const first = fake.callTool("checkpoint", { note: "add a" });
@@ -272,7 +272,7 @@ describe("codeview extension", () => {
 
   it("aborting one of two checkpoint calls keeps the other waiting for the review", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "a\n");
     const abort = new AbortController();
@@ -287,10 +287,10 @@ describe("codeview extension", () => {
     expect(fake.sent.filter((s) => s.kind === "user")).toEqual([]);
   });
 
-  it("vibe mode: mutating tools take no snapshots, turn_end records one chunk", async () => {
+  it("checkpoints off: mutating tools take no snapshots, turn_end records one chunk", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
-    const refs = async () => (await repo.git("for-each-ref", "refs/pi-codeview/")).split("\n").filter(Boolean).length;
+    const refs = async () => (await repo.git("for-each-ref", "refs/pi-nvim/")).split("\n").filter(Boolean).length;
     const entriesBefore = fake.entries.length;
     const refsBefore = await refs();
     await agentWrite(fake, repo, "a.txt", "a\n");
@@ -307,10 +307,10 @@ describe("codeview extension", () => {
     expect(chunks[0]).toMatchObject({ n: 1, status: "recorded", agentFiles: ["a.txt", "b.txt", "c.txt"] });
   });
 
-  it("vibe mode: turn_end takes no snapshot when no mutating tool ran and no human_write arrived", async () => {
+  it("checkpoints off: turn_end takes no snapshot when no mutating tool ran and no human_write arrived", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
-    const refs = async () => (await repo.git("for-each-ref", "refs/pi-codeview/")).split("\n").filter(Boolean).length;
+    const refs = async () => (await repo.git("for-each-ref", "refs/pi-nvim/")).split("\n").filter(Boolean).length;
     const refsBefore = await refs();
     repo.write("a.txt", "a\n");
     await fake.fire("tool_result", { toolName: "read", input: {}, content: [], isError: false });
@@ -328,13 +328,13 @@ describe("codeview extension", () => {
 
   it("prompt typed while a chunk is open is queued and delivered after the review", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "a\n");
     await fake.fire("agent_before_settle", { entries: [], continue: false });
     const status = (await client.request("status")).result;
     expect(status.openChunk).toMatchObject({ n: 1, note: "end of run, no checkpoint" });
-    expect(fake.statuses.get("codeview")).toBe("codeview: chunk 1 waiting for review");
+    expect(fake.statuses.get("pi-nvim")).toBe("pi: chunk 1 waiting for review");
 
     expect(await fake.fire("input", { text: "next do b", source: "interactive" })).toEqual([{ action: "handled" }]);
     expect(fake.notifications.at(-1)?.message).toBe("Prompt queued until chunk 1 is reviewed");
@@ -355,7 +355,7 @@ describe("codeview extension", () => {
 
   it("prompt from nvim without an open chunk is sent with its context", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await client.request("prompt", { text: "explain", context: { path: "README.md", startLine: 1, endLine: 1 } });
     expect(fake.sent).toEqual([{ kind: "user", content: "explain\n\nContext: README.md:1", options: undefined }]);
@@ -366,7 +366,7 @@ describe("codeview extension", () => {
 
   it("cap blocks the next edit after 150 agent lines, not counting human lines", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     repo.write("human.txt", lines(300));
     expect((await client.request("human_write", { path: "human.txt" })).ok).toBe(true);
@@ -384,7 +384,7 @@ describe("codeview extension", () => {
 
   it("human_write on an agent-touched file steers the agent", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "a\n");
     repo.write("b.txt", "b\n");
@@ -395,7 +395,7 @@ describe("codeview extension", () => {
     expect(fake.sent).toEqual([
       {
         kind: "message",
-        message: { customType: "pi-codeview", content: humanChangedSteer("a.txt"), display: true },
+        message: { customType: "pi-nvim", content: humanChangedSteer("a.txt"), display: true },
         options: { deliverAs: "steer" },
       },
     ]);
@@ -403,7 +403,7 @@ describe("codeview extension", () => {
 
   it("send refuses an empty unviewed review", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "a\n");
     const pending = fake.callTool("checkpoint", { note: "add a" });
@@ -417,7 +417,7 @@ describe("codeview extension", () => {
 
   it("annotations quote code from the send-time snapshot", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "one\ntwo\nthree\n");
     const pending = fake.callTool("checkpoint", { note: "add a" });
@@ -437,13 +437,13 @@ describe("codeview extension", () => {
 
   it("checkpoint runs sequentially, never in parallel with sibling tool calls", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     expect(fake.tools.get("checkpoint")?.executionMode).toBe("sequential");
   });
 
   it("an agent edit recorded while a checkpoint waits is carried into the next chunk and counts toward the cap", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "a\n");
     const pending = fake.callTool("checkpoint", { note: "add a" });
@@ -469,7 +469,7 @@ describe("codeview extension", () => {
   it("the human-edit diff holds only Philipp's hunks when he and the agent changed the same file", async () => {
     const repo = await makeRepo();
     repo.write("a.txt", lines(12));
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", lines(12).replace("line 0", "AGENT 0"));
     repo.write("a.txt", lines(12).replace("line 0", "AGENT 0").replace("line 9", "HUMAN 9"));
@@ -483,26 +483,26 @@ describe("codeview extension", () => {
     expect(human).not.toContain("AGENT 0");
   });
 
-  it("an aborted run creates the end-of-run chunk in review mode only", async () => {
+  it("an aborted run creates the end-of-run chunk in checkpoint mode only", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "a\n");
     await fake.fire("agent_settled", { aborted: true });
     expect((await client.request("status")).result.openChunk).toMatchObject({ n: 1, note: "end of run, no checkpoint" });
     await until(() => client.events.find((e) => e.event === "run_settled" && e.data.aborted === true));
 
-    const vibeRepo = await makeRepo();
-    const vibe = await start(vibeRepo, { sessionId: "vibe" });
-    vibeRepo.write("b.txt", "b\n");
-    await vibe.fire("agent_settled", { aborted: true });
-    const vibeClient = await connect(vibeRepo, "vibe");
-    expect((await vibeClient.request("list_chunks")).result).toEqual([]);
+    const offRepo = await makeRepo();
+    const off = await start(offRepo, { sessionId: "off" });
+    offRepo.write("b.txt", "b\n");
+    await off.fire("agent_settled", { aborted: true });
+    const offClient = await connect(offRepo, "off");
+    expect((await offClient.request("list_chunks")).result).toEqual([]);
   });
 
   it("a prompt with images is not queued while a chunk is open", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     await agentWrite(fake, repo, "a.txt", "a\n");
     await fake.fire("agent_before_settle", { entries: [], continue: false });
     const images = [{ type: "image", data: "AAAA", mimeType: "image/png" }];
@@ -512,23 +512,23 @@ describe("codeview extension", () => {
     expect((await client.request("status")).result.queued).toBe(0);
   });
 
-  it("/codeview off refuses while a chunk is open", async () => {
+  it("/checkpoints off refuses while a chunk is open", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     await agentWrite(fake, repo, "a.txt", "a\n");
     await fake.fire("agent_before_settle", { entries: [], continue: false });
-    await fake.runCommand("codeview", "off");
+    await fake.runCommand("checkpoints", "off");
     expect(fake.notifications.at(-1)).toMatchObject({
       level: "error",
-      message: "codeview: chunk 1 is open — send a review or /codeview discard <note> first",
+      message: "pi: chunk 1 is open — send a review or /checkpoints discard <note> first",
     });
     expect(fake.pi.getActiveTools()).toContain("checkpoint");
-    expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("review");
+    expect((await repo.git("config", "pi-nvim.checkpoints")).trim()).toBe("true");
   });
 
   it("session_shutdown waits for in-flight snapshot work, nothing is persisted after it", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     repo.write("a.txt", "a\n");
     const inFlight = fake.fire("tool_result", { toolName: "write", input: {}, content: [], isError: false });
     await fake.fire("session_shutdown", { reason: "quit" });
@@ -541,7 +541,7 @@ describe("codeview extension", () => {
 
   it("session restore after restart keeps the open chunk", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     await agentWrite(fake, repo, "a.txt", "a\n");
     await fake.fire("agent_before_settle", { entries: [], continue: false });
     await fake.fire("session_shutdown", { reason: "quit" });
@@ -550,88 +550,153 @@ describe("codeview extension", () => {
     const client = await connect(repo);
     const status = (await client.request("status")).result;
     expect(status.openChunk).toMatchObject({ n: 1, note: "end of run, no checkpoint", agentFiles: ["a.txt"] });
-    expect(fake2.statuses.get("codeview")).toBe("codeview: chunk 1 waiting for review");
+    expect(fake2.statuses.get("pi-nvim")).toBe("pi: chunk 1 waiting for review");
     // New snapshots after the restore must not overwrite refs the restored state points at.
     await agentWrite(fake2, repo, "b.txt", "b\n");
     await agentWrite(fake2, repo, "c.txt", "c\n");
     const saved = fake2.entries.at(-1)!.data as any;
     const referenced = [saved.baseline, ...saved.steps.map((s: any) => s.sha),
       ...saved.chunks.flatMap((c: any) => [c.fromSha, c.toSha])];
-    const refShas = (await repo.git("for-each-ref", "--format=%(objectname)", "refs/pi-codeview/test-session/")).split("\n");
+    const refShas = (await repo.git("for-each-ref", "--format=%(objectname)", "refs/pi-nvim/test-session/")).split("\n");
     expect(saved.steps).toHaveLength(2);
     for (const sha of referenced) expect(refShas).toContain(sha);
   });
 
-  it("/codeview continue and discard require a note", async () => {
+  it("/checkpoints continue and discard require a note", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
+    const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
     await agentWrite(fake, repo, "a.txt", "a\n");
     const pending = fake.callTool("checkpoint", { note: "add a" });
     await until(async () => (await client.request("status")).result.openChunk);
 
-    await fake.runCommand("codeview", "continue");
+    await fake.runCommand("checkpoints", "continue");
     expect(fake.notifications.at(-1)).toMatchObject({ level: "error" });
     expect(fake.notifications.at(-1)?.message).toContain("note");
-    await fake.runCommand("codeview", "discard   ");
+    await fake.runCommand("checkpoints", "discard   ");
     expect(fake.notifications.at(-1)).toMatchObject({ level: "error" });
     expect(await settled(pending)).toBe(false);
 
-    await fake.runCommand("codeview", "continue go on with tests");
+    await fake.runCommand("checkpoints", "continue go on with tests");
     expect(text(await pending)).toContain("go on with tests");
 
     await agentWrite(fake, repo, "b.txt", "b\n");
     await fake.fire("agent_before_settle", { entries: [], continue: false });
-    await fake.runCommand("codeview", "discard throwing this away");
+    await fake.runCommand("checkpoints", "discard throwing this away");
     const chunks = (await client.request("list_chunks")).result;
     expect(chunks[1]).toMatchObject({ n: 2, status: "discarded", reviewNote: "throwing this away" });
     expect((await client.request("status")).result.openChunk).toBeNull();
   });
 
-  it("/codeview on and off switch mode and tools", async () => {
+  it("/checkpoints on and off switch mode and tools", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     const client = await connect(repo);
-    await fake.runCommand("codeview", "on");
+    await fake.runCommand("checkpoints", "on");
     expect(fake.pi.getActiveTools()).toContain("checkpoint");
-    expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("review");
-    await until(() => client.events.find((e) => e.event === "mode_changed" && e.data.mode === "review"));
-    await fake.runCommand("codeview", "off");
+    expect((await repo.git("config", "pi-nvim.checkpoints")).trim()).toBe("true");
+    await until(() => client.events.find((e) => e.event === "mode_changed" && e.data.mode === "checkpoints"));
+    await fake.runCommand("checkpoints", "off");
     expect(fake.pi.getActiveTools()).not.toContain("checkpoint");
-    expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("vibe");
-    await fake.runCommand("codeview", "");
-    expect(fake.notifications.at(-1)?.message).toContain("mode vibe");
+    expect((await repo.git("config", "pi-nvim.checkpoints")).trim()).toBe("false");
+    await fake.runCommand("checkpoints", "");
+    expect(fake.notifications.at(-1)?.message).toContain("checkpoint mode off");
   });
 
-  it("set_mode accepts on/off as aliases and refuses unknown modes", async () => {
+  it("set_mode accepts on/off and the old review/vibe names and refuses unknown modes", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     const client = await connect(repo);
-    expect((await client.request("set_mode", { mode: "on" })).result).toEqual({ mode: "review" });
+    expect((await client.request("set_mode", { mode: "on" })).result).toEqual({ mode: "checkpoints" });
     expect(fake.pi.getActiveTools()).toContain("checkpoint");
-    expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("review");
-    expect((await client.request("set_mode", { mode: "off" })).result).toEqual({ mode: "vibe" });
+    expect((await repo.git("config", "pi-nvim.checkpoints")).trim()).toBe("true");
+    expect((await client.request("set_mode", { mode: "off" })).result).toEqual({ mode: "off" });
+    expect((await client.request("set_mode", { mode: "review" })).result).toEqual({ mode: "checkpoints" });
+    expect((await client.request("set_mode", { mode: "vibe" })).result).toEqual({ mode: "off" });
+    expect((await client.request("set_mode", { mode: "checkpoints" })).result).toEqual({ mode: "checkpoints" });
+    expect((await client.request("set_mode", { mode: "off" })).result).toEqual({ mode: "off" });
     const bad = await client.request("set_mode", { mode: "banana" });
     expect(bad.ok).toBe(false);
-    expect(bad.error).toContain("review or vibe");
-    expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("vibe");
-    expect((await client.request("status")).result.mode).toBe("vibe");
+    expect(bad.error).toContain("checkpoints or off");
+    expect((await repo.git("config", "pi-nvim.checkpoints")).trim()).toBe("false");
+    expect((await client.request("status")).result.mode).toBe("off");
   });
 
-  it("second session in the same worktree cannot enter review mode", async () => {
+  it("second session in the same worktree cannot enter checkpoint mode", async () => {
     const repo = await makeRepo();
-    await start(repo, { mode: "review" });
+    await start(repo, { mode: "checkpoints" });
     const other = await start(repo, { sessionId: "other" });
-    expect(other.notifications.at(-1)?.message).toContain("one review-mode session per worktree");
+    expect(other.notifications.at(-1)?.message).toContain("one checkpoint-mode session per worktree");
     expect(other.pi.getActiveTools()).not.toContain("checkpoint");
-    await other.runCommand("codeview", "on");
-    expect(other.notifications.at(-1)?.message).toContain("one review-mode session per worktree");
+    await other.runCommand("checkpoints", "on");
+    expect(other.notifications.at(-1)?.message).toContain("one checkpoint-mode session per worktree");
     const client = await connect(repo, "other");
-    expect((await client.request("status")).result.mode).toBe("vibe");
+    expect((await client.request("status")).result.mode).toBe("off");
   });
 });
 
-describe("codeview activity", () => {
+describe("pi-nvim migration from pi-codeview", () => {
+  it("pi-codeview.mode=review starts in checkpoint mode; pi-codeview.mode=vibe starts with checkpoints off", async () => {
+    const repo = await makeRepo();
+    await repo.git("config", "pi-codeview.mode", "review");
+    const fake = await start(repo);
+    expect(fake.pi.getActiveTools()).toContain("checkpoint");
+    expect((await (await connect(repo)).request("status")).result.mode).toBe("checkpoints");
+
+    const offRepo = await makeRepo();
+    await offRepo.git("config", "pi-codeview.mode", "vibe");
+    const off = await start(offRepo, { sessionId: "off" });
+    expect(off.pi.getActiveTools()).not.toContain("checkpoint");
+    expect((await (await connect(offRepo, "off")).request("status")).result.mode).toBe("off");
+  });
+
+  it("toggling writes pi-nvim.checkpoints and leaves pi-codeview.mode untouched", async () => {
+    const repo = await makeRepo();
+    await repo.git("config", "pi-codeview.mode", "on");
+    const fake = await start(repo);
+    await fake.runCommand("checkpoints", "off");
+    expect((await repo.git("config", "pi-nvim.checkpoints")).trim()).toBe("false");
+    expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("on");
+    await fake.fire("session_shutdown", { reason: "quit" });
+    const again = await start(repo, { sessionId: "again" });
+    expect(again.pi.getActiveTools()).not.toContain("checkpoint");
+  });
+
+  it("restores from the last pi-codeview-state entry and maps its old mode names", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    await fake.fire("agent_before_settle", { entries: [], continue: false });
+    await fake.fire("session_shutdown", { reason: "quit" });
+    const last = fake.entries.filter((e) => e.customType === "pi-nvim-state").at(-1)!;
+    const old: FakeEntry[] = [{ type: "custom", customType: "pi-codeview-state", data: { ...(last.data as object), mode: "review" } }];
+
+    const fake2 = await start(repo, { entries: old });
+    const status = (await (await connect(repo)).request("status")).result;
+    expect(status.openChunk).toMatchObject({ n: 1, note: "end of run, no checkpoint", agentFiles: ["a.txt"] });
+    expect(status.mode).toBe("checkpoints");
+    expect(fake2.entries.at(-1)!.customType).toBe("pi-nvim-state");
+    expect((fake2.entries.at(-1)!.data as { mode: string }).mode).toBe("checkpoints");
+  });
+
+  it("a pi-nvim-state entry wins over an older pi-codeview-state entry", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    await fake.fire("agent_before_settle", { entries: [], continue: false });
+    await fake.fire("session_shutdown", { reason: "quit" });
+    const last = fake.entries.filter((e) => e.customType === "pi-nvim-state").at(-1)!;
+    const stale = { ...(last.data as object), chunks: [], mode: "vibe" };
+    const entries: FakeEntry[] = [
+      { type: "custom", customType: "pi-nvim-state", data: last.data },
+      { type: "custom", customType: "pi-codeview-state", data: stale },
+    ];
+    await start(repo, { entries });
+    expect((await (await connect(repo)).request("status")).result.openChunk).toMatchObject({ n: 1 });
+  });
+});
+
+describe("pi-nvim activity", () => {
   const currents = (client: { events: { event: string; data: any }[] }) => client.events.filter((e) => e.event === "activity_current");
 
   it("reports the running tool in status and activity_current, busy until settled", async () => {

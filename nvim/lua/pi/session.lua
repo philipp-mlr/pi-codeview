@@ -1,8 +1,8 @@
 -- The connection to one pi session and its cached status.
-local annotations = require("codeview.annotations")
-local client = require("codeview.client")
-local discover = require("codeview.discover")
-local live = require("codeview.live")
+local annotations = require("pi.annotations")
+local client = require("pi.client")
+local discover = require("pi.discover")
+local live = require("pi.live")
 
 local M = {}
 
@@ -62,7 +62,7 @@ local function save_drafts(cb)
       cb()
     end
     if err then
-      vim.notify("codeview: saving drafts failed: " .. err, vim.log.levels.WARN)
+      vim.notify("pi: saving drafts failed: " .. err, vim.log.levels.WARN)
     end
   end)
 end
@@ -92,7 +92,7 @@ function M.flush()
   end, 10)
 end
 
--- Directory of buf's file; nil for buffers without a file on disk (panel, scratch, codeview://).
+-- Directory of buf's file; nil for buffers without a file on disk (panel, scratch, pi://).
 local function file_dir(buf)
   local name = vim.api.nvim_buf_get_name(buf or 0)
   local real = name ~= "" and vim.uv.fs_realpath(name) or nil
@@ -119,7 +119,10 @@ local function describe(status)
   if type(status.openChunk) == "table" then
     state = "review " .. status.openChunk.n
   end
-  return ("%s  [%s, %s]  %s"):format(M.label(status), status.mode, state, status.root)
+  if status.mode == "checkpoints" then
+    state = "checkpoints, " .. state
+  end
+  return ("%s  [%s]  %s"):format(M.label(status), state, status.root)
 end
 
 -- Drops the current attachment without the disconnect warning; pending drafts are saved first.
@@ -156,7 +159,7 @@ local function open(path)
       M.conn, M.cached = nil, nil
       live.clear()
       redraw()
-      vim.notify("codeview: disconnected from pi", vim.log.levels.WARN)
+      vim.notify("pi: disconnected from pi", vim.log.levels.WARN)
     end
   end)
   return conn, err
@@ -249,11 +252,11 @@ function M.ensure(cb, opts)
   local dir = dir_of_buffer(opts.buf)
   local root = discover.root(dir)
   if not root then
-    return fail("codeview: not inside a git repository")
+    return fail("pi: not inside a git repository")
   end
   collect(dir, root, function(live)
     if #live == 0 then
-      return fail("codeview: no pi session with codeview for " .. root)
+      return fail("pi: no pi session with pi-nvim for " .. root)
     end
     if #live == 1 then
       return pick_from(live, live[1], root, cb)
@@ -261,7 +264,7 @@ function M.ensure(cb, opts)
     if opts.quiet then
       return pick_from(live, nil, root, cb)
     end
-    select_session(live, "codeview: attach to which pi session?", function(choice)
+    select_session(live, "pi: attach to which pi session?", function(choice)
       pick_from(live, choice, root, cb)
     end)
   end)
@@ -273,19 +276,19 @@ function M.choose(cb)
   local dir = dir_of_buffer(0)
   local root = discover.root(dir)
   if not root then
-    return vim.notify("codeview: not inside a git repository", vim.log.levels.ERROR)
+    return vim.notify("pi: not inside a git repository", vim.log.levels.ERROR)
   end
   collect(dir, root, function(live)
     if #live == 0 then
-      return vim.notify("codeview: no pi session with codeview for " .. root, vim.log.levels.ERROR)
+      return vim.notify("pi: no pi session with pi-nvim for " .. root, vim.log.levels.ERROR)
     end
-    select_session(live, "codeview: attach to which pi session?", function(choice)
+    select_session(live, "pi: attach to which pi session?", function(choice)
       if not choice then
         return pick_from(live, nil, root, function() end)
       end
       M.detach()
       pick_from(live, choice, root, function(conn, r)
-        vim.notify("codeview: attached to " .. M.label(choice.status))
+        vim.notify("pi: attached to " .. M.label(choice.status))
         if cb then
           cb(conn, r)
         end
@@ -301,7 +304,7 @@ function M.request(type, payload, cb)
       if cb then
         cb(err, result)
       elseif err then
-        vim.notify("codeview: " .. err, vim.log.levels.ERROR)
+        vim.notify("pi: " .. err, vim.log.levels.ERROR)
       end
     end)
   end)
@@ -329,7 +332,7 @@ function M.status_line()
   return "idle"
 end
 
--- Statusline text: "codeview: <label> · <state>"; "" when not attached. Reads the cache only.
+-- Statusline text: "pi: <label>[ [checkpoints]] · <state>"; "" when not attached. Reads the cache only.
 function M.statusline()
   if not M.connected() or not M.cached then
     return ""
@@ -350,8 +353,8 @@ function M.statusline()
   else
     state = "idle"
   end
-  local mode = type(M.cached.mode) == "string" and (" [" .. M.cached.mode .. "]") or ""
-  return ("codeview: %s%s · %s"):format(M.label(M.cached), mode, state)
+  local mode = M.cached.mode == "checkpoints" and " [checkpoints]" or ""
+  return ("pi: %s%s · %s"):format(M.label(M.cached), mode, state)
 end
 
 -- Label of the attached session for the statusline; "" when not attached.

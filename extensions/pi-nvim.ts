@@ -6,13 +6,13 @@ import { CHECKPOINT_GUIDELINES } from "./render.ts";
 
 export { isReadOnlyTool } from "./loop.ts";
 
-const NOT_A_REPO = "codeview: inactive, not a git repository";
+const NOT_A_REPO = "pi: inactive, not a git repository";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-export default function codeview(pi: ExtensionAPI): void {
+export default function piNvim(pi: ExtensionAPI): void {
   let loop: ReviewLoop | null = null;
 
   pi.registerTool({
@@ -39,20 +39,20 @@ export default function codeview(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("codeview", {
-    description: "codeview: show state, on|off, continue <note>, discard <note>",
+  pi.registerCommand("checkpoints", {
+    description: "pi: checkpoint mode — show state, on|off, continue <note>, discard <note>",
     handler: async (args, ctx) => {
       const [sub = "", ...rest] = args.trim().split(/\s+/);
       const note = rest.join(" ").trim();
       if (!loop) return void ctx.ui.notify(NOT_A_REPO, "warning");
       try {
         if (sub === "") ctx.ui.notify(loop.describe(), "info");
-        else if (sub === "on" || sub === "off") await loop.setMode(sub === "on" ? "review" : "vibe");
+        else if (sub === "on" || sub === "off") await loop.setMode(sub === "on" ? "checkpoints" : "off");
         else if (sub === "continue") await loop.continueWith(note);
         else if (sub === "discard") await loop.discard(note);
-        else ctx.ui.notify(`codeview: unknown subcommand ${sub}`, "error");
+        else ctx.ui.notify(`pi: unknown subcommand ${sub}`, "error");
       } catch (e) {
-        ctx.ui.notify(`codeview: ${errorText(e)}`, "error");
+        ctx.ui.notify(`pi: ${errorText(e)}`, "error");
       }
     },
   });

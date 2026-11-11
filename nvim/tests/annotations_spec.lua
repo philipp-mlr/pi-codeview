@@ -1,4 +1,4 @@
-local annotations = require("codeview.annotations")
+local annotations = require("pi.annotations")
 
 local M = {}
 

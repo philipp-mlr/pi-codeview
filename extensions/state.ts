@@ -1,3 +1,4 @@
+import { parseMode } from "./git.ts";
 import type { Mode } from "./git.ts";
 
 export type { Mode } from "./git.ts";
@@ -37,7 +38,7 @@ export type Serialized = {
   queuedPrompts: string[];
 };
 
-export class CodeviewState {
+export class PiNvimState {
   mode: Mode;
   baseline: string;
   chunks: Chunk[];
@@ -47,9 +48,10 @@ export class CodeviewState {
 
   constructor(init?: Serialized) {
     const data: Serialized = structuredClone(
-      init ?? { mode: "vibe", baseline: "", chunks: [], steps: [], drafts: [], queuedPrompts: [] },
+      init ?? { mode: "off", baseline: "", chunks: [], steps: [], drafts: [], queuedPrompts: [] },
     );
-    this.mode = data.mode;
+    // State persisted before the rename says "review" | "vibe".
+    this.mode = parseMode(data.mode) ?? "off";
     this.baseline = data.baseline;
     this.chunks = data.chunks.map((c) => ({ ...c, humanSteps: c.humanSteps ?? [] }));
     // Steps persisted before `from` existed start where the previous one ended.

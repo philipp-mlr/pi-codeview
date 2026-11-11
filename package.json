@@ -1,7 +1,7 @@
 {
-  "name": "pi-codeview",
+  "name": "pi-nvim",
   "version": "0.1.0",
-  "description": "Keep the code in view while a coding agent works: review-sized checkpoints for pi, reviewed in Neovim.",
+  "description": "pi in Neovim: ask with context, watch the agent work, annotate, optional checkpoints",
   "keywords": [
     "pi-package"
   ],
@@ -14,7 +14,7 @@
     "LICENSE"
   ],
   "pi": {
-    "extensions": ["./extensions/codeview.ts"]
+    "extensions": ["./extensions/pi-nvim.ts"]
   },
   "scripts": {
     "test": "vitest run",

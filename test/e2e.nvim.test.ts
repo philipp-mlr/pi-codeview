@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import codeview from "../extensions/codeview.ts";
+import piNvim from "../extensions/pi-nvim.ts";
 import { SEND_REFUSED } from "../extensions/loop.ts";
 import { humanChangedSteer } from "../extensions/render.ts";
 import { makeFakePi, type FakePi } from "./helpers/fake-pi.ts";
@@ -33,11 +33,11 @@ afterEach(async () => {
 
 async function start(
   repo: TestRepo,
-  opts: { root?: string; sessionId?: string; sessionName?: string; mode?: string } = {},
+  opts: { root?: string; sessionId?: string; sessionName?: string; mode?: "checkpoints" | "off" } = {},
 ): Promise<FakePi> {
-  await repo.git("config", "pi-codeview.mode", opts.mode ?? "review");
+  await repo.git("config", "pi-nvim.checkpoints", String((opts.mode ?? "checkpoints") === "checkpoints"));
   const fake = makeFakePi(opts.root ?? repo.root, { sessionId: opts.sessionId, sessionName: opts.sessionName });
-  codeview(fake.pi);
+  piNvim(fake.pi);
   await fake.fire("session_start", { reason: "startup" });
   cleanups.push(() => fake.fire("session_shutdown", { reason: "quit" }).then(() => {}));
   return fake;
@@ -116,8 +116,8 @@ function text(result: any): string {
 
 const ERROR = 4;
 
-describe("codeview.nvim end to end", () => {
-  it("panel, chunk diff, annotation and CodeviewSend resolve the waiting checkpoint", async () => {
+describe("pi.nvim end to end", () => {
+  it("panel, chunk diff, annotation and PiSendAnnotations resolve the waiting checkpoint", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\ntwo\n");
@@ -127,14 +127,14 @@ describe("codeview.nvim end to end", () => {
     const nvim = runNvim(
       repo,
       `
-local cv = require("codeview")
+local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
 cv.toggle_panel()
 local panel_line
 vim.wait(5000, function()
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.bo[buf].filetype == "codeview" then
+    if vim.bo[buf].filetype == "pi-chunks" then
       panel_line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
     end
   end
@@ -176,7 +176,7 @@ cv.send({ note = "" })
     const nvim = runNvim(
       repo,
       `
-local cv = require("codeview")
+local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
 cv.toggle_panel()
@@ -191,14 +191,14 @@ vim.cmd("write")
     expect(fake.sent).toEqual([
       {
         kind: "message",
-        message: { customType: "pi-codeview", content: humanChangedSteer("a.txt"), display: true },
+        message: { customType: "pi-nvim", content: humanChangedSteer("a.txt"), display: true },
         options: { deliverAs: "steer" },
       },
     ]);
     expect(nvim.notifications().map((n) => n.msg)).toContain("STATUS idle");
   }, TIMEOUT_MS);
 
-  it("CodeviewSend without opening the chunk and without content is refused via vim.notify", async () => {
+  it("PiSendAnnotations without opening the chunk and without content is refused via vim.notify", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\n");
@@ -207,7 +207,7 @@ vim.cmd("write")
     const nvim = runNvim(
       repo,
       `
-local cv = require("codeview")
+local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
 cv.send({ note = "" })
@@ -230,11 +230,11 @@ cv.send({ note = "" })
     const first = runNvim(
       repo,
       `
-local cv = require("codeview")
+local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
 cv.annotate(vim.api.nvim_get_current_buf(), 2, 2, "draft survives quit")
-vim.wait(5000, function() return require("codeview.session").connected() end)
+vim.wait(5000, function() return require("pi.session").connected() end)
 vim.cmd("qa!")
 `,
     );
@@ -243,11 +243,11 @@ vim.cmd("qa!")
     const second = runNvim(
       repo,
       `
-local cv = require("codeview")
+local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
-require("codeview.session").ensure(function(_, root)
-  vim.notify("DRAFTS " .. vim.json.encode(require("codeview.annotations").list(root)))
+require("pi.session").ensure(function(_, root)
+  vim.notify("DRAFTS " .. vim.json.encode(require("pi.annotations").list(root)))
 end)
 `,
     );
@@ -264,7 +264,7 @@ end)
     const nvim = runNvim(
       repo,
       `
-local cv = require("codeview")
+local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
 local buf = vim.api.nvim_get_current_buf()
@@ -278,12 +278,12 @@ vim.notify("CLOSED " .. vim.inspect(vim.api.nvim_buf_call(buf, function() return
     );
     const notes = await until(() => nvim.notifications().some((n) => n.msg.startsWith("CLOSED") || n.msg.startsWith("SCRIPT")) && nvim.notifications(), "mapping check");
     const msgs = notes.map((n) => n.msg);
-    expect(msgs).toContain("OPEN codeview: next file in chunk");
+    expect(msgs).toContain("OPEN pi: next file in chunk");
     // Only the mapping checks matter here; a "chunk N ready" notice can race in on slow machines.
     expect(msgs.filter((m) => m.startsWith("CLOSED") || m.startsWith("SCRIPT"))).toEqual(["CLOSED vim.empty_dict()"]);
   }, TIMEOUT_MS);
 
-  it("a save before any codeview command attaches quietly and is recorded as Philipp's step", async () => {
+  it("a save before any pi command attaches quietly and is recorded as Philipp's step", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\n");
@@ -291,7 +291,7 @@ vim.notify("CLOSED " .. vim.inspect(vim.api.nvim_buf_call(buf, function() return
     const nvim = runNvim(
       repo,
       `
-require("codeview").setup()
+require("pi").setup()
 vim.cmd("edit README.md")
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "hello from Philipp" })
 vim.cmd("write")
@@ -319,10 +319,10 @@ vim.cmd("write")
     const nvim = runNvim(
       repo,
       `
-require("codeview").setup()
+require("pi").setup()
 vim.cmd("edit README.md")
-require("codeview.session").ensure(function(_, root)
-  vim.notify("ATTACHED " .. require("codeview.session").cached.sessionId .. " " .. root)
+require("pi.session").ensure(function(_, root)
+  vim.notify("ATTACHED " .. require("pi.session").cached.sessionId .. " " .. root)
 end)
 `,
     );
@@ -332,10 +332,10 @@ end)
     const wtNvim = runNvim(
       repo,
       `
-require("codeview").setup()
+require("pi").setup()
 vim.cmd("edit README.md")
-require("codeview.session").ensure(function(_, root)
-  vim.notify("ATTACHED " .. require("codeview.session").cached.sessionId .. " " .. root)
+require("pi.session").ensure(function(_, root)
+  vim.notify("ATTACHED " .. require("pi.session").cached.sessionId .. " " .. root)
 end)
 `,
       other,
@@ -356,8 +356,8 @@ end)
     const nvim = runNvim(
       repo,
       `
-local session = require("codeview.session")
-require("codeview").setup()
+local session = require("pi.session")
+require("pi").setup()
 vim.cmd("edit README.md")
 session.ensure(function()
   vim.notify("FIRST " .. session.cached.sessionId)
@@ -375,17 +375,17 @@ end)
     expect(nvim.notifications().some((n) => n.msg.includes("disconnected"))).toBe(false);
   }, TIMEOUT_MS);
 
-  it(":CodeviewAttach lists sessions by name and attaches to the chosen one", async () => {
+  it(":PiSession lists sessions by name and attaches to the chosen one", async () => {
     const repo = await makeRepo();
-    await start(repo, { sessionId: "aaaa1111-x", sessionName: "refactor", mode: "vibe" });
+    await start(repo, { sessionId: "aaaa1111-x", sessionName: "refactor", mode: "off" });
     await new Promise((r) => setTimeout(r, 20));
-    await start(repo, { sessionId: "bbbb2222-y", sessionName: "bugfix", mode: "vibe" });
+    await start(repo, { sessionId: "bbbb2222-y", sessionName: "bugfix", mode: "off" });
 
     const nvim = runNvim(
       repo,
       `
-local cv = require("codeview")
-local session = require("codeview.session")
+local cv = require("pi")
+local session = require("pi.session")
 cv.setup()
 vim.cmd("edit README.md")
 vim.ui.select = function(items, opts, on_choice)
@@ -404,23 +404,23 @@ vim.notify("ATTACHED " .. cv.session_label() .. " " .. session.cached.sessionId)
     );
     const attached = await until(() => nvim.notifications().find((n) => n.msg.startsWith("ATTACHED") || n.level === ERROR), "attach");
     const labels = nvim.notifications().find((n) => n.msg.startsWith("LABELS"))!.msg;
-    expect(labels).toContain("bugfix  [vibe, idle]");
-    expect(labels).toContain("refactor  [vibe, idle]");
+    expect(labels).toContain("bugfix  [idle]");
+    expect(labels).toContain("refactor  [idle]");
     expect(labels).not.toContain("aaaa1111-x");
     expect(attached.msg).toBe("ATTACHED bugfix bbbb2222-y");
   }, TIMEOUT_MS);
 
   it("statusline follows the agent's activity", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { sessionName: "work", mode: "vibe" });
+    const fake = await start(repo, { sessionName: "work", mode: "off" });
     fake.setIdle(false);
     const nvim = runNvim(
       repo,
       `
-local cv = require("codeview")
+local cv = require("pi")
 cv.setup()
 vim.cmd("edit README.md")
-require("codeview.session").ensure(function() end)
+require("pi.session").ensure(function() end)
 vim.wait(5000, function() return cv.statusline() ~= "" end)
 vim.notify("S0 " .. cv.statusline())
 local last = ""
@@ -436,57 +436,60 @@ end, 5)
     );
     await until(() => nvim.notifications().some((n) => n.msg.startsWith("S0")), "attached");
     await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "edit", args: { path: "a.ts" } });
-    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work [vibe] · working · edit a.ts"), "working · edit a.ts");
+    await until(() => nvim.notifications().some((n) => n.msg === "S pi: work · working · edit a.ts"), "working · edit a.ts");
     await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "edit", result: {}, isError: false });
-    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work [vibe] · working"), "working");
+    await until(() => nvim.notifications().some((n) => n.msg === "S pi: work · working"), "working");
     fake.setIdle(true);
     await fake.fire("agent_settled", { aborted: false });
-    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work [vibe] · idle"), "idle");
+    await until(() => nvim.notifications().some((n) => n.msg === "S pi: work · idle"), "idle");
   }, TIMEOUT_MS);
 
-  it("<leader>cm toggles the mode before any other command, says which mode is on and shows it in the statusline", async () => {
+  it("<leader>pm toggles checkpoint mode before any other command, says which mode is on and shows it in the statusline", async () => {
     const repo = await makeRepo();
-    await start(repo, { sessionName: "work", mode: "vibe" });
+    await start(repo, { sessionName: "work", mode: "off" });
     const nvim = runNvim(
       repo,
       `
-local cv = require("codeview")
+local cv = require("pi")
+vim.g.mapleader = " "
 cv.setup()
 vim.cmd("edit README.md")
-cv.toggle_mode()
-vim.wait(5000, function() return cv.statusline():find("%[review%]") ~= nil end)
+vim.notify("KEY " .. vim.fn.maparg("<leader>pm", "n", false, true).desc)
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<leader>pm", true, false, true), "mx", false)
+vim.wait(5000, function() return cv.statusline():find("%[checkpoints%]") ~= nil end)
 vim.notify("S1 " .. cv.statusline())
-cv.toggle_mode()
-vim.wait(5000, function() return cv.statusline():find("%[vibe%]") ~= nil end)
+vim.cmd("PiCheckpoints off")
+vim.wait(5000, function() return cv.statusline() ~= "" and cv.statusline():find("%[checkpoints%]") == nil end)
 vim.notify("S2 " .. cv.statusline())
 `,
     );
     await until(() => nvim.notifications().some((n) => n.msg.startsWith("S2") || n.level === ERROR), "two toggles");
     const msgs = nvim.notifications().map((n) => n.msg);
-    expect(msgs).toContain("codeview: review mode — the agent stops at each checkpoint for your review");
-    expect(msgs).toContain("S1 codeview: work [review] · idle");
-    expect(msgs).toContain("codeview: vibe mode — no checkpoints, changes are only recorded");
-    expect(msgs).toContain("S2 codeview: work [vibe] · idle");
-    expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("vibe");
+    expect(msgs).toContain("KEY pi: toggle checkpoint mode");
+    expect(msgs).toContain("pi: checkpoint mode on — the agent stops at each checkpoint for your review");
+    expect(msgs).toContain("S1 pi: work [checkpoints] · idle");
+    expect(msgs).toContain("pi: checkpoint mode off");
+    expect(msgs).toContain("S2 pi: work · idle");
+    expect((await repo.git("config", "pi-nvim.checkpoints")).trim()).toBe("false");
   }, TIMEOUT_MS);
 
   it("the agent's write shows in an open buffer with change marks", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "vibe" });
+    const fake = await start(repo, { mode: "off" });
     repo.write("a.txt", "one\n");
     await repo.git("add", ".");
     await repo.git("commit", "-q", "-m", "add a");
     const nvim = runNvim(
       repo,
       `
-require("codeview").setup()
+require("pi").setup()
 vim.cmd("edit a.txt")
-require("codeview.session").ensure(function() end)
-vim.wait(5000, function() return require("codeview.session").connected() end)
+require("pi.session").ensure(function() end)
+vim.wait(5000, function() return require("pi.session").connected() end)
 vim.notify("READY")
 vim.wait(15000, function()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local marks = vim.api.nvim_buf_get_extmarks(0, vim.api.nvim_create_namespace("codeview_live"), 0, -1, {})
+  local marks = vim.api.nvim_buf_get_extmarks(0, vim.api.nvim_create_namespace("pi_live"), 0, -1, {})
   if #marks > 0 then
     vim.notify("LIVE " .. table.concat(lines, "|") .. " " .. #marks)
     return true
@@ -510,18 +513,18 @@ end, 20)
     const nvim = runNvim(
       repo,
       `
-local cv = require("codeview")
+local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
 local buf = vim.api.nvim_get_current_buf()
-local ns = vim.api.nvim_create_namespace("codeview_live")
+local ns = vim.api.nvim_create_namespace("pi_live")
 local function count() return #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}) end
-require("codeview.session").ensure(function() end)
-vim.wait(5000, function() return require("codeview.session").connected() end)
+require("pi.session").ensure(function() end)
+vim.wait(5000, function() return require("pi.session").connected() end)
 vim.notify("READY")
 vim.wait(15000, function() return count() == 1 end, 20)
 vim.notify("WRITTEN " .. count())
-vim.wait(15000, function() return require("codeview.panel").visible() end, 20)
+vim.wait(15000, function() return require("pi.panel").visible() end, 20)
 vim.wait(1500, function() return count() ~= 1 end, 20)
 vim.notify("OPEN " .. count())
 cv.send({ note = "ok" })
@@ -554,12 +557,12 @@ vim.notify("SENT " .. count())
     const nvim = runNvim(
       repo,
       `
-require("codeview").setup()
-local ns = vim.api.nvim_create_namespace("codeview_live")
+require("pi").setup()
+local ns = vim.api.nvim_create_namespace("pi_live")
 local function count(buf) return #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}) end
 vim.cmd("edit a.txt")
 local a = vim.api.nvim_get_current_buf()
-require("codeview.session").ensure(function() end)
+require("pi.session").ensure(function() end)
 vim.wait(5000, function() return count(a) > 0 end, 20)
 vim.notify("ATTACHED " .. count(a))
 vim.cmd("edit b.txt")
@@ -578,14 +581,14 @@ vim.notify("OPENED " .. count(b))
     repo.write("a.txt", "one\n");
     await repo.git("add", ".");
     await repo.git("commit", "-q", "-m", "add a");
-    const fake = await start(repo, { mode: "vibe" });
+    const fake = await start(repo, { mode: "off" });
     const nvim = runNvim(
       repo,
       `
-require("codeview").setup()
+require("pi").setup()
 vim.cmd("edit a.txt")
-require("codeview.session").ensure(function() end)
-vim.wait(5000, function() return require("codeview.session").connected() end)
+require("pi.session").ensure(function() end)
+vim.wait(5000, function() return require("pi.session").connected() end)
 vim.wait(500)
 vim.notify("READY")
 vim.wait(1500, function() return false end, 20)
@@ -605,14 +608,14 @@ vim.notify("DONE " .. table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), 
     repo.write("a.txt", "one\n");
     await repo.git("add", ".");
     await repo.git("commit", "-q", "-m", "add a");
-    const fake = await start(repo, { mode: "vibe" });
+    const fake = await start(repo, { mode: "off" });
     const nvim = runNvim(
       repo,
       `
-require("codeview").setup()
+require("pi").setup()
 vim.cmd("edit a.txt")
-require("codeview.session").ensure(function() end)
-vim.wait(5000, function() return require("codeview.session").connected() end)
+require("pi.session").ensure(function() end)
+vim.wait(5000, function() return require("pi.session").connected() end)
 vim.wait(500)
 vim.notify("READY")
 vim.wait(1500, function() return false end, 20)
@@ -636,18 +639,18 @@ vim.notify("AFTER " .. table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false),
 
   it("an unsaved buffer keeps its edit and warns once when the agent changes the file", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "vibe" });
+    const fake = await start(repo, { mode: "off" });
     repo.write("a.txt", "one\n");
     await repo.git("add", ".");
     await repo.git("commit", "-q", "-m", "add a");
     const nvim = runNvim(
       repo,
       `
-require("codeview").setup()
+require("pi").setup()
 vim.cmd("edit a.txt")
 vim.api.nvim_buf_set_lines(0, 0, 1, false, { "mine" })
-require("codeview.session").ensure(function() end)
-vim.wait(5000, function() return require("codeview.session").connected() end)
+require("pi.session").ensure(function() end)
+vim.wait(5000, function() return require("pi.session").connected() end)
 vim.notify("READY")
 vim.wait(1500, function() return false end, 20)
 vim.notify("DONE " .. vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
@@ -661,7 +664,7 @@ vim.notify("DONE " .. vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
     await until(() => nvim.notifications().some((n) => n.msg.startsWith("DONE")), "done");
     const notes = nvim.notifications().map((n) => n.msg);
     expect(notes).toContain("DONE mine");
-    expect(notes.filter((m) => m === "codeview: a.txt changed on disk; your unsaved edits are kept")).toHaveLength(1);
+    expect(notes.filter((m) => m === "pi: a.txt changed on disk; your unsaved edits are kept")).toHaveLength(1);
   }, TIMEOUT_MS);
 
   it("saving a file stores the drafts' moved positions", async () => {
@@ -673,11 +676,11 @@ vim.notify("DONE " .. vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
     runNvim(
       repo,
       `
-local cv = require("codeview")
+local cv = require("pi")
 cv.setup()
 vim.cmd("edit b.txt")
 cv.annotate(vim.api.nvim_get_current_buf(), 2, 2, "moves")
-vim.wait(5000, function() return require("codeview.session").connected() end)
+vim.wait(5000, function() return require("pi.session").connected() end)
 vim.wait(1000)
 vim.api.nvim_buf_set_lines(0, 0, 0, false, { "new 1", "new 2" })
 vim.cmd("write")

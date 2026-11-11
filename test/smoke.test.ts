@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import codeview from "../extensions/codeview.ts";
+import piNvim from "../extensions/pi-nvim.ts";
 
 describe("package smoke", () => {
 	it("exports the extension default function", () => {
-		expect(typeof codeview).toBe("function");
+		expect(typeof piNvim).toBe("function");
 	});
 });

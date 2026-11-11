@@ -1,4 +1,4 @@
-local discover = require("codeview.discover")
+local discover = require("pi.discover")
 
 local spec_path = debug.getinfo(1, "S").source:sub(2)
 local repo_root = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(spec_path, ":p"))))
@@ -38,7 +38,7 @@ M["sockets skips a stale socket file"] = function()
   local old_env = vim.env.XDG_RUNTIME_DIR
   vim.env.XDG_RUNTIME_DIR = runtime
   local hash = discover.repo_hash(repo)
-  local dir = runtime .. "/pi-codeview/" .. hash
+  local dir = runtime .. "/pi-nvim/" .. hash
   vim.fn.mkdir(dir, "p")
 
   local live_path = dir .. "/live.sock"

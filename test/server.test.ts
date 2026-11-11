@@ -52,8 +52,8 @@ describe("server", () => {
     const c = await connect(p);
     c.send({ id: 1, type: "status" });
     expect(await c.next()).toEqual({ id: 1, ok: false, error: "hello required" });
-    c.send({ id: 2, type: "hello", version: 1 });
-    expect(await c.next()).toEqual({ id: 2, ok: true, result: { version: 1 } });
+    c.send({ id: 2, type: "hello", version: 2 });
+    expect(await c.next()).toEqual({ id: 2, ok: true, result: { version: 2 } });
     c.send({ id: 3, type: "status" });
     expect(await c.next()).toEqual({ id: 3, ok: true, result: { echo: "status" } });
   });
@@ -62,8 +62,8 @@ describe("server", () => {
     const p = tmp();
     await start(p);
     const c = await connect(p);
-    c.send({ id: 1, type: "hello", version: 2 });
-    expect(await c.next()).toEqual({ id: 1, ok: false, error: "protocol version mismatch: server 1, client 2" });
+    c.send({ id: 1, type: "hello", version: 1 });
+    expect(await c.next()).toEqual({ id: 1, ok: false, error: "protocol version mismatch: server 2, client 1" });
     c.send({ id: 2, type: "status" });
     expect((await c.next()).ok).toBe(false);
   });
@@ -73,7 +73,7 @@ describe("server", () => {
     fs.writeFileSync(p, "");
     await start(p);
     const c = await connect(p);
-    c.send({ id: 1, type: "hello", version: 1 });
+    c.send({ id: 1, type: "hello", version: 2 });
     expect((await c.next()).ok).toBe(true);
   });
 
@@ -90,11 +90,11 @@ describe("server", () => {
     const b = await connect(p);
     const lurker = await connect(p); // no hello: must not receive events
     for (const c of [a, b]) {
-      c.send({ id: 1, type: "hello", version: 1 });
+      c.send({ id: 1, type: "hello", version: 2 });
       await c.next();
     }
-    s.broadcast({ event: "mode_changed", data: { mode: "review" } });
-    const ev = { event: "mode_changed", data: { mode: "review" } };
+    s.broadcast({ event: "mode_changed", data: { mode: "checkpoints" } });
+    const ev = { event: "mode_changed", data: { mode: "checkpoints" } };
     expect(await a.next()).toEqual(ev);
     expect(await b.next()).toEqual(ev);
     lurker.send({ id: 9, type: "status" });
@@ -105,7 +105,7 @@ describe("server", () => {
     const p = tmp();
     await start(p, async () => { throw new Error("boom"); });
     const c = await connect(p);
-    c.send({ id: 1, type: "hello", version: 1 });
+    c.send({ id: 1, type: "hello", version: 2 });
     await c.next();
     c.send({ id: 2, type: "status" });
     expect(await c.next()).toEqual({ id: 2, ok: false, error: "boom" });
@@ -116,7 +116,7 @@ describe("server", () => {
     let seen: any;
     await start(p, async (r) => { seen = r; return { text: r.text }; });
     const c = await connect(p);
-    c.send({ id: 1, type: "hello", version: 1 });
+    c.send({ id: 1, type: "hello", version: 2 });
     await c.next();
     const bytes = Buffer.from(encode({ id: 2, type: "status", text: "Größe ä" }), "utf8");
     const cut = bytes.indexOf(Buffer.from("ö")) + 1; // inside the two-byte ö
@@ -133,7 +133,7 @@ describe("server", () => {
     const c = await connect(p);
     c.sock.write("not json\n");
     expect(await c.next()).toEqual({ id: null, ok: false, error: "invalid json" });
-    c.send({ id: 1, type: "hello", version: 1 });
+    c.send({ id: 1, type: "hello", version: 2 });
     expect((await c.next()).ok).toBe(true);
   });
 
@@ -148,13 +148,13 @@ describe("server", () => {
   });
 
   it("socketPath follows the scheme", () => {
-    expect(socketPath("abc", "sess", "/run/u")).toBe("/run/u/pi-codeview/abc/sess.sock");
+    expect(socketPath("abc", "sess", "/run/u")).toBe("/run/u/pi-nvim/abc/sess.sock");
     const saved = process.env.XDG_RUNTIME_DIR;
     delete process.env.XDG_RUNTIME_DIR;
     try {
-      expect(socketPath("abc", "sess")).toBe(path.join(os.tmpdir(), "pi-codeview", "abc", "sess.sock"));
+      expect(socketPath("abc", "sess")).toBe(path.join(os.tmpdir(), "pi-nvim", "abc", "sess.sock"));
       process.env.XDG_RUNTIME_DIR = "/x";
-      expect(socketPath("abc", "sess")).toBe("/x/pi-codeview/abc/sess.sock");
+      expect(socketPath("abc", "sess")).toBe("/x/pi-nvim/abc/sess.sock");
     } finally {
       if (saved === undefined) delete process.env.XDG_RUNTIME_DIR; else process.env.XDG_RUNTIME_DIR = saved;
     }

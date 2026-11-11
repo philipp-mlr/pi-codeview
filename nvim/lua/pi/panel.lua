@@ -1,6 +1,6 @@
 -- Chunk list in a left vertical split.
-local diff = require("codeview.diff")
-local session = require("codeview.session")
+local diff = require("pi.diff")
+local session = require("pi.session")
 
 local M = {}
 
@@ -73,7 +73,7 @@ function M.refresh()
   end
   session.request("list_chunks", nil, function(err, list)
     if err then
-      return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
+      return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
     render(list)
   end)
@@ -84,21 +84,21 @@ local function ensure_buf()
     return buf
   end
   buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(buf, "codeview://panel")
+  vim.api.nvim_buf_set_name(buf, "pi://panel")
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].swapfile = false
   vim.bo[buf].modifiable = false
-  vim.bo[buf].filetype = "codeview"
+  vim.bo[buf].filetype = "pi-chunks"
   local opts = { buffer = buf, nowait = true }
   vim.keymap.set("n", "<CR>", function()
     local n = chunks[vim.api.nvim_win_get_cursor(0)[1]]
     if n then
       diff.open(n)
     end
-  end, vim.tbl_extend("force", opts, { desc = "codeview: open chunk diff" }))
-  vim.keymap.set("n", "r", M.refresh, vim.tbl_extend("force", opts, { desc = "codeview: refresh panel" }))
-  vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "codeview: close panel" }))
+  end, vim.tbl_extend("force", opts, { desc = "pi: open chunk diff" }))
+  vim.keymap.set("n", "r", M.refresh, vim.tbl_extend("force", opts, { desc = "pi: refresh panel" }))
+  vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "pi: close panel" }))
   return buf
 end
 

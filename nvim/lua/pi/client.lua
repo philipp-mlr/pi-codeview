@@ -2,7 +2,7 @@ local uv = vim.uv
 
 local M = {}
 
-local PROTOCOL_VERSION = 1
+local PROTOCOL_VERSION = 2
 local HELLO_TIMEOUT_MS = 1000
 
 local Conn = {}

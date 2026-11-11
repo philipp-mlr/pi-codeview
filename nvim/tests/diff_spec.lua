@@ -1,5 +1,5 @@
-local session = require("codeview.session")
-local diff = require("codeview.diff")
+local session = require("pi.session")
+local diff = require("pi.diff")
 
 local M = {}
 
@@ -45,7 +45,7 @@ M["user buffer-local file keys are restored after the diff tab closes"] = functi
   vim.fn.bufload(buf)
   vim.keymap.set("n", "]f", "<Nop>", { buffer = buf, desc = "user" })
   open_chunk(root, sha)
-  assert(buffer_map(buf, "]f").desc ~= "user", "codeview did not map ]f")
+  assert(buffer_map(buf, "]f").desc ~= "user", "pi did not map ]f")
   vim.cmd("tabclose")
   diff.cleanup()
   assert(buffer_map(buf, "]f").desc == "user", vim.inspect(buffer_map(buf, "]f")))
@@ -53,7 +53,7 @@ M["user buffer-local file keys are restored after the diff tab closes"] = functi
 end
 
 local function why_text(buf)
-  local ns = vim.api.nvim_create_namespace("codeview_why")
+  local ns = vim.api.nvim_create_namespace("pi_why")
   local marks = vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
   local out = {}
   for _, mark in ipairs(marks) do

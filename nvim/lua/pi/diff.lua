@@ -1,6 +1,6 @@
 -- Chunk diff view: one tabpage per chunk, one file at a time, `fromSha` against the live file
 -- (open chunk) or against `toSha` (past chunks).
-local session = require("codeview.session")
+local session = require("pi.session")
 
 local M = {}
 local NOTE_MAX_CHARS = 200 -- virt_lines do not wrap
@@ -87,7 +87,7 @@ local function step(delta)
   M.show(view, index)
 end
 
-local mapped = {} -- buf -> { ["]f"] = user map dict or false, ["[f"] = ... } while it carries the codeview file keys
+local mapped = {} -- buf -> { ["]f"] = user map dict or false, ["[f"] = ... } while it carries the pi file keys
 
 -- Removes the file keys from every buffer no live diff window shows any more, so they do not
 -- linger on the user's real file buffers.
@@ -126,16 +126,16 @@ local function map_file_keys(buf)
       local existing = vim.api.nvim_buf_call(buf, function()
         return vim.fn.maparg(lhs, "n", false, true)
       end)
-      local user_owned = existing.buffer == 1 and not vim.startswith(existing.desc or "", "codeview:")
+      local user_owned = existing.buffer == 1 and not vim.startswith(existing.desc or "", "pi:")
       mapped[buf][lhs] = user_owned and existing or false
     end
   end
   vim.keymap.set("n", "]f", function()
     step(1)
-  end, { buffer = buf, desc = "codeview: next file in chunk" })
+  end, { buffer = buf, desc = "pi: next file in chunk" })
   vim.keymap.set("n", "[f", function()
     step(-1)
-  end, { buffer = buf, desc = "codeview: previous file in chunk" })
+  end, { buffer = buf, desc = "pi: previous file in chunk" })
 end
 
 function M.show(view, index)
@@ -148,7 +148,7 @@ function M.show(view, index)
     end)
   end
 
-  local left = scratch(("codeview://%d/%s@from"):format(chunk.n, file.path), git_show(view.root, chunk.fromSha, file.path), file.path)
+  local left = scratch(("pi://%d/%s@from"):format(chunk.n, file.path), git_show(view.root, chunk.fromSha, file.path), file.path)
   vim.api.nvim_win_set_buf(view.left, left)
 
   if chunk.status == "open" then
@@ -156,11 +156,11 @@ function M.show(view, index)
       vim.cmd("hide edit " .. vim.fn.fnameescape(view.root .. "/" .. file.path))
     end)
   else
-    local right = scratch(("codeview://%d/%s@to"):format(chunk.n, file.path), git_show(view.root, chunk.toSha, file.path), file.path)
+    local right = scratch(("pi://%d/%s@to"):format(chunk.n, file.path), git_show(view.root, chunk.toSha, file.path), file.path)
     vim.api.nvim_win_set_buf(view.right, right)
   end
 
-  local ns = vim.api.nvim_create_namespace("codeview_why")
+  local ns = vim.api.nvim_create_namespace("pi_why")
   -- virt_lines neither wrap nor span lines: one line each, whitespace collapsed, note capped.
   local function one_line(text)
     return (vim.trim((text or ""):gsub("%s+", " ")))
@@ -210,12 +210,12 @@ function M.open(n)
   end
   session.request("get_chunk", { n = n }, function(err, result)
     if err then
-      return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
+      return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
     local chunk = result.chunk
     local files = files_of(chunk)
     if #files == 0 then
-      return vim.notify(("codeview: chunk %d changes no files"):format(n), vim.log.levels.WARN)
+      return vim.notify(("pi: chunk %d changes no files"):format(n), vim.log.levels.WARN)
     end
     vim.cmd("tabnew")
     vim.bo.bufhidden = "wipe"

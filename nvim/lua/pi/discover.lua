@@ -63,7 +63,7 @@ function M.sockets(dir)
   if not hash then
     return {}
   end
-  local sock_dir = runtime_dir() .. "/pi-codeview/" .. hash
+  local sock_dir = runtime_dir() .. "/pi-nvim/" .. hash
   local entries = {}
   for name, kind in vim.fs.dir(sock_dir) do
     if name:match("%.sock$") and (kind == "socket" or kind == "unknown") then

@@ -1,7 +1,7 @@
-local live = require("codeview.live")
+local live = require("pi.live")
 
 local M = {}
-local ns = vim.api.nvim_create_namespace("codeview_live")
+local ns = vim.api.nvim_create_namespace("pi_live")
 
 local function sh(root, ...)
   local r = vim.system({ "git", "-C", root, ... }, { text = true }):wait()
@@ -54,8 +54,8 @@ M["a changed file is reloaded and marked on exactly the changed lines"] = functi
   assert(vim.deep_equal(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "one", "TWO", "three", "four", "five" }))
   local got = marks(buf)
   assert(#got == 2, vim.inspect(got))
-  assert(got[1].line == 2 and got[1].hl == "CodeviewLiveChange", vim.inspect(got))
-  assert(got[2].line == 5 and got[2].hl == "CodeviewLiveAdd", vim.inspect(got))
+  assert(got[1].line == 2 and got[1].hl == "PiLiveChange", vim.inspect(got))
+  assert(got[2].line == 5 and got[2].hl == "PiLiveAdd", vim.inspect(got))
   live.clear()
 end
 
@@ -66,7 +66,7 @@ M["a deleted-only hunk is marked on the line above"] = function()
   live.refresh(root, base)
   wait_for(function() return #marks(buf) == 1 end)
   local got = marks(buf)
-  assert(#got == 1 and got[1].line == 1 and got[1].sign == "▁" and got[1].hl == "CodeviewLiveDelete", vim.inspect(got))
+  assert(#got == 1 and got[1].line == 1 and got[1].sign == "▁" and got[1].hl == "PiLiveDelete", vim.inspect(got))
   live.clear()
 end
 
@@ -85,7 +85,7 @@ M["a modified buffer is kept and warns once"] = function()
   live.refresh(root, base)
   vim.notify = original
   assert(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == "mine")
-  assert(#notes == 1 and notes[1] == "codeview: a.txt changed on disk; your unsaved edits are kept", vim.inspect(notes))
+  assert(#notes == 1 and notes[1] == "pi: a.txt changed on disk; your unsaved edits are kept", vim.inspect(notes))
   vim.bo[buf].modified = false
   live.clear()
 end

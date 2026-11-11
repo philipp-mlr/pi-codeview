@@ -14,7 +14,7 @@ export interface TestRepo {
 }
 
 export async function makeRepo(opts: { commit?: boolean } = {}): Promise<TestRepo> {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "codeview-repo-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-nvim-repo-")));
   const git = async (...args: string[]) => {
     const { stdout } = await execFileAsync("git", args, { cwd: root });
     return stdout;
