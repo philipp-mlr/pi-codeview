@@ -52,6 +52,7 @@ handler failures are returned as `ok:false`.
   `<tool> <target>` for `tool`, the note for `checkpoint`, `settled` or `aborted` for `settled`.
 - `prompt`: `{"queued":true}` when a chunk is open and the prompt waits for its review, else `{"queued":false}` (sent to the agent).
 - `list_chunks`: array of chunks. `get_chunk`: `{"chunk":<chunk>,"diff":"<unified diff fromSha..toSha>"}`.
+- A chunk may carry `why`: `{"<repo-relative path>":"<one short line, max 200 chars>"}`, set from the `files` argument of the agent's `checkpoint` call. Only paths changed in the chunk are kept; the field is absent when empty. Clients must tolerate its absence.
 - `send`: `{"chunk":<closed chunk>}` for a review, `{"chunk":null}` when sent as a prompt (no open chunk).
 - `save_drafts`: `{"saved":<count>}`. `human_write`: `{"files":[<paths changed since the last snapshot>]}`. `set_mode`: `{"mode":"review"}`.
 

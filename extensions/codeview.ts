@@ -21,13 +21,20 @@ export default function codeview(pi: ExtensionAPI): void {
     description: "Hand the changes since the last checkpoint to Philipp for review and wait for his review.",
     promptSnippet: "Submit the current step for Philipp's review and wait for it",
     promptGuidelines: CHECKPOINT_GUIDELINES,
-    parameters: Type.Object({ note: Type.String({ description: "What was done in this step and why" }) }),
+    parameters: Type.Object({
+      note: Type.String({ description: "What was done in this step and why" }),
+      files: Type.Optional(
+        Type.Array(Type.Object({ path: Type.String(), why: Type.String() }), {
+          description: "One entry per changed file: repo-relative path and one short line on why it changed.",
+        }),
+      ),
+    }),
     defaultActive: false,
     // A parallel sibling edit could land after the chunk snapshot and be hidden from review.
     executionMode: "sequential",
     async execute(_id, params, signal) {
       if (!loop) throw new Error(NOT_A_REPO);
-      const text = await loop.checkpoint(params.note, signal);
+      const text = await loop.checkpoint(params.note, signal, params.files);
       return { content: [{ type: "text", text }], details: undefined };
     },
   });

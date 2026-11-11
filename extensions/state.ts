@@ -2,6 +2,8 @@ import type { Mode } from "./git.ts";
 
 export type { Mode } from "./git.ts";
 
+const WHY_MAX_CHARS = 200;
+
 export type Author = "agent" | "human";
 /**
  * One recorded change: `from` is the snapshot it starts at, `sha` the one it ends at.
@@ -22,6 +24,8 @@ export type Chunk = {
   humanSteps: Step[];
   annotations: Annotation[];
   reviewNote?: string;
+  /** One short line per changed file, keyed by repo-relative path (agent-supplied at checkpoint). */
+  why?: Record<string, string>;
 };
 
 export type Serialized = {
@@ -105,7 +109,12 @@ export class CodeviewState {
     return this.chunks.find((c) => c.status === "open");
   }
 
-  createChunk(note: string, toSha: string, status: "open" | "recorded" = "open"): Chunk {
+  createChunk(
+    note: string,
+    toSha: string,
+    status: "open" | "recorded" = "open",
+    files: Array<{ path: string; why: string }> = [],
+  ): Chunk {
     if (status === "open" && this.openChunk()) throw new Error("chunk already open");
     const chunk: Chunk = {
       n: this.chunks.length + 1,
@@ -118,6 +127,13 @@ export class CodeviewState {
       humanSteps: this.humanSteps(),
       annotations: [],
     };
+    const known = new Set([...chunk.agentFiles, ...chunk.humanFiles]);
+    const why: Record<string, string> = {};
+    for (const f of files) {
+      const path = f.path.replace(/^\.\//, "");
+      if (known.has(path)) why[path] = f.why.slice(0, WHY_MAX_CHARS);
+    }
+    if (Object.keys(why).length > 0) chunk.why = why;
     this.chunks.push(chunk);
     this.setBaseline(toSha);
     return chunk;

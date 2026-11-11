@@ -159,6 +159,22 @@ function M.show(view, index)
     vim.api.nvim_win_set_buf(view.right, right)
   end
 
+  local ns = vim.api.nvim_create_namespace("codeview_why")
+  local virt = {}
+  if chunk.note and chunk.note ~= "" then
+    virt[#virt + 1] = { { "  " .. chunk.note, "Title" } }
+  end
+  local why = chunk.why and chunk.why[file.path]
+  if why and why ~= "" then
+    virt[#virt + 1] = { { "  why: " .. why, "Comment" } }
+  end
+  if #virt > 0 then
+    vim.api.nvim_buf_set_extmark(left, ns, 0, 0, { virt_lines = virt, virt_lines_above = true })
+    vim.api.nvim_win_call(view.left, function()
+      vim.fn.winrestview({ topline = 1, topfill = #virt })
+    end)
+  end
+
   local winbar = ("chunk %d · %d/%d · %s · %s"):format(chunk.n, index, #view.files, file.path, file.label)
   for _, win in ipairs({ view.left, view.right }) do
     vim.wo[win].winbar = winbar:gsub("%%", "%%%%")

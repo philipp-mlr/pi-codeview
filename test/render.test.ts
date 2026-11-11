@@ -156,6 +156,10 @@ describe("CHECKPOINT_GUIDELINES", () => {
     expect(CHECKPOINT_GUIDELINES.join("\n")).toMatch(/after each logical step[\s\S]*before starting the next/);
   });
 
+  it("CHECKPOINT_GUIDELINES says to pass files with one short line per changed file", () => {
+    expect(CHECKPOINT_GUIDELINES.join("\n")).toMatch(/files[^\n]*one short line per changed file/);
+  });
+
   it("CHECKPOINT_GUIDELINES says the note states what was done and why", () => {
     expect(CHECKPOINT_GUIDELINES.join("\n")).toMatch(/note[^\n]*what was done[^\n]*why/);
   });

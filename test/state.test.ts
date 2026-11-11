@@ -15,6 +15,21 @@ describe("CodeviewState", () => {
     expect(s.baseline).toBe("tip");
     expect(s.steps).toEqual([]);
   });
+  it("createChunk keeps why only for chunk files, normalizes ./ and caps length", () => {
+    const s = new CodeviewState();
+    s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts"], lines: 1 });
+    const c = s.createChunk("n", "t", "open", [
+      { path: "./a.ts", why: "x".repeat(300) },
+      { path: "zzz.ts", why: "unknown" },
+    ]);
+    expect(c.why).toEqual({ "a.ts": "x".repeat(200) });
+  });
+  it("createChunk omits why when empty and restores chunks persisted without it", () => {
+    const s = new CodeviewState();
+    s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts"], lines: 1 });
+    expect("why" in s.createChunk("n", "t", "open", [{ path: "nope", why: "w" }])).toBe(false);
+    expect(new CodeviewState(s.serialize()).chunks[0]!.why).toBeUndefined();
+  });
   it("human lines do not count toward agentLines", () => {
     const s = new CodeviewState();
     s.recordStep({ from: "f1", sha: "1", author: "human", files: ["a.ts"], lines: 99 });

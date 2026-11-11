@@ -147,12 +147,12 @@ export class ReviewLoop {
 
   // --- agent side ---------------------------------------------------------
 
-  async checkpoint(note: string, signal?: AbortSignal): Promise<string> {
+  async checkpoint(note: string, signal?: AbortSignal, files?: Array<{ path: string; why: string }>): Promise<string> {
     const chunk = await this.serial(async () => {
       const open = this.state.openChunk();
       if (open) return open;
       const { sha } = await this.recordSince("agent");
-      const created = this.state.createChunk(note, sha);
+      const created = this.state.createChunk(note, sha, "open", files);
       this.persist();
       this.broadcast("chunk_ready", { chunk: created });
       return created;

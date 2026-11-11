@@ -52,6 +52,44 @@ M["user buffer-local file keys are restored after the diff tab closes"] = functi
   assert(vim.tbl_isempty(buffer_map(buf, "[f")), "[f leaked: " .. vim.inspect(buffer_map(buf, "[f")))
 end
 
+local function why_text(buf)
+  local ns = vim.api.nvim_create_namespace("codeview_why")
+  local marks = vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
+  local out = {}
+  for _, mark in ipairs(marks) do
+    for _, line in ipairs(mark[4].virt_lines or {}) do
+      out[#out + 1] = line[1][1]
+    end
+  end
+  return out
+end
+
+M["diff view shows the note and why above the left buffer and updates on ]f"] = function()
+  local root, sha = chunk_repo()
+  vim.fn.writefile({ "two" }, root .. "/b.txt")
+  session.root = root
+  session.cached = { sessionId = "why" }
+  local original = session.request
+  session.request = function(_, _, cb)
+    cb(nil, {
+      chunk = {
+        n = 1, status = "open", fromSha = sha, note = "did things", humanFiles = {},
+        agentFiles = { "a.txt", "b.txt" }, why = { ["a.txt"] = "because a" },
+      },
+    })
+  end
+  diff.open(1)
+  session.request = original
+  local view_left = vim.fn.win_getid(1, vim.api.nvim_get_current_tabpage())
+  local left = vim.api.nvim_win_get_buf(view_left)
+  assert(vim.deep_equal(why_text(left), { "  did things", "  why: because a" }), vim.inspect(why_text(left)))
+  vim.cmd("normal ]f")
+  left = vim.api.nvim_win_get_buf(view_left)
+  assert(vim.deep_equal(why_text(left), { "  did things" }), vim.inspect(why_text(left)))
+  vim.cmd("tabclose")
+  session.cached = nil
+end
+
 M["viewed is per pi session, not per chunk number"] = function()
   local root, sha = chunk_repo()
   open_chunk(root, sha, "first")

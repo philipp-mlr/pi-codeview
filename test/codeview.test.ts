@@ -143,6 +143,18 @@ describe("codeview extension", () => {
     expect((await client.request("list_chunks")).result).toHaveLength(1);
   });
 
+  it("checkpoint files store why on the chunk", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "review" });
+    const client = await connect(repo);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    void fake.callTool("checkpoint", { note: "add a", files: [{ path: "./a.txt", why: "new file" }, { path: "x", why: "?" }] });
+    await until(() => client.events.find((e) => e.event === "chunk_ready"));
+    expect((await client.request("status")).result.openChunk.why).toEqual({ "a.txt": "new file" });
+    expect((await client.request("list_chunks")).result[0].why).toEqual({ "a.txt": "new file" });
+    expect((await client.request("get_chunk", { n: 1 })).result.chunk.why).toEqual({ "a.txt": "new file" });
+  });
+
   it("checkpoint blocks until send, returns the rendered review", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "review" });
