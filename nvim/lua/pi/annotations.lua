@@ -31,6 +31,91 @@ local function position(item)
   return start_line, end_line
 end
 
+local REBUILD_MS = 50
+local attached = {} -- buf -> true while an on_lines callback rebuilds that buffer's extra marks
+local timers = {} -- buf -> debounce timer
+
+local function buffer_items(buf)
+  local found = {}
+  for _, item in ipairs(items) do
+    if item.buf == buf then
+      found[#found + 1] = item
+    end
+  end
+  return found
+end
+
+local function delete_extras(item)
+  for _, id in ipairs(item.extra_ids) do
+    pcall(vim.api.nvim_buf_del_extmark, item.buf, ns, id)
+  end
+  item.extra_ids = {}
+end
+
+-- The main extmark is the source of truth for the range; the number highlight and the text line
+-- are derived from it, since a ranged extmark highlights only its first line's number.
+local function build_extras(item)
+  local s, e = position(item)
+  if not s then
+    return
+  end
+  delete_extras(item)
+  for line = s, e do
+    item.extra_ids[#item.extra_ids + 1] = vim.api.nvim_buf_set_extmark(item.buf, ns, line - 1, 0, {
+      number_hl_group = "PiAnnotationSign",
+    })
+  end
+  local text = item.note:gsub("%s+", " ")
+  item.extra_ids[#item.extra_ids + 1] = vim.api.nvim_buf_set_extmark(item.buf, ns, e - 1, 0, {
+    virt_lines = { { { "  ✎ " .. text, "PiAnnotation" } } },
+  })
+end
+
+local function schedule_rebuild(buf)
+  local timer = timers[buf]
+  if not timer then
+    timer = vim.uv.new_timer()
+    timers[buf] = timer
+  end
+  timer:stop()
+  timer:start(REBUILD_MS, 0, vim.schedule_wrap(function()
+    if not vim.api.nvim_buf_is_valid(buf) then
+      return
+    end
+    for _, item in ipairs(buffer_items(buf)) do
+      build_extras(item)
+    end
+  end))
+end
+
+local function attach(buf)
+  if attached[buf] then
+    return
+  end
+  attached[buf] = true
+  vim.api.nvim_buf_attach(buf, false, {
+    on_lines = function()
+      if #buffer_items(buf) == 0 then
+        attached[buf] = nil
+        local timer = timers[buf]
+        if timer then
+          timer:stop()
+          timer:close()
+          timers[buf] = nil
+        end
+        return true
+      end
+      schedule_rebuild(buf)
+    end,
+    on_reload = function()
+      schedule_rebuild(buf)
+    end,
+    on_detach = function()
+      attached[buf] = nil
+    end,
+  })
+end
+
 local function place(buf, start_line, end_line, note)
   local last = vim.api.nvim_buf_line_count(buf)
   start_line = math.max(1, math.min(start_line, last))
@@ -44,21 +129,11 @@ local function place(buf, start_line, end_line, note)
     sign_hl_group = "PiAnnotationSign",
     priority = 200,
   })
-  -- A ranged extmark highlights the number of its first line only, so every line gets its own mark.
-  local extra_ids = {}
-  for line = start_line, end_line do
-    extra_ids[#extra_ids + 1] = vim.api.nvim_buf_set_extmark(buf, ns, line - 1, 0, {
-      number_hl_group = "PiAnnotationSign",
-      right_gravity = false,
-    })
-  end
-  local text = note:gsub("%s+", " ")
-  extra_ids[#extra_ids + 1] = vim.api.nvim_buf_set_extmark(buf, ns, end_line - 1, 0, {
-    virt_lines = { { { "  ✎ " .. text, "PiAnnotation" } } },
-    right_gravity = false,
-  })
   next_id = next_id + 1
-  items[#items + 1] = { id = next_id, buf = buf, extmark_id = extmark_id, extra_ids = extra_ids, note = note }
+  local item = { id = next_id, buf = buf, extmark_id = extmark_id, extra_ids = {}, note = note }
+  items[#items + 1] = item
+  build_extras(item)
+  attach(buf)
 end
 
 function M.add(buf, start_line, end_line, note)
@@ -69,9 +144,7 @@ end
 local function drop(item)
   if vim.api.nvim_buf_is_valid(item.buf) then
     pcall(vim.api.nvim_buf_del_extmark, item.buf, ns, item.extmark_id)
-    for _, id in ipairs(item.extra_ids) do
-      pcall(vim.api.nvim_buf_del_extmark, item.buf, ns, id)
-    end
+    delete_extras(item)
   end
 end
 

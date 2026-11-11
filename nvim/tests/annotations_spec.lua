@@ -230,9 +230,104 @@ M["sign has priority 200, above live marks, and the number highlight covers ever
 end
 
 M["live marks use a lower sign priority than annotations"] = function()
-  local src = table.concat(vim.fn.readfile(vim.api.nvim_get_runtime_file("lua/pi/live.lua", false)[1]), "\n")
-  local p = tonumber(src:match("priority = (%d+)"))
-  assert(p and p < 200, tostring(p))
+  annotations.clear()
+  local live = require("pi.live")
+  local root = temp_root()
+  local function git(...)
+    local r = vim.system({ "git", ... }, { cwd = root, text = true }):wait()
+    assert(r.code == 0, r.stderr)
+    return vim.trim(r.stdout)
+  end
+  git("init", "-q")
+  git("config", "user.email", "t@example.com")
+  git("config", "user.name", "t")
+  git("config", "commit.gpgsign", "false")
+  vim.fn.writefile(numbered(5), root .. "/l.txt")
+  git("add", "l.txt")
+  git("commit", "-q", "-m", "base")
+  local base = git("rev-parse", "HEAD")
+  local buf = file_buf(root, "l.txt", numbered(5))
+  vim.bo[buf].buflisted = true
+  vim.api.nvim_buf_set_lines(buf, 1, 2, false, { "changed" })
+  vim.bo[buf].modified = false
+  live.refresh(root, base)
+  local live_ns = vim.api.nvim_create_namespace("pi_live")
+  local live_marks = {}
+  vim.wait(3000, function()
+    live_marks = vim.api.nvim_buf_get_extmarks(buf, live_ns, 0, -1, { details = true })
+    return #live_marks > 0
+  end)
+  assert(#live_marks > 0, "live.lua placed no mark")
+  annotations.add(buf, 2, 2, "note")
+  local sign
+  for _, m in ipairs(marks(buf)) do
+    if m[4].sign_text then sign = m end
+  end
+  assert(live_marks[1][4].priority < sign[4].priority, vim.inspect({ live_marks[1][4], sign[4] }))
+  live.clear()
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+local function wait_for(cond, what)
+  assert(vim.wait(1000, cond, 10), "timed out: " .. what)
+end
+
+local function number_rows(buf)
+  local rows = {}
+  for _, m in ipairs(marks(buf)) do
+    if m[4].number_hl_group == "PiAnnotationSign" then rows[#rows + 1] = m[2] end
+  end
+  table.sort(rows)
+  return rows
+end
+
+M["text mark stays on the last row when a line is inserted at the last row"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local buf = file_buf(root, "i.txt", numbered(10))
+  annotations.add(buf, 3, 5, "note")
+  vim.api.nvim_buf_set_lines(buf, 4, 4, false, { "new" }) -- like `O` on the last line
+  wait_for(function()
+    local v = virt_line_marks(buf)
+    return #v == 1 and v[1][2] == 5 and #number_rows(buf) == 4
+  end, "marks rebuilt on the grown range")
+  assert(vim.deep_equal(number_rows(buf), { 2, 3, 4, 5 }), vim.inspect(number_rows(buf)))
+  local list = annotations.list(root)
+  assert(list[1].startLine == 3 and list[1].endLine == 6, vim.inspect(list))
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["number marks cover a line inserted in the middle of the range"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local buf = file_buf(root, "m.txt", numbered(10))
+  annotations.add(buf, 3, 5, "note")
+  vim.api.nvim_buf_set_lines(buf, 3, 3, false, { "mid" })
+  wait_for(function() return #number_rows(buf) == 4 end, "four number marks")
+  assert(vim.deep_equal(number_rows(buf), { 2, 3, 4, 5 }), vim.inspect(number_rows(buf)))
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["deleting the last line of the range leaves marks only on remaining rows"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local buf = file_buf(root, "d2.txt", numbered(10))
+  annotations.add(buf, 3, 5, "note")
+  vim.api.nvim_buf_set_lines(buf, 4, 5, false, {})
+  wait_for(function()
+    local v = virt_line_marks(buf)
+    return #v == 1 and v[1][2] == 4 and #number_rows(buf) == 3
+  end, "marks rebuilt on the range after the deletion")
+  -- The range end sits at column 0 of the following line, so deleting the last line pulls it up to that line.
+  local list = annotations.list(root)
+  assert(list[1].startLine == 3 and list[1].endLine == 5, vim.inspect(list))
+  assert(vim.deep_equal(number_rows(buf), { 2, 3, 4 }), vim.inspect(number_rows(buf)))
+  annotations.clear()
+  assert(#marks(buf) == 0, vim.inspect(marks(buf)))
+  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 M["remove deletes the sign, number and text marks"] = function()
