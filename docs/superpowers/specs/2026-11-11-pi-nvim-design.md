@@ -15,7 +15,7 @@ The project is renamed to **pi.nvim**. What it keeps from codeview is the
 core idea: the code stays in view. He asks from his editor with real
 context (file, selection, cursor line, diagnostics), sees what the agent is
 doing (statusline, buffers reloading, change marks), and can point the
-agent at lines with notes.
+agent at lines with annotations.
 
 ## Goals
 
@@ -23,8 +23,9 @@ agent at lines with notes.
   buffer text, and LSP diagnostics as context.
 - See what the agent does while it works: statusline, live reload of
   unmodified buffers, change marks.
-- Leave notes on lines and send them to the agent; notes are clearly
-  visible in the buffer.
+- Annotate lines and send the annotations to the agent; annotations are
+  clearly visible in the buffer, and sending says plainly that it sends
+  them.
 - Cancel the agent's current run from Neovim.
 - Choose and switch the pi session per worktree.
 - Checkpoint mode (opt-in, per repo): today's review loop, unchanged in
@@ -58,9 +59,9 @@ agent at lines with notes.
 | Session log entry | `pi-codeview-state` | `pi-nvim-state` |
 | Steer message customType | `pi-codeview` | `pi-nvim` |
 | pi footer status key | `codeview` | `pi-nvim` |
-| Namespaces / augroup | `codeview`, `codeview_live`, `codeview_why` | `pi_notes`, `pi_live`, `pi_why`; augroup `pi` |
+| Namespaces / augroup | `codeview`, `codeview_live`, `codeview_why` | `pi_annotations`, `pi_live`, `pi_why`; augroup `pi` |
 | Scratch buffers | `codeview://…` | `pi://…` |
-| Highlight groups | `CodeviewLive*` | `PiLive`, `PiLiveAdd`, `PiLiveChange`, `PiLiveDelete`, `PiNote`, `PiNoteSign` |
+| Highlight groups | `CodeviewLive*` | `PiLive`, `PiLiveAdd`, `PiLiveChange`, `PiLiveDelete`, `PiAnnotation`, `PiAnnotationSign` |
 
 Migration (read old, write new; no manual steps):
 - `pi-nvim.checkpoints` unset → fall back to `pi-codeview.mode` (`review`
@@ -90,9 +91,9 @@ Migration (read old, write new; no manual steps):
 | `pa` | `:PiAsk` | Ask pi. Normal: file + cursor line + file diagnostics. Visual: selection text + range + its diagnostics. |
 | `pc` | `:PiCancel` | Cancel the agent's current run (pi's abort). In checkpoint mode a waiting chunk stays open, as with Escape in pi. |
 | `ps` | `:PiSession` | Choose the pi session for this worktree. |
-| `pn` | `:PiNote` | Note on the line / selection. |
-| `px` | `:PiNoteRemove` | Remove the note at the cursor. |
-| `pr` | `:PiSend` | Send notes (+ optional message). In checkpoint mode: the review of the open chunk. |
+| `pn` | `:PiAnnotate` | Annotate the line / selection. |
+| `px` | `:PiAnnotationRemove` | Remove the annotation at the cursor. |
+| `pr` | `:PiSendAnnotations` | Send all annotations of this worktree (+ optional message). In checkpoint mode: the review of the open chunk, with its annotations. |
 | `pv` | `:PiChunks` | Chunk panel. |
 | `pm` | `:PiCheckpoints [on\|off]` | Toggle checkpoint mode; says which mode is now on. |
 
@@ -101,7 +102,7 @@ Default keys still never replace an existing mapping (current behaviour).
 
 ### Delivery (unchanged, stated for the builder)
 
-- Ask and note-send use the existing path: idle → `sendUserMessage` starts a
+- Ask and sending annotations use the existing path: idle → `sendUserMessage` starts a
   run; busy → `deliverAs: "followUp"`. In checkpoint mode, with a chunk
   open, a prompt is queued behind the review as today.
 - Unsaved buffer text: as today. Visual mode sends the selected text from
@@ -122,24 +123,36 @@ Default keys still never replace an existing mapping (current behaviour).
 
 - Collected with `vim.diagnostic.get(buf)`, severity ERROR and WARN only.
 - Ask in normal mode: the whole file; visual mode: lines of the selection.
-  Notes: the diagnostics on the note's lines.
-- At most 20 per prompt or note, errors first, then by line.
+  Annotations: the diagnostics on the annotated lines.
+- At most 20 per prompt or annotation, errors first, then by line.
 - Wire: `PromptContext.diagnostics?` and `Annotation.diagnostics?`, each
   `{ line: number; severity: "error" | "warning"; message: string; source?: string }`.
-- Rendered for the agent under the context or note:
+- Rendered for the agent under the context or annotation:
   `Diagnostics:` then one line each, `  <path>:<line> <severity> <message> [<source>]`,
   message whitespace-collapsed and cut at 200 characters.
 
-### Notes are visible
+### Annotations are visible
 
 (Fixes the reported "I don't see annotations".)
-- The note text is shown on its own line below the noted range
-  (`virt_lines`), `  ✎ <note>`, highlight `PiNote` (default linked to
+- The annotation text is shown on its own line below the annotated range
+  (`virt_lines`), `  ✎ <text>`, highlight `PiAnnotation` (default linked to
   `DiagnosticInfo`), not at end of line.
 - Sign `✎` on the first line with a priority above live marks and
-  gitsigns; highlight `PiNoteSign`.
+  gitsigns; highlight `PiAnnotationSign`.
 - The whole range is marked in the number column (`number_hl_group`
-  `PiNoteSign`), so a multi-line note reads as one block.
+  `PiAnnotationSign`), so a multi-line annotation reads as one block.
+
+### Sending annotations says what it sends
+
+- Key description and command name: "send annotations".
+- Before sending, the message prompt names the count: `pi: send 3
+  annotations — optional message:` (in checkpoint mode: `pi: review of
+  chunk 2 with 3 annotations — optional message:`).
+- After sending: `pi: 3 annotations sent` (checkpoint mode: `pi: review
+  of chunk 2 sent with 3 annotations`).
+- Outside checkpoint mode with no annotations nothing is sent:
+  `pi: no annotations to send`. (Checkpoint mode keeps today's rule: a
+  review with no annotations is allowed once the chunk was opened.)
 
 ### Statusline
 
