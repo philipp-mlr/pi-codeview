@@ -94,10 +94,6 @@ export default function codeview(pi: ExtensionAPI): void {
     loop?.runStarted();
   });
 
-  pi.on("message_end", (event) => {
-    loop?.activityMessage(event.message);
-  });
-
   pi.on("turn_end", async (event) => {
     await loop?.turnEnd(event.turnIndex);
   });

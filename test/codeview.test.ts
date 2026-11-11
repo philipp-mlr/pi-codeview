@@ -632,51 +632,58 @@ describe("codeview extension", () => {
 });
 
 describe("codeview activity", () => {
-  it("reports tool start/end, text, prompt, settled and serves get_activity", async () => {
+  const currents = (client: { events: { event: string; data: any }[] }) => client.events.filter((e) => e.event === "activity_current");
+
+  it("reports the running tool in status and activity_current, busy until settled", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     const client = await connect(repo);
-    expect((await client.request("status")).result).toMatchObject({ activity: null, activitySeq: 0 });
+    expect((await client.request("status")).result).toMatchObject({ activity: null });
+    expect((await client.request("status")).result).not.toHaveProperty("activitySeq");
+
+    await fake.fire("agent_start", {});
+    await until(() => currents(client).length === 1);
+    expect(currents(client)[0].data).toEqual({ current: null, busy: true });
 
     await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "edit", args: { path: "a.ts" } });
-    const ev = await until(() => client.events.find((e) => e.event === "activity"));
-    expect(ev.data).toMatchObject({ seq: 1, kind: "tool", tool: "edit", target: "a.ts", current: { tool: "edit", target: "a.ts" } });
-    expect((await client.request("status")).result).toMatchObject({ activity: { tool: "edit", target: "a.ts" }, activitySeq: 1 });
+    await until(() => currents(client).length === 2);
+    expect(currents(client)[1].data).toEqual({ current: { tool: "edit", target: "a.ts" }, busy: true });
+    expect((await client.request("status")).result).toMatchObject({ activity: { tool: "edit", target: "a.ts" } });
 
     await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "edit", result: {}, isError: false });
-    expect((await client.request("status")).result.activity).toBeNull();
+    await until(() => currents(client).length === 3);
+    expect(currents(client)[2].data).toEqual({ current: null, mutating: true, busy: true });
 
-    await fake.fire("message_end", { message: { role: "assistant", content: [{ type: "thinking", thinking: "x" }, { type: "text", text: "Done \n here" }] } });
-    await fake.fire("message_end", { message: { role: "user", content: "why  so?" } });
-    await fake.fire("message_end", { message: { role: "toolResult", content: [{ type: "text", text: "ignored" }] } });
-    await fake.fire("message_end", { message: { role: "assistant", content: [{ type: "toolCall", name: "x" }] } });
     await fake.fire("tool_execution_start", { toolCallId: "t2", toolName: "bash", args: { command: "ls" } });
     await fake.fire("agent_settled", { aborted: false });
-
-    const items = (await client.request("get_activity")).result;
-    expect(items.map((i: any) => [i.kind, i.text])).toEqual([
-      ["tool", "edit a.ts"], ["text", "Done here"], ["prompt", "why so?"], ["tool", "bash ls"], ["settled", "settled"],
-    ]);
+    await until(() => currents(client).length === 5);
+    expect(currents(client)[4].data).toEqual({ current: null, busy: false });
     expect((await client.request("status")).result.activity).toBeNull();
-    const tail = (await client.request("get_activity", { since: 3 })).result;
-    expect(tail.map((i: any) => i.seq)).toEqual([4, 5]);
   });
 
-  it("broadcasts activity_current when a tool ends; a parallel tool stays current", async () => {
+  it("no longer serves get_activity or sends activity events", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "edit", args: { path: "a.ts" } });
+    await fake.fire("message_end", { message: { role: "assistant", content: [{ type: "text", text: "hi" }] } });
+    await fake.fire("agent_settled", { aborted: false });
+    expect((await client.request("get_activity")).ok).toBe(false);
+    expect(client.events.some((e) => e.event === "activity")).toBe(false);
+  });
+
+  it("a parallel tool stays current when another ends", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     const client = await connect(repo);
     await fake.fire("tool_execution_start", { toolCallId: "a", toolName: "read", args: { path: "a.ts" } });
     await fake.fire("tool_execution_start", { toolCallId: "b", toolName: "read", args: { path: "b.ts" } });
     await fake.fire("tool_execution_end", { toolCallId: "b", toolName: "read", result: {}, isError: false });
-    await until(() => client.events.filter((e) => e.event === "activity_current").length === 1);
-    expect(client.events.filter((e) => e.event === "activity_current")[0].data).toEqual({
-      current: { tool: "read", target: "a.ts" },
-      mutating: false,
-    });
+    await until(() => currents(client).length === 3);
+    expect(currents(client)[2].data).toEqual({ current: { tool: "read", target: "a.ts" }, mutating: false, busy: true });
     await fake.fire("tool_execution_end", { toolCallId: "a", toolName: "read", result: {}, isError: false });
-    await until(() => client.events.filter((e) => e.event === "activity_current").length === 2);
-    expect(client.events.filter((e) => e.event === "activity_current")[1].data).toEqual({ current: null, mutating: false });
+    await until(() => currents(client).length === 4);
+    expect(currents(client)[3].data).toEqual({ current: null, mutating: false, busy: true });
   });
 
   it("activity_current says whether the ended tool may have changed files", async () => {
@@ -687,40 +694,7 @@ describe("codeview activity", () => {
     await fake.fire("tool_execution_end", { toolCallId: "w", toolName: "write", result: {}, isError: false });
     await fake.fire("tool_execution_start", { toolCallId: "l", toolName: "lens_diagnostics", args: {} });
     await fake.fire("tool_execution_end", { toolCallId: "l", toolName: "lens_diagnostics", result: {}, isError: false });
-    await until(() => client.events.filter((e) => e.event === "activity_current").length === 2);
-    expect(client.events.filter((e) => e.event === "activity_current").map((e) => e.data.mutating)).toEqual([true, false]);
-  });
-
-  it("logs the checkpoint note instead of a generic tool line", async () => {
-    const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
-    const client = await connect(repo);
-    await fake.fire("tool_execution_start", { toolCallId: "c1", toolName: "checkpoint", args: { note: "add a" } });
-    const items = (await client.request("get_activity")).result;
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ kind: "checkpoint", text: "add a" });
-  });
-
-  it("collapses whitespace in the checkpoint note and cuts it at 300 chars", async () => {
-    const repo = await makeRepo();
-    const fake = await start(repo, { mode: "review" });
-    const client = await connect(repo);
-    await fake.fire("tool_execution_start", { toolCallId: "c1", toolName: "checkpoint", args: { note: "add\n\n  a " } });
-    await fake.fire("tool_execution_start", { toolCallId: "c2", toolName: "checkpoint", args: { note: "x".repeat(350) } });
-    const items = (await client.request("get_activity")).result;
-    expect(items.map((i: any) => i.text)).toEqual(["add a", "x".repeat(300) + "…"]);
-  });
-
-  it("keeps only the last 200 of 250 tool events", async () => {
-    const repo = await makeRepo();
-    const fake = await start(repo);
-    const client = await connect(repo);
-    for (let i = 0; i < 250; i++) {
-      await fake.fire("tool_execution_start", { toolCallId: `t${i}`, toolName: "read", args: { path: `f${i}` } });
-      await fake.fire("tool_execution_end", { toolCallId: `t${i}`, toolName: "read", result: {}, isError: false });
-    }
-    const items = (await client.request("get_activity")).result;
-    expect(items).toHaveLength(200);
-    expect(items.at(-1).seq).toBe(250);
+    await until(() => currents(client).length === 4);
+    expect(currents(client).map((e) => e.data.mutating)).toEqual([undefined, true, undefined, false]);
   });
 });

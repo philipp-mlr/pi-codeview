@@ -3,7 +3,6 @@ local annotations = require("codeview.annotations")
 local diff = require("codeview.diff")
 local discover = require("codeview.discover")
 local live = require("codeview.live")
-local log = require("codeview.log")
 local panel = require("codeview.panel")
 local session = require("codeview.session")
 
@@ -17,7 +16,6 @@ M.default_keys = {
   send = "<leader>cs",
   mode = "<leader>cm",
   attach = "<leader>ct",
-  log = "<leader>cl",
 }
 
 -- Repo-relative path of buf, or nil when it is not a file inside root.
@@ -68,10 +66,6 @@ end
 -- "codeview: <label> · <state>" for the statusline; "" when not attached. Reads cached state only.
 function M.statusline()
   return session.statusline()
-end
-
-function M.toggle_log()
-  log.toggle()
 end
 
 -- Name (or short id) of the attached pi session; "" when not attached.
@@ -279,7 +273,6 @@ function M.setup(opts)
   command("CodeviewSend", function()
     M.send()
   end, { desc = "codeview: send annotations and note" })
-  command("CodeviewLog", M.toggle_log, { desc = "codeview: toggle the agent activity log" })
   command("CodeviewAttach", M.attach, { desc = "codeview: choose the pi session to work with" })
   command("CodeviewMode", function(cmd)
     if cmd.args == "" then
@@ -320,7 +313,6 @@ function M.setup(opts)
   map("n", "send", "<cmd>CodeviewSend<CR>", "codeview: send")
   map("n", "mode", "<cmd>CodeviewMode<CR>", "codeview: toggle review/vibe mode")
   map("n", "attach", "<cmd>CodeviewAttach<CR>", "codeview: choose pi session")
-  map("n", "log", "<cmd>CodeviewLog<CR>", "codeview: toggle activity log")
   if #skipped > 0 then
     vim.notify("codeview: kept existing mappings, not mapped: " .. table.concat(skipped, ", "), vim.log.levels.INFO)
   end

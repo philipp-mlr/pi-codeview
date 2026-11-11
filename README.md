@@ -63,7 +63,6 @@ skipped keys in one message; keys you pass in `keys` are always mapped.
 | `:CodeviewSend` | `<leader>cs` | Save all buffers, then send the annotations and an optional note. |
 | `:CodeviewMode [review\|vibe\|on\|off]` | `<leader>cm` | Switch the mode for this repository; without an argument it toggles. |
 | `:CodeviewAttach` | `<leader>ct` | Choose the pi session to work with (listed by session name, mode and state). |
-| `:CodeviewLog` | `<leader>cl` | Toggle the activity log: your prompts, the agent's messages, tool calls, checkpoints (`q` closes). |
 
 ### Statusline
 
@@ -77,9 +76,7 @@ It shows `codeview: <session> [review|vibe] · review N | working · <tool> <tar
 
 ### While the agent works
 
-- The statusline shows the tool the agent is running; `<leader>cl` opens the
-  activity log with your prompts, the agent's messages, its tool calls and
-  checkpoint notes.
+- The statusline shows the tool the agent is running.
 - Open buffers whose file the agent changed reload by themselves, as long as
   you have no unsaved edits in them.
 - Changed lines get a sign in the sign column and a light line highlight:

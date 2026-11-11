@@ -1,24 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ActivityLog, excerpt, toolLine } from "../extensions/activity.ts";
+import { ActivityLog, toolLine } from "../extensions/activity.ts";
 
 describe("ActivityLog", () => {
-  it("keeps the last 200 items and seq keeps increasing", () => {
-    const log = new ActivityLog();
-    for (let i = 0; i < 250; i++) log.add({ kind: "tool", text: `t${i}` });
-    const all = log.since();
-    expect(all).toHaveLength(200);
-    expect(all[0].seq).toBe(51);
-    expect(all.at(-1)?.seq).toBe(250);
-    expect(log.lastSeq()).toBe(250);
-  });
-
-  it("since(seq) returns items after seq", () => {
-    const log = new ActivityLog();
-    for (let i = 0; i < 5; i++) log.add({ kind: "text", text: `t${i}` });
-    expect(log.since(3).map((i) => i.seq)).toEqual([4, 5]);
-    expect(log.since(5)).toEqual([]);
-  });
-
   it("current is set on start and cleared on the matching end", () => {
     const log = new ActivityLog();
     expect(log.current()).toBeNull();
@@ -29,33 +12,6 @@ describe("ActivityLog", () => {
     expect(log.current()).toEqual({ tool: "read", target: "a.ts" });
     log.endTool("1");
     expect(log.current()).toBeNull();
-  });
-});
-
-describe("excerpt", () => {
-  it("collapses whitespace and ignores thinking and tool blocks", () => {
-    const message = {
-      content: [
-        { type: "thinking", thinking: "secret" },
-        { type: "text", text: "hello \n  world" },
-        { type: "toolCall", name: "x" },
-        { type: "text", text: "again" },
-      ],
-    };
-    expect(excerpt(message)).toBe("hello world again");
-  });
-
-  it("cuts at 300 chars with an ellipsis", () => {
-    const out = excerpt({ content: [{ type: "text", text: "a".repeat(400) }] });
-    expect(out).toBe("a".repeat(300) + "…");
-    expect(excerpt({ content: [{ type: "text", text: "a".repeat(300) }] })).toBe("a".repeat(300));
-  });
-
-  it("accepts string content and returns null without text", () => {
-    expect(excerpt({ content: "hi  there" })).toBe("hi there");
-    expect(excerpt({ content: [{ type: "thinking", thinking: "x" }] })).toBeNull();
-    expect(excerpt({ content: [{ type: "text", text: "  \n " }] })).toBeNull();
-    expect(excerpt({})).toBeNull();
   });
 });
 

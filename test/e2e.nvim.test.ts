@@ -630,31 +630,6 @@ vim.notify("DONE " .. vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
     expect(notes.filter((m) => m === "codeview: a.txt changed on disk; your unsaved edits are kept")).toHaveLength(1);
   }, TIMEOUT_MS);
 
-  it("an nvim attaching late finds the earlier activity in the log buffer", async () => {
-    const repo = await makeRepo();
-    const fake = await start(repo, { mode: "vibe" });
-    for (const f of ["a.ts", "b.ts", "c.ts"]) {
-      await fake.fire("tool_execution_start", { toolCallId: f, toolName: "read", args: { path: f } });
-      await fake.fire("tool_execution_end", { toolCallId: f, toolName: "read", result: {}, isError: false });
-    }
-    const nvim = runNvim(
-      repo,
-      `
-local cv = require("codeview")
-cv.setup()
-vim.cmd("edit README.md")
-require("codeview.session").ensure(function() end)
-vim.wait(5000, function()
-  local b = vim.fn.bufnr("codeview://log")
-  return b > 0 and #vim.api.nvim_buf_get_lines(b, 0, -1, false) >= 3
-end)
-vim.notify("LOG " .. table.concat(vim.api.nvim_buf_get_lines(vim.fn.bufnr("codeview://log"), 0, -1, false), "|"))
-`,
-    );
-    const note = await until(() => nvim.notifications().find((n) => n.msg.startsWith("LOG")), "log");
-    expect(note.msg).toBe("LOG tool    ▸ read a.ts|tool    ▸ read b.ts|tool    ▸ read c.ts");
-  }, TIMEOUT_MS);
-
   it("saving a file stores the drafts' moved positions", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);

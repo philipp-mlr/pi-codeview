@@ -3,7 +3,6 @@ local annotations = require("codeview.annotations")
 local client = require("codeview.client")
 local discover = require("codeview.discover")
 local live = require("codeview.live")
-local log = require("codeview.log")
 
 local M = {}
 
@@ -21,35 +20,6 @@ end
 
 local function redraw()
   pcall(vim.cmd, "redrawstatus!")
-end
-
--- Activity events that arrive while the backlog is being fetched; appended after it, in order.
-local backlog_pending = nil
-
-local function show_activity(data)
-  if backlog_pending then
-    backlog_pending[#backlog_pending + 1] = data
-  else
-    log.append({ data })
-  end
-end
-
--- Updates the cached state from an `activity` event and adds the item to the log.
-local function on_activity(data)
-  if type(data) ~= "table" then
-    return
-  end
-  if M.cached then
-    M.cached.activity = data.current
-    M.cached.activitySeq = data.seq
-    if data.kind == "settled" then
-      M.cached.busy = false
-    elseif data.kind == "tool" or data.kind == "text" or data.kind == "prompt" then
-      M.cached.busy = true
-    end
-    redraw()
-  end
-  show_activity(data)
 end
 
 function M.on_event(fn)
@@ -160,8 +130,6 @@ function M.detach()
   M.flush()
   local conn = M.conn
   M.conn, M.root, M.cached = nil, nil, nil
-  backlog_pending = nil
-  log.clear()
   live.clear()
   conn:close()
   redraw()
@@ -173,10 +141,11 @@ local function open(path)
   local err
   conn, err = client.connect(path, function(name, data)
     if conn == M.conn then
-      if name == "activity" then
-        on_activity(data)
-      elseif name == "activity_current" and M.cached and type(data) == "table" then
+      if name == "activity_current" and M.cached and type(data) == "table" then
         M.cached.activity = data.current
+        if data.busy ~= nil then
+          M.cached.busy = data.busy
+        end
         redraw()
       end
       M.refresh_status()
@@ -185,8 +154,6 @@ local function open(path)
   end, function()
     if conn == M.conn then
       M.conn, M.cached = nil, nil
-      backlog_pending = nil
-      log.clear()
       live.clear()
       redraw()
       vim.notify("codeview: disconnected from pi", vim.log.levels.WARN)
@@ -197,17 +164,6 @@ end
 
 local function attach(conn, root, status, cb)
   M.conn, M.root, M.cached = conn, root, status
-  log.clear()
-  backlog_pending = {}
-  conn:request("get_activity", { since = 0 }, function(err, result)
-    if conn ~= M.conn then
-      return
-    end
-    local pending = backlog_pending or {}
-    backlog_pending = nil
-    log.append(not err and type(result) == "table" and result or {})
-    log.append(pending)
-  end)
   annotations.on_change(M.schedule_save)
   annotations.restore(status.drafts or {}, root)
   -- Annotations added while pi was unreachable reach the extension now.
