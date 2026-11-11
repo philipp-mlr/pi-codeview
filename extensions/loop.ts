@@ -20,7 +20,6 @@ export const STATUS_KEY = "pi-nvim";
 export const CHECKPOINT_TOOL = "checkpoint";
 export const REVIEW_PENDING = "Review pending. Philipp will send it later.";
 export const END_OF_RUN_NOTE = "end of run, no checkpoint";
-export const SEND_REFUSED = "open at least one file of the chunk or add a note";
 export const ONE_REVIEW_SESSION =
   "another pi session is in checkpoint mode for this worktree (one checkpoint-mode session per worktree)";
 
@@ -106,6 +105,7 @@ export class ReviewLoop {
   private mayHaveChanged = false;
   /** `state.baseline` when the current or last agent run started (mark base with checkpoints off); in memory only. */
   private runBaseline: string | null = null;
+  private runAgentFiles = new Set<string>();
 
   private constructor(
     private readonly pi: ExtensionAPI,
@@ -220,6 +220,7 @@ export class ReviewLoop {
   /** Pins the mark base with checkpoints off: turn chunks move the baseline, the marks stay against the run's start. */
   runStarted(): void {
     this.runBaseline = this.state.baseline;
+    this.runAgentFiles = new Set();
     this.broadcast("activity_current", { current: null, busy: true });
   }
 
@@ -237,7 +238,7 @@ export class ReviewLoop {
   settled(aborted: boolean): void {
     this.activity.clearTools();
     this.broadcast("activity_current", { current: null, busy: false });
-    this.broadcast("run_settled", { aborted });
+    this.broadcast("run_settled", { aborted, files: this.runAgentFiles.size });
   }
 
   /**
@@ -271,9 +272,6 @@ export class ReviewLoop {
         this.persist();
         return { chunk: null };
       }
-      const humanEdits = unique([...chunk.humanFiles, ...this.state.humanFiles()]).length;
-      const sendable = { annotations: annotations.length, note: input.note, humanEdits, viewed: input.viewed };
-      if (!this.state.canSend(sendable)) throw new Error(SEND_REFUSED);
       const humanDiff = await this.humanDiff(chunk);
       const review = renderReview({ chunk, annotations, note: input.note, humanDiff });
       const reviewNote = input.note === "" ? undefined : input.note;
@@ -441,6 +439,7 @@ export class ReviewLoop {
     }
     const files = changed.map((c) => c.path);
     this.state.recordStep({ from: previous, sha, author, files, lines: changed.reduce((sum, c) => sum + c.lines, 0) });
+    if (author === "agent") for (const f of files) this.runAgentFiles.add(f);
     return { sha, files };
   }
 

@@ -55,12 +55,6 @@ describe("PiNvimState", () => {
     expect(closed).toMatchObject({ status: "reviewed", reviewNote: "ok" });
     expect(s.openChunk()).toBeUndefined();
   });
-  it("canSend refuses an empty, unviewed review", () => {
-    const s = new PiNvimState();
-    expect(s.canSend({ annotations: 0, note: "", humanEdits: 0, viewed: false })).toBe(false);
-    expect(s.canSend({ annotations: 0, note: "", humanEdits: 0, viewed: true })).toBe(true);
-    expect(s.canSend({ annotations: 1, note: "", humanEdits: 0, viewed: false })).toBe(true);
-  });
   it("serialize/restore round-trips", () => {
     const s = new PiNvimState();
     s.mode = "checkpoints";

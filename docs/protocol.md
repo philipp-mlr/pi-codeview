@@ -70,10 +70,14 @@ The extension renders them under the context or the annotation's note as a `Diag
 | `chunk_ready` | `{"event":"chunk_ready","data":{"chunk":{"n":2,"status":"open","...":"..."}}}` |
 | `chunk_reviewed` | `{"event":"chunk_reviewed","data":{"chunk":{"n":2,"status":"reviewed","...":"..."}}}` |
 | `mode_changed` | `{"event":"mode_changed","data":{"mode":"checkpoints"}}` |
-| `run_settled` | `{"event":"run_settled","data":{"aborted":false}}` |
+| `run_settled` | `{"event":"run_settled","data":{"aborted":false,"files":2}}` |
 | `activity_current` | `{"event":"activity_current","data":{"current":{"tool":"edit","target":"a.ts"},"mutating":true,"busy":true}}` |
 
 `activity_current` is sent on tool start (`busy` true, `current` the tool), tool end (`current` the still-running tool or `null`; `mutating` only here), `agent_start` (`busy` true, `current` null) and `agent_settled` (`busy` false, `current` null).
 `mutating` is false when the tool that ended cannot change files (e.g. `read`); clients reload buffers only when it is true.
+
+`run_settled.files` is the number of distinct files the agent changed during the run (Philipp's edits do not count).
+
+`send` with an open chunk is always accepted, also with no annotations and an empty note (an empty review: "no remarks, continue"); `viewed` is accepted and ignored. Without an open chunk, `send` with no annotations and an empty note fails with `nothing to send`.
 
 `chunk_reviewed` is also sent for a discarded chunk (`status: "discarded"`).

@@ -328,6 +328,9 @@ M["highlight links are restored after a colorscheme change"] = function()
   vim.cmd("doautocmd ColorScheme")
   assert(vim.api.nvim_get_hl(0, { name = "PiAnnotation" }).link == "DiagnosticInfo")
   assert(vim.api.nvim_get_hl(0, { name = "PiLive" }).link == "CursorLine")
+  assert(vim.api.nvim_get_hl(0, { name = "PiLiveSignAdd" }).link == "DiagnosticHint")
+  assert(vim.api.nvim_get_hl(0, { name = "PiLiveSignChange" }).link == "DiagnosticInfo")
+  assert(vim.api.nvim_get_hl(0, { name = "PiLiveSignDelete" }).link == "DiagnosticWarn")
 end
 
 

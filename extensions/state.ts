@@ -163,10 +163,6 @@ export class PiNvimState {
     return chunk;
   }
 
-  canSend(input: { annotations: number; note: string; humanEdits: number; viewed: boolean }): boolean {
-    return input.annotations > 0 || input.humanEdits > 0 || input.note.length > 0 || input.viewed;
-  }
-
   queuePrompt(text: string): void {
     this.queuedPrompts.push(text);
   }

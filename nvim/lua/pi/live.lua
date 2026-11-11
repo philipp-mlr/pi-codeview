@@ -71,11 +71,11 @@ local function place(buf, hunks)
   for _, h in ipairs(hunks) do
     local count_a, start_b, count_b = h[2], h[3], h[4]
     if count_b == 0 then
-      mark(buf, math.min(math.max(start_b, 1), count), "▁", "PiLiveDelete")
+      mark(buf, math.min(math.max(start_b, 1), count), "▁", "PiLiveSignDelete")
     else
-      local group = count_a == 0 and "PiLiveAdd" or "PiLiveChange"
+      local group = count_a == 0 and "PiLiveSignAdd" or "PiLiveSignChange"
       for line = start_b, start_b + count_b - 1 do
-        mark(buf, line, "▍", group, "PiLive")
+        mark(buf, line, "┃", group, "PiLive")
       end
     end
   end

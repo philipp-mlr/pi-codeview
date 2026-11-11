@@ -4,7 +4,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import piNvim from "../extensions/pi-nvim.ts";
-import { SEND_REFUSED } from "../extensions/loop.ts";
 import { humanChangedSteer } from "../extensions/render.ts";
 import { makeFakePi, type FakePi } from "./helpers/fake-pi.ts";
 import { makeRepo, type TestRepo } from "./helpers/repo.ts";
@@ -198,7 +197,7 @@ vim.cmd("write")
     expect(nvim.notifications().map((n) => n.msg)).toContain("STATUS idle");
   }, TIMEOUT_MS);
 
-  it("PiSendAnnotations without opening the chunk and without content is refused via vim.notify", async () => {
+  it("an empty review asks to continue without remarks; yes sends it", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\n");
@@ -210,15 +209,37 @@ vim.cmd("write")
 local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
+vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 1 end
 cv.send({ note = "" })
 `,
     );
 
-    const refused = await until(
-      () => nvim.notifications().find((n) => n.level === ERROR),
-      "error notification",
+    expect(text(await pending)).toContain("has no remarks");
+    const notes = await until(() => nvim.notifications().some((n) => n.msg.includes("review of chunk 1 sent")) && nvim.notifications(), "send notification");
+    expect(notes.map((n) => n.msg)).toContain("CONFIRM pi: continue without remarks? (y/n)");
+  }, TIMEOUT_MS);
+
+  it("an empty review asks to continue without remarks; no sends nothing", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    await agentWrite(fake, repo, "a.txt", "one\n");
+    const pending = fake.callTool("checkpoint", { note: "add a" });
+
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("pi")
+cv.setup()
+vim.cmd("edit a.txt")
+vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 2 end
+cv.send({ note = "" })
+`,
     );
-    expect(refused.msg).toContain(SEND_REFUSED);
+
+    await until(() => nvim.notifications().some((n) => n.msg.startsWith("CONFIRM")), "confirm");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(nvim.notifications().map((n) => n.msg)).toContain("CONFIRM pi: continue without remarks? (y/n)");
+    expect(nvim.notifications().some((n) => n.msg.includes("sent"))).toBe(false);
     expect(await settled(pending)).toBe(false);
   }, TIMEOUT_MS);
 

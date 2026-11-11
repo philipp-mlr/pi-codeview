@@ -117,15 +117,15 @@ attached to a session. `require("pi").status()` returns `"review N"`,
 `"working"`, `"idle"` or `""`.
 
 - Open buffers whose file the agent changed reload by themselves.
-- Changed lines get a sign and a light line highlight: `▍` marks added or
-  changed lines, `▁` marks lines deleted below that line. They compare
+- Changed lines get a sign and a light line highlight: `┃` marks added or
+  changed lines (same column as gitsigns), `▁` marks lines deleted below that line. They compare
   against the start of the open chunk in checkpoint mode, and against the
   start of the current (or last) agent run otherwise. Your own unsaved edits
   show as marks too.
 - A buffer with unsaved edits is never reloaded. When the agent changes its
   file you get one warning naming it, and your edits stay.
-- The highlight groups `PiLive` (line), `PiLiveAdd`, `PiLiveChange` and
-  `PiLiveDelete` (signs) can be overridden.
+- The highlight groups `PiLive` (line), `PiLiveSignAdd`, `PiLiveSignChange`
+  and `PiLiveSignDelete` (signs) can be overridden.
 
 ## Annotations
 
@@ -181,6 +181,9 @@ Review flow:
 5. `<leader>pr` sends the review: your annotations, your own edits and an
    optional note. The chunk closes and the agent continues. There is no
    accept button. Prompts sent meanwhile are queued behind the review.
+   With nothing to add (no annotations, empty message) Neovim asks
+   `pi: continue without remarks? (y/n)`; `y` sends an empty review and the
+   agent continues, `n` sends nothing.
 
 `<leader>pc` cancels the run; a waiting chunk stays open.
 

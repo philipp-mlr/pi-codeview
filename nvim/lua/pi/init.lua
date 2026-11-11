@@ -134,10 +134,13 @@ function M.send(opts)
       if note == nil then
         return
       end
+      if open_chunk and count == 0 and note == "" and vim.fn.confirm("pi: continue without remarks? (y/n)", "&yes\n&no", 2) ~= 1 then
+        return
+      end
       local payload = {
         annotations = annotations.list(root, { diagnostics = true }),
         note = note,
-        viewed = open_chunk ~= nil and diff.viewed(open_chunk.n),
+        viewed = open_chunk ~= nil and diff.viewed(open_chunk.n), -- ignored by the extension, kept for older ones
       }
       conn:request("send", payload, function(err)
         if err then

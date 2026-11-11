@@ -6,9 +6,9 @@ local LINKS = {
   PiAnnotation = "DiagnosticInfo",
   PiAnnotationSign = "DiagnosticSignInfo",
   PiLive = "CursorLine",
-  PiLiveAdd = "DiffAdd",
-  PiLiveChange = "DiffChange",
-  PiLiveDelete = "DiffDelete",
+  PiLiveSignAdd = "DiagnosticHint",
+  PiLiveSignChange = "DiagnosticInfo",
+  PiLiveSignDelete = "DiagnosticWarn",
 }
 
 function M.define()

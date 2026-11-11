@@ -401,7 +401,7 @@ describe("pi-nvim extension", () => {
     ]);
   });
 
-  it("send refuses an empty unviewed review", async () => {
+  it("send accepts an empty review of the open chunk and resumes the checkpoint", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
@@ -409,10 +409,39 @@ describe("pi-nvim extension", () => {
     const pending = fake.callTool("checkpoint", { note: "add a" });
     await until(async () => (await client.request("status")).result.openChunk);
     const res = await client.request("send", { annotations: [], note: "", viewed: false });
-    expect(res).toMatchObject({ ok: false, error: "open at least one file of the chunk or add a note" });
-    expect(await settled(pending)).toBe(false);
-    await client.request("send", { annotations: [], note: "", viewed: true });
-    await pending;
+    expect(res.ok).toBe(true);
+    expect(text(await pending)).toContain("has no remarks");
+    expect((await client.request("list_chunks")).result[0].status).toBe("reviewed");
+  });
+
+  it("send outside checkpoint mode with nothing to send is still refused", async () => {
+    const repo = await makeRepo();
+    await start(repo, { mode: "off" });
+    const client = await connect(repo);
+    const res = await client.request("send", { annotations: [], note: "", viewed: true });
+    expect(res).toMatchObject({ ok: false, error: "nothing to send" });
+  });
+
+  it("run_settled counts the distinct files the agent changed in the run", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "off" });
+    const client = await connect(repo);
+    await fake.fire("agent_start", {});
+    await agentWrite(fake, repo, "a.txt", "a1\n");
+    await fake.fire("turn_end", { turnIndex: 0 });
+    await agentWrite(fake, repo, "a.txt", "a2\n");
+    await agentWrite(fake, repo, "b.txt", "b\n");
+    await fake.fire("turn_end", { turnIndex: 1 });
+    await fake.fire("agent_settled", { aborted: false });
+    const first = await until(() => client.events.find((e) => e.event === "run_settled"));
+    expect(first.data).toEqual({ aborted: false, files: 2 });
+
+    await fake.fire("agent_start", {});
+    repo.write("a.txt", "human\n");
+    await client.request("human_write", { path: "a.txt" });
+    await fake.fire("agent_settled", { aborted: false });
+    await until(() => client.events.filter((e) => e.event === "run_settled").length === 2);
+    expect(client.events.filter((e) => e.event === "run_settled")[1].data).toEqual({ aborted: false, files: 0 });
   });
 
   it("annotations quote code from the send-time snapshot", async () => {
