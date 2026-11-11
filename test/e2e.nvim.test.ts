@@ -209,6 +209,14 @@ vim.cmd("write")
 local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
+local session = require("pi.session")
+-- Send only once the chunk is open: on a slow machine nvim can attach before the checkpoint
+-- call has created it, and then there is nothing to confirm.
+session.ensure(function() end)
+vim.wait(5000, function()
+  session.refresh_status()
+  return session.cached ~= nil and type(session.cached.openChunk) == "table"
+end, 50)
 vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 1 end
 cv.send({ note = "" })
 `,
@@ -231,6 +239,14 @@ cv.send({ note = "" })
 local cv = require("pi")
 cv.setup()
 vim.cmd("edit a.txt")
+local session = require("pi.session")
+-- Send only once the chunk is open: on a slow machine nvim can attach before the checkpoint
+-- call has created it, and then there is nothing to confirm.
+session.ensure(function() end)
+vim.wait(5000, function()
+  session.refresh_status()
+  return session.cached ~= nil and type(session.cached.openChunk) == "table"
+end, 50)
 vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 2 end
 cv.send({ note = "" })
 `,
