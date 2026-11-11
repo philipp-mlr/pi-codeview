@@ -15,6 +15,10 @@ vim.api.nvim_set_hl(0, "CodeviewLiveDelete", { default = true, link = "DiffDelet
 local baseline_text = {} -- baseline .. "\0" .. path -> file text at that commit ("" when absent)
 local mtimes = {} -- absolute path -> last seen mtime "sec.nsec"
 local warned = {} -- baseline .. "\0" .. path -> true
+local computed = {} -- buf -> { baseline, tick, mtime } of the last mark computation
+local pending = {} -- baseline .. "\0" .. path -> callbacks waiting for the git fetch
+local current_baseline = nil
+local generation = 0
 local timer = nil
 
 local function mtime_of(real)
@@ -22,18 +26,40 @@ local function mtime_of(real)
   return stat and (stat.mtime.sec .. "." .. stat.mtime.nsec) or nil
 end
 
-local function text_at(root, baseline, path)
+-- Fetches the file text at baseline without blocking, then calls done(text) on the main loop.
+-- Concurrent requests for the same file share one git call.
+local function fetch_text(root, baseline, path, done)
   local key = baseline .. "\0" .. path
-  if baseline_text[key] == nil then
-    local result = vim.system({ "git", "show", baseline .. ":" .. path }, { cwd = root, text = true }):wait()
-    baseline_text[key] = result.code == 0 and result.stdout or ""
+  if baseline_text[key] ~= nil then
+    return done(baseline_text[key])
   end
-  return baseline_text[key]
+  if pending[key] then
+    table.insert(pending[key], done)
+    return
+  end
+  pending[key] = { done }
+  local gen = generation
+  vim.system({ "git", "show", baseline .. ":" .. path }, { cwd = root, text = true }, function(result)
+    vim.schedule(function()
+      local waiting = pending[key] or {}
+      if gen ~= generation then
+        return
+      end
+      pending[key] = nil
+      baseline_text[key] = result.code == 0 and result.stdout or ""
+      for _, cb in ipairs(waiting) do
+        cb(baseline_text[key])
+      end
+    end)
+  end)
 end
 
 local function buffer_text(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  return #lines > 0 and (table.concat(lines, "\n") .. "\n") or ""
+  if #lines == 0 then
+    return ""
+  end
+  return table.concat(lines, "\n") .. (vim.bo[buf].eol and "\n" or "")
 end
 
 local function mark(buf, line, text, group, line_hl)
@@ -80,7 +106,8 @@ function M.clear()
       vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
     end
   end
-  baseline_text, mtimes, warned = {}, {}, {}
+  baseline_text, mtimes, warned, computed, pending, current_baseline = {}, {}, {}, {}, {}, nil
+  generation = generation + 1
 end
 
 -- Reloads the unmodified buffers inside root and marks their lines that differ from baseline.
@@ -88,10 +115,11 @@ function M.refresh(root, baseline)
   if type(baseline) ~= "string" or baseline == "" then
     return
   end
+  if baseline ~= current_baseline then
+    current_baseline = baseline
+    baseline_text, computed = {}, {}
+  end
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(buf) then
-      vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-    end
     local name = vim.api.nvim_buf_get_name(buf)
     local real = vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buflisted and name ~= "" and not name:match("^codeview://")
       and vim.uv.fs_realpath(name) or nil
@@ -112,8 +140,17 @@ function M.refresh(root, baseline)
         seen = mtime_of(real)
       end
       mtimes[real] = seen
-      local hunks = vim.diff(text_at(root, baseline, path), buffer_text(buf), { result_type = "indices" })
-      place(buf, hunks)
+      local record = computed[buf]
+      if not (record and record.baseline == baseline and record.tick == vim.b[buf].changedtick and record.mtime == seen) then
+        fetch_text(root, baseline, path, function(text)
+          if not vim.api.nvim_buf_is_valid(buf) or baseline ~= current_baseline then
+            return
+          end
+          computed[buf] = { baseline = baseline, tick = vim.b[buf].changedtick, mtime = mtime_of(real) }
+          vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+          place(buf, vim.diff(text, buffer_text(buf), { result_type = "indices" }))
+        end)
+      end
     end
   end
 end

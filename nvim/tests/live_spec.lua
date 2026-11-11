@@ -35,6 +35,10 @@ local function open(root, name)
   return vim.api.nvim_get_current_buf()
 end
 
+local function wait_for(cond)
+  assert(vim.wait(5000, cond, 10), "timed out waiting")
+end
+
 local function write_later(path, lines)
   -- Distinct mtime from the one nvim saw when it loaded the file.
   vim.wait(1100)
@@ -46,6 +50,7 @@ M["a changed file is reloaded and marked on exactly the changed lines"] = functi
   local buf = open(root, "a.txt")
   write_later(root .. "/a.txt", { "one", "TWO", "three", "four", "five" })
   live.refresh(root, base)
+  wait_for(function() return #marks(buf) == 2 end)
   assert(vim.deep_equal(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "one", "TWO", "three", "four", "five" }))
   local got = marks(buf)
   assert(#got == 2, vim.inspect(got))
@@ -59,6 +64,7 @@ M["a deleted-only hunk is marked on the line above"] = function()
   local buf = open(root, "a.txt")
   write_later(root .. "/a.txt", { "one", "three", "four" })
   live.refresh(root, base)
+  wait_for(function() return #marks(buf) == 1 end)
   local got = marks(buf)
   assert(#got == 1 and got[1].line == 1 and got[1].sign == "▁" and got[1].hl == "CodeviewLiveDelete", vim.inspect(got))
   live.clear()
@@ -89,7 +95,7 @@ M["clear removes the marks"] = function()
   local buf = open(root, "a.txt")
   write_later(root .. "/a.txt", { "x", "two", "three", "four" })
   live.refresh(root, base)
-  assert(#marks(buf) == 1)
+  wait_for(function() return #marks(buf) == 1 end)
   live.clear()
   assert(#marks(buf) == 0)
 end
@@ -102,7 +108,74 @@ M["a file missing from the baseline is all added and a deleted file does not err
   vim.fn.delete(root .. "/a.txt")
   local ok, err = pcall(live.refresh, root, base)
   assert(ok, err)
+  wait_for(function() return #marks(buf) == 2 end)
   assert(#marks(buf) == 2, vim.inspect(marks(buf)))
+  live.clear()
+end
+
+M["an unchanged second refresh calls no git; a change recomputes only that buffer"] = function()
+  local root, base = repo()
+  vim.fn.writefile({ "x", "y" }, root .. "/b.txt")
+  sh(root, "add", ".")
+  sh(root, "commit", "-q", "-m", "b")
+  base = sh(root, "rev-parse", "HEAD")
+  local a, b = open(root, "a.txt"), open(root, "b.txt")
+  local calls = 0
+  local system = vim.system
+  vim.system = function(cmd, ...)
+    if cmd[1] == "git" then
+      calls = calls + 1
+    end
+    return system(cmd, ...)
+  end
+  local diffs = {}
+  local diff = vim.diff
+  vim.diff = function(...)
+    diffs[#diffs + 1] = true
+    return diff(...)
+  end
+  live.refresh(root, base)
+  wait_for(function() return #diffs == 2 end)
+  assert(calls == 2, calls)
+  live.refresh(root, base)
+  vim.wait(200)
+  assert(calls == 2 and #diffs == 2, ("calls=%d diffs=%d"):format(calls, #diffs))
+  vim.api.nvim_buf_set_lines(a, 0, 1, false, { "ONE" })
+  live.refresh(root, base)
+  wait_for(function() return #diffs == 3 end)
+  vim.wait(100)
+  vim.system, vim.diff = system, diff
+  assert(#diffs == 3 and calls == 2, ("calls=%d diffs=%d"):format(calls, #diffs))
+  assert(#marks(a) == 1 and #marks(b) == 0)
+  vim.bo[a].modified = false
+  live.clear()
+end
+
+M["a file without a trailing newline is not marked when unchanged"] = function()
+  local root = vim.fn.tempname()
+  vim.fn.mkdir(root, "p")
+  root = vim.uv.fs_realpath(root)
+  sh(root, "init", "-q")
+  sh(root, "config", "user.email", "t@t")
+  sh(root, "config", "user.name", "t")
+  local f = assert(io.open(root .. "/n.txt", "wb"))
+  f:write("one\ntwo")
+  f:close()
+  sh(root, "add", ".")
+  sh(root, "commit", "-q", "-m", "noeol")
+  local base = sh(root, "rev-parse", "HEAD")
+  local buf = open(root, "n.txt")
+  assert(not vim.bo[buf].eol)
+  local diffs = 0
+  local diff = vim.diff
+  vim.diff = function(...)
+    diffs = diffs + 1
+    return diff(...)
+  end
+  live.refresh(root, base)
+  wait_for(function() return diffs == 1 end)
+  vim.diff = diff
+  assert(#marks(buf) == 0, vim.inspect(marks(buf)))
   live.clear()
 end
 
