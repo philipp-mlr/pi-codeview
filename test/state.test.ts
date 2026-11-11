@@ -24,6 +24,15 @@ describe("CodeviewState", () => {
     ]);
     expect(c.why).toEqual({ "a.ts": "x".repeat(200) });
   });
+  it("createChunk collapses whitespace in why and drops blank ones", () => {
+    const s = new CodeviewState();
+    s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts", "b.ts"], lines: 1 });
+    const c = s.createChunk("n", "t", "open", [
+      { path: "a.ts", why: "  line one\n  line two\t\n" },
+      { path: "b.ts", why: " \n\t " },
+    ]);
+    expect(c.why).toEqual({ "a.ts": "line one line two" });
+  });
   it("createChunk omits why when empty and restores chunks persisted without it", () => {
     const s = new CodeviewState();
     s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts"], lines: 1 });

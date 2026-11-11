@@ -98,6 +98,44 @@ M["diff view shows the note and why above the left buffer and updates on ]f"] = 
   session.cached = nil
 end
 
+local function open_with_note(note, why)
+  local root, sha = chunk_repo()
+  vim.fn.writefile({ "two" }, root .. "/a.txt")
+  session.root = root
+  session.cached = { sessionId = "oneline" }
+  local original = session.request
+  session.request = function(_, _, cb)
+    cb(nil, {
+      chunk = {
+        n = 1, status = "open", fromSha = sha, note = note, humanFiles = {},
+        agentFiles = { "a.txt" }, why = why and { ["a.txt"] = why } or nil,
+      },
+    })
+  end
+  diff.open(1)
+  session.request = original
+  local win = vim.fn.win_getid(1, vim.fn.tabpagenr())
+  vim.cmd("redraw")
+  local topfill = vim.api.nvim_win_call(win, function()
+    return vim.fn.winsaveview().topfill
+  end)
+  local text = why_text(vim.api.nvim_win_get_buf(win))
+  vim.cmd("tabclose")
+  session.cached = nil
+  return text, topfill
+end
+
+M["multi-line note and why render as one line each"] = function()
+  local text, topfill = open_with_note("first line\nsecond line", "a\n  b")
+  assert(vim.deep_equal(text, { "  first line second line", "  why: a b" }), vim.inspect(text))
+  assert(topfill == 2, "topfill=" .. topfill)
+end
+
+M["long note is cut to 200 characters with an ellipsis"] = function()
+  local text = open_with_note(("x"):rep(300), nil)
+  assert(vim.deep_equal(text, { "  " .. ("x"):rep(200) .. "…" }), vim.inspect(text))
+end
+
 M["viewed is per pi session, not per chunk number"] = function()
   local root, sha = chunk_repo()
   open_chunk(root, sha, "first")

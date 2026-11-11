@@ -131,7 +131,8 @@ export class CodeviewState {
     const why: Record<string, string> = {};
     for (const f of files) {
       const path = f.path.replace(/^\.\//, "");
-      if (known.has(path)) why[path] = f.why.slice(0, WHY_MAX_CHARS);
+      const text = f.why.replace(/\s+/g, " ").trim().slice(0, WHY_MAX_CHARS).trim();
+      if (known.has(path) && text) why[path] = text;
     }
     if (Object.keys(why).length > 0) chunk.why = why;
     this.chunks.push(chunk);

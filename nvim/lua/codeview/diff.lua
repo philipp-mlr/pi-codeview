@@ -3,6 +3,7 @@
 local session = require("codeview.session")
 
 local M = {}
+local NOTE_MAX_CHARS = 200 -- virt_lines do not wrap
 
 local views = {} -- tabpage -> { key, n, chunk, root, files, index, left, right }
 local viewed = {} -- chunk key -> true once one of its files was shown in this nvim
@@ -160,12 +161,20 @@ function M.show(view, index)
   end
 
   local ns = vim.api.nvim_create_namespace("codeview_why")
-  local virt = {}
-  if chunk.note and chunk.note ~= "" then
-    virt[#virt + 1] = { { "  " .. chunk.note, "Title" } }
+  -- virt_lines neither wrap nor span lines: one line each, whitespace collapsed, note capped.
+  local function one_line(text)
+    return (vim.trim((text or ""):gsub("%s+", " ")))
   end
-  local why = chunk.why and chunk.why[file.path]
-  if why and why ~= "" then
+  local virt = {}
+  local note = one_line(chunk.note)
+  if vim.fn.strchars(note) > NOTE_MAX_CHARS then
+    note = vim.fn.strcharpart(note, 0, NOTE_MAX_CHARS) .. "…"
+  end
+  if note ~= "" then
+    virt[#virt + 1] = { { "  " .. note, "Title" } }
+  end
+  local why = one_line(chunk.why and chunk.why[file.path])
+  if why ~= "" then
     virt[#virt + 1] = { { "  why: " .. why, "Comment" } }
   end
   if #virt > 0 then
