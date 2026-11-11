@@ -145,19 +145,25 @@ function M.send(opts)
   end)
 end
 
+local MODE_TEXT = {
+  review = "codeview: review mode — the agent stops at each checkpoint for your review",
+  vibe = "codeview: vibe mode — no checkpoints, changes are only recorded",
+}
+
 function M.set_mode(mode)
   session.request("set_mode", { mode = mode }, function(err, result)
     if err then
       return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
     end
-    vim.notify("codeview: mode " .. result.mode)
+    vim.notify(MODE_TEXT[result.mode] or ("codeview: mode " .. tostring(result.mode)))
     session.refresh_status()
   end)
 end
 
--- Switches between review and vibe, based on the attached session's current mode.
+-- Switches between review and vibe, based on the session's current mode. Attaches first when
+-- needed, so it works as the very first codeview command.
 function M.toggle_mode()
-  session.refresh_status(function(err, status)
+  session.request("status", nil, function(err, status)
     if err then
       return vim.notify("codeview: " .. err, vim.log.levels.ERROR)
     end

@@ -428,12 +428,38 @@ end, 5)
     );
     await until(() => nvim.notifications().some((n) => n.msg.startsWith("S0")), "attached");
     await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "edit", args: { path: "a.ts" } });
-    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work · working · edit a.ts"), "working · edit a.ts");
+    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work [vibe] · working · edit a.ts"), "working · edit a.ts");
     await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "edit", result: {}, isError: false });
-    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work · working"), "working");
+    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work [vibe] · working"), "working");
     fake.setIdle(true);
     await fake.fire("agent_settled", { aborted: false });
-    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work · idle"), "idle");
+    await until(() => nvim.notifications().some((n) => n.msg === "S codeview: work [vibe] · idle"), "idle");
+  }, TIMEOUT_MS);
+
+  it("<leader>cm toggles the mode before any other command, says which mode is on and shows it in the statusline", async () => {
+    const repo = await makeRepo();
+    await start(repo, { sessionName: "work", mode: "vibe" });
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("codeview")
+cv.setup()
+vim.cmd("edit README.md")
+cv.toggle_mode()
+vim.wait(5000, function() return cv.statusline():find("%[review%]") ~= nil end)
+vim.notify("S1 " .. cv.statusline())
+cv.toggle_mode()
+vim.wait(5000, function() return cv.statusline():find("%[vibe%]") ~= nil end)
+vim.notify("S2 " .. cv.statusline())
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg.startsWith("S2") || n.level === ERROR), "two toggles");
+    const msgs = nvim.notifications().map((n) => n.msg);
+    expect(msgs).toContain("codeview: review mode — the agent stops at each checkpoint for your review");
+    expect(msgs).toContain("S1 codeview: work [review] · idle");
+    expect(msgs).toContain("codeview: vibe mode — no checkpoints, changes are only recorded");
+    expect(msgs).toContain("S2 codeview: work [vibe] · idle");
+    expect((await repo.git("config", "pi-codeview.mode")).trim()).toBe("vibe");
   }, TIMEOUT_MS);
 
   it("the agent's write shows in an open buffer with change marks", async () => {

@@ -73,7 +73,7 @@ With lualine:
 lualine_x = { function() return require("codeview").statusline() end }
 ```
 
-It shows `codeview: <session> · review N | working · <tool> <target> | working | idle`, and nothing when not attached.
+It shows `codeview: <session> [review|vibe] · review N | working · <tool> <target> | working | idle`, and nothing when not attached. Switching the mode with `<leader>cm` also says which mode is now on.
 
 ### While the agent works
 

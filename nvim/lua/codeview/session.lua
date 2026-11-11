@@ -394,7 +394,8 @@ function M.statusline()
   else
     state = "idle"
   end
-  return ("codeview: %s · %s"):format(M.label(M.cached), state)
+  local mode = type(M.cached.mode) == "string" and (" [" .. M.cached.mode .. "]") or ""
+  return ("codeview: %s%s · %s"):format(M.label(M.cached), mode, state)
 end
 
 -- Label of the attached session for the statusline; "" when not attached.
