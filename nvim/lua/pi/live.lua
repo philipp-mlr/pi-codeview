@@ -66,6 +66,7 @@ local function mark(buf, line, text, group, line_hl)
   pcall(vim.api.nvim_buf_set_extmark, buf, ns, line - 1, 0, {
     sign_text = text,
     sign_hl_group = group,
+    priority = 100, -- below annotation signs (200); the default 4096 would win
     line_hl_group = line_hl,
   })
 end

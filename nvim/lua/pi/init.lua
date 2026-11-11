@@ -125,35 +125,48 @@ function M.send(opts)
   session.ensure(function(conn, root)
     -- Saved inside ensure, so the saves are reported as Philipp's edits to the attached session.
     vim.cmd("silent! wall")
-    local function deliver(note)
+    local function plural(n)
+      return ("%d annotation%s"):format(n, n == 1 and "" or "s")
+    end
+    local function deliver(note, count, open_chunk)
       if note == nil then
         return
       end
-      session.refresh_status(function(status_err, status)
-        if status_err then
-          return vim.notify("pi: " .. status_err, vim.log.levels.ERROR)
+      local payload = {
+        annotations = annotations.list(root, { diagnostics = true }),
+        note = note,
+        viewed = open_chunk ~= nil and diff.viewed(open_chunk.n),
+      }
+      conn:request("send", payload, function(err)
+        if err then
+          return vim.notify("pi: " .. err, vim.log.levels.ERROR)
         end
-        local open_chunk = type(status.openChunk) == "table" and status.openChunk or nil
-        local payload = {
-          annotations = annotations.list(root, { diagnostics = true }),
-          note = note,
-          viewed = open_chunk ~= nil and diff.viewed(open_chunk.n),
-        }
-        conn:request("send", payload, function(err)
-          if err then
-            return vim.notify("pi: " .. err, vim.log.levels.ERROR)
-          end
-          annotations.clear_root(root)
-          vim.notify(open_chunk and ("pi: review of chunk %d sent"):format(open_chunk.n) or "pi: annotations sent")
-          session.refresh_status()
-        end)
+        annotations.clear_root(root)
+        vim.notify(
+          open_chunk and ("pi: review of chunk %d sent with %s"):format(open_chunk.n, plural(count))
+            or ("pi: %s sent"):format(plural(count))
+        )
+        session.refresh_status()
       end)
     end
-    if opts.note ~= nil then
-      deliver(opts.note)
-    else
-      vim.ui.input({ prompt = "pi note (optional): " }, deliver)
-    end
+    session.refresh_status(function(status_err, status)
+      if status_err then
+        return vim.notify("pi: " .. status_err, vim.log.levels.ERROR)
+      end
+      local open_chunk = type(status.openChunk) == "table" and status.openChunk or nil
+      local count = #annotations.list(root)
+      if not open_chunk and count == 0 then
+        return vim.notify("pi: no annotations to send")
+      end
+      if opts.note ~= nil then
+        return deliver(opts.note, count, open_chunk)
+      end
+      local prompt = open_chunk and ("pi: review of chunk %d with %s — optional message: "):format(open_chunk.n, plural(count))
+        or ("pi: send %s — optional message: "):format(plural(count))
+      vim.ui.input({ prompt = prompt }, function(note)
+        deliver(note, count, open_chunk)
+      end)
+    end)
   end)
 end
 
@@ -292,6 +305,9 @@ function M.setup(opts)
   opts = opts or {}
   local keys = vim.tbl_extend("force", M.default_keys, opts.keys or {})
   session.on_event(on_event)
+
+  vim.api.nvim_set_hl(0, "PiAnnotation", { link = "DiagnosticInfo", default = true })
+  vim.api.nvim_set_hl(0, "PiAnnotationSign", { link = "DiagnosticSignInfo", default = true })
 
   local command = vim.api.nvim_create_user_command
   command("PiChunks", M.toggle_panel, { desc = "pi: toggle the chunk panel" })

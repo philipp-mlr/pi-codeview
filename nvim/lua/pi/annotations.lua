@@ -40,13 +40,25 @@ local function place(buf, start_line, end_line, note)
     end_col = 0,
     right_gravity = false,
     end_right_gravity = true,
-    sign_text = "▎",
-    sign_hl_group = "DiagnosticSignInfo",
-    virt_text = { { "  ✎ " .. note, "Comment" } },
-    virt_text_pos = "eol",
+    sign_text = "✎",
+    sign_hl_group = "PiAnnotationSign",
+    priority = 200,
+  })
+  -- A ranged extmark highlights the number of its first line only, so every line gets its own mark.
+  local extra_ids = {}
+  for line = start_line, end_line do
+    extra_ids[#extra_ids + 1] = vim.api.nvim_buf_set_extmark(buf, ns, line - 1, 0, {
+      number_hl_group = "PiAnnotationSign",
+      right_gravity = false,
+    })
+  end
+  local text = note:gsub("%s+", " ")
+  extra_ids[#extra_ids + 1] = vim.api.nvim_buf_set_extmark(buf, ns, end_line - 1, 0, {
+    virt_lines = { { { "  ✎ " .. text, "PiAnnotation" } } },
+    right_gravity = false,
   })
   next_id = next_id + 1
-  items[#items + 1] = { id = next_id, buf = buf, extmark_id = extmark_id, note = note }
+  items[#items + 1] = { id = next_id, buf = buf, extmark_id = extmark_id, extra_ids = extra_ids, note = note }
 end
 
 function M.add(buf, start_line, end_line, note)
@@ -57,6 +69,9 @@ end
 local function drop(item)
   if vim.api.nvim_buf_is_valid(item.buf) then
     pcall(vim.api.nvim_buf_del_extmark, item.buf, ns, item.extmark_id)
+    for _, id in ipairs(item.extra_ids) do
+      pcall(vim.api.nvim_buf_del_extmark, item.buf, ns, id)
+    end
   end
 end
 

@@ -186,4 +186,66 @@ M["list with diagnostics attaches those on the annotation's current lines"] = fu
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
+local function marks(buf)
+  local ns = vim.api.nvim_create_namespace("pi_annotations")
+  return vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
+end
+
+local function virt_line_marks(buf)
+  return vim.tbl_filter(function(m) return m[4].virt_lines ~= nil end, marks(buf))
+end
+
+M["annotation text is a virt_lines mark on the last line, single line, and follows inserted lines"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local buf = file_buf(root, "v.txt", numbered(10))
+  annotations.add(buf, 3, 5, "multi\nline   note")
+  local v = virt_line_marks(buf)
+  assert(#v == 1 and v[1][2] == 4, vim.inspect(v))
+  assert(v[1][4].virt_lines[1][1][1] == "  ✎ multi line note", vim.inspect(v))
+  assert(v[1][4].virt_lines[1][1][2] == "PiAnnotation")
+  assert(not v[1][4].virt_lines_above)
+  vim.api.nvim_buf_set_lines(buf, 0, 0, false, { "x", "y" })
+  v = virt_line_marks(buf)
+  assert(v[1][2] == 6, vim.inspect(v))
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["sign has priority 200, above live marks, and the number highlight covers every line of the range"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local buf = file_buf(root, "n.txt", numbered(10))
+  annotations.add(buf, 3, 5, "note")
+  local signs, numbered_rows = {}, {}
+  for _, m in ipairs(marks(buf)) do
+    if m[4].sign_text then signs[#signs + 1] = m end
+    if m[4].number_hl_group == "PiAnnotationSign" then numbered_rows[#numbered_rows + 1] = m[2] end
+  end
+  table.sort(numbered_rows)
+  assert(#signs == 1 and signs[1][4].priority == 200 and vim.trim(signs[1][4].sign_text) == "✎", vim.inspect(signs))
+  assert(vim.deep_equal(numbered_rows, { 2, 3, 4 }), vim.inspect(numbered_rows))
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["live marks use a lower sign priority than annotations"] = function()
+  local src = table.concat(vim.fn.readfile(vim.api.nvim_get_runtime_file("lua/pi/live.lua", false)[1]), "\n")
+  local p = tonumber(src:match("priority = (%d+)"))
+  assert(p and p < 200, tostring(p))
+end
+
+M["remove deletes the sign, number and text marks"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local buf = file_buf(root, "r.txt", numbered(10))
+  annotations.add(buf, 3, 5, "note")
+  assert(#marks(buf) > 0)
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_cursor(0, { 4, 0 })
+  assert(annotations.remove_at_cursor() == 1)
+  assert(#marks(buf) == 0, vim.inspect(marks(buf)))
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 return M

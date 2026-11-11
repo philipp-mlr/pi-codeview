@@ -222,6 +222,81 @@ cv.send({ note = "" })
     expect(await settled(pending)).toBe(false);
   }, TIMEOUT_MS);
 
+  it("sending outside checkpoint mode names the annotations in the prompt and the result", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "off" });
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("pi")
+cv.setup()
+vim.cmd("edit a.txt")
+local buf = vim.api.nvim_get_current_buf()
+vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
+cv.annotate(buf, 1, 1, "first")
+cv.annotate(buf, 2, 2, "second")
+cv.send()
+vim.wait(5000, function() return #require("pi.annotations").list(vim.fn.getcwd()) == 0 end, 20)
+cv.annotate(buf, 1, 1, "again")
+cv.send()
+`,
+    );
+    repo.write("a.txt", "one\ntwo\n");
+    await until(
+      () => nvim.notifications().some((n) => n.msg === "pi: 1 annotation sent"),
+      "both sends",
+    );
+    const msgs = nvim.notifications().map((n) => n.msg);
+    expect(msgs).toContain("PROMPT pi: send 2 annotations — optional message: ");
+    expect(msgs).toContain("pi: 2 annotations sent");
+    expect(msgs).toContain("PROMPT pi: send 1 annotation — optional message: ");
+    expect(fake.sent.length).toBe(2);
+  }, TIMEOUT_MS);
+
+  it("sending with zero annotations outside checkpoint mode does not ask and does not send", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "off" });
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("pi")
+cv.setup()
+vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
+cv.send()
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg === "pi: no annotations to send"), "notice");
+    expect(nvim.notifications().some((n) => n.msg.startsWith("PROMPT"))).toBe(false);
+    expect(fake.sent).toEqual([]);
+  }, TIMEOUT_MS);
+
+  it("sending in checkpoint mode with an open chunk says review of chunk N with M annotations", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    await agentWrite(fake, repo, "a.txt", "one\ntwo\n");
+    const pending = fake.callTool("checkpoint", { note: "add a" });
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("pi")
+cv.setup()
+vim.cmd("edit a.txt")
+vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
+cv.open_chunk(1)
+vim.wait(5000, function() return #vim.api.nvim_list_tabpages() == 2 end)
+local buf = vim.fn.bufnr(vim.uv.fs_realpath("a.txt"))
+cv.annotate(buf, 1, 1, "why one?")
+cv.send()
+`,
+    );
+    await settled(pending, 100);
+    await until(() => nvim.notifications().some((n) => n.msg.includes("sent with")), "sent");
+    const msgs = nvim.notifications().map((n) => n.msg);
+    expect(msgs).toContain("PROMPT pi: review of chunk 1 with 1 annotation — optional message: ");
+    expect(msgs).toContain("pi: review of chunk 1 sent with 1 annotation");
+    expect(text(await pending)).toContain("why one?");
+  }, TIMEOUT_MS);
+
   it("an annotation added just before quitting is saved as a draft and restored by the next nvim", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
