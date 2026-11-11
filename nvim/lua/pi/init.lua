@@ -1,5 +1,6 @@
 -- pi.nvim: commands, keys and autocommands over session, panel and diff.
 local annotations = require("pi.annotations")
+local diagnostics = require("pi.diagnostics")
 local diff = require("pi.diff")
 local discover = require("pi.discover")
 local live = require("pi.live")
@@ -16,6 +17,7 @@ M.default_keys = {
   send = "<leader>pr",
   chunks = "<leader>pv",
   checkpoints = "<leader>pm",
+  cancel = "<leader>pc",
 }
 
 -- Repo-relative path of buf, or nil when it is not a file inside root.
@@ -101,6 +103,22 @@ function M.annotate(buf, start_line, end_line, note)
   end, { buf = buf })
 end
 
+-- ERROR and WARN diagnostics of buf (optionally only lines line1..line2) as prompt context.
+function M.diagnostics(buf, line1, line2)
+  return diagnostics.collect(buf, line1, line2)
+end
+
+-- Asks pi to abort the agent's current run.
+function M.cancel()
+  session.request("cancel", nil, function(err, result)
+    if err then
+      return vim.notify("pi: " .. err, vim.log.levels.ERROR)
+    end
+    vim.notify(result.cancelled and "pi: cancelled" or "pi: nothing to cancel")
+    session.refresh_status()
+  end)
+end
+
 -- Sends the annotations and opts.note (asked via vim.ui.input when nil) as review or prompt.
 function M.send(opts)
   opts = opts or {}
@@ -117,7 +135,7 @@ function M.send(opts)
         end
         local open_chunk = type(status.openChunk) == "table" and status.openChunk or nil
         local payload = {
-          annotations = annotations.list(root),
+          annotations = annotations.list(root, { diagnostics = true }),
           note = note,
           viewed = open_chunk ~= nil and diff.viewed(open_chunk.n),
         }
@@ -191,6 +209,16 @@ function M.prompt_context(buf, root, sel)
       lines = vim.api.nvim_buf_get_lines(buf, sel.line1 - 1, sel.line2, false)
     end
     context.text = table.concat(lines, "\n")
+  end
+  -- Normal mode: the whole file; visual mode: the selected lines.
+  local found
+  if sel.visual then
+    found = diagnostics.collect(buf, sel.line1, sel.line2)
+  else
+    found = diagnostics.collect(buf)
+  end
+  if #found > 0 then
+    context.diagnostics = found
   end
   return context
 end
@@ -273,6 +301,7 @@ function M.setup(opts)
   command("PiSendAnnotations", function()
     M.send()
   end, { desc = "pi: send annotations" })
+  command("PiCancel", M.cancel, { desc = "pi: cancel the agent's current run" })
   command("PiSession", M.attach, { desc = "pi: choose the pi session to work with" })
   command("PiCheckpoints", function(cmd)
     if cmd.args == "" then
@@ -306,6 +335,7 @@ function M.setup(opts)
   end
   map("n", "ask", "<cmd>PiAsk<CR>", "pi: ask with file context")
   map("x", "ask", ":PiAsk<CR>", "pi: ask with selection context")
+  map("n", "cancel", "<cmd>PiCancel<CR>", "pi: cancel the agent's current run")
   map("n", "session", "<cmd>PiSession<CR>", "pi: choose pi session")
   map("n", "annotate", "<cmd>PiAnnotate<CR>", "pi: annotate line")
   map("x", "annotate", ":PiAnnotate<CR>", "pi: annotate selection")

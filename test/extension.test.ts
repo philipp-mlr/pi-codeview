@@ -762,4 +762,48 @@ describe("pi-nvim activity", () => {
     await until(() => currents(client).length === 4);
     expect(currents(client).map((e) => e.data.mutating)).toEqual([undefined, true, undefined, false]);
   });
+
+  it("cancel while idle replies false and does not abort", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    expect((await client.request("cancel")).result).toEqual({ cancelled: false });
+    expect(fake.abortCalls).toEqual([]);
+  });
+
+  it("cancel while busy aborts the run and replies true", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    fake.setIdle(false);
+    expect((await client.request("cancel")).result).toEqual({ cancelled: true });
+    expect(fake.abortCalls).toHaveLength(1);
+  });
+
+  it("cancel while a checkpoint waits returns Review pending, keeps the chunk open, and a later send resumes", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    await agentWrite(fake, repo, "a.txt", "alpha\n");
+    fake.setIdle(false);
+    const pending = fake.callTool("checkpoint", { note: "add a" });
+    await until(async () => (await client.request("status")).result.openChunk);
+    expect((await client.request("cancel")).result).toEqual({ cancelled: true });
+    expect(text(await pending)).toBe("Review pending. Philipp will send it later.");
+    expect((await client.request("status")).result.openChunk).toMatchObject({ n: 1, status: "open" });
+    fake.setIdle(true);
+    expect((await client.request("send", { annotations: [], note: "ok", viewed: true })).ok).toBe(true);
+    const resume = fake.sent.find((s) => s.kind === "user");
+    expect(String(resume!.kind === "user" && resume!.content)).toContain("Continue the task that was interrupted");
+  });
+
+  it("a prompt request renders its diagnostics for the agent", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    const diagnostics = [{ line: 2, severity: "error", message: "bad", source: "lsp" }];
+    await client.request("prompt", { text: "fix", context: { path: "a.ts", startLine: 1, endLine: 3, diagnostics } });
+    const sent = fake.sent.find((s) => s.kind === "user");
+    expect(String(sent!.kind === "user" && sent!.content)).toContain("Diagnostics:\n  a.ts:2 error bad [lsp]");
+  });
 });

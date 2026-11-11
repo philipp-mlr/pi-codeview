@@ -1,4 +1,5 @@
 local discover = require("pi.discover")
+local diagnostics = require("pi.diagnostics")
 
 local M = {}
 
@@ -82,7 +83,8 @@ function M.remove_at_cursor()
   return removed
 end
 
-function M.list(root)
+-- opts.diagnostics: attach the ERROR/WARN diagnostics on each annotation's current lines.
+function M.list(root, opts)
   local kept, result = {}, {}
   for _, item in ipairs(items) do
     local s, e = position(item)
@@ -92,7 +94,14 @@ function M.list(root)
       local real = name ~= "" and vim.uv.fs_realpath(name) or nil
       local rel = real and discover.relpath(root, real) or nil
       if rel then
-        result[#result + 1] = { path = rel, startLine = s, endLine = e, note = item.note }
+        local entry = { path = rel, startLine = s, endLine = e, note = item.note }
+        if opts and opts.diagnostics then
+          local found = diagnostics.collect(item.buf, s, e)
+          if #found > 0 then
+            entry.diagnostics = found
+          end
+        end
+        result[#result + 1] = entry
       end
     end
   end

@@ -35,8 +35,13 @@ handler failures are returned as `ok:false`.
 | `save_drafts` | `{"id":7,"type":"save_drafts","annotations":[{"path":"a.ts","startLine":3,"endLine":4,"note":"wip"}]}` |
 | `human_write` | `{"id":8,"type":"human_write","path":"a.ts"}` |
 | `set_mode` (`checkpoints` or `off`; also accepts `on`, `review`, `vibe`) | `{"id":9,"type":"set_mode","mode":"checkpoints"}` |
+| `cancel` | `{"id":10,"type":"cancel"}` |
 
 `prompt.context` is optional; `startLine`/`endLine` inside it are optional.
+`prompt.context.diagnostics` and each `annotations[].diagnostics` (`send`, `save_drafts`) are optional arrays of
+`{"line":3,"severity":"error"|"warning","message":"…","source":"eslint"}` (`line` is 1-based, `source` optional): the LSP errors and warnings
+on the context's or annotation's lines, at most 20, errors first then by line, messages whitespace-collapsed and cut at 200 characters.
+The extension renders them under the context or the annotation's note as a `Diagnostics:` section.
 
 ### Results
 
@@ -47,6 +52,7 @@ handler failures are returned as `ok:false`.
   `markBase` (additive) is the snapshot sha clients mark changed lines against: the open chunk's `fromSha`; without one,
   `baseline` in checkpoint mode and with checkpoints off the `baseline` at the start of the current or last agent run (kept in memory, so
   `baseline` again after a restart). Older extensions omit it; clients fall back to `baseline`.
+- `cancel`: `{"cancelled":true}` after aborting the agent's run (pi's abort, as Escape), `{"cancelled":false}` when pi is idle. A waiting `checkpoint` call returns "Review pending", the chunk stays open.
 - `prompt`: `{"queued":true}` when a chunk is open and the prompt waits for its review, else `{"queued":false}` (sent to the agent).
 - `list_chunks`: array of chunks. `get_chunk`: `{"chunk":<chunk>,"diff":"<unified diff fromSha..toSha>"}`.
 - A chunk may carry `why`: `{"<repo-relative path>":"<one short line, max 200 chars>"}`, set from the `files` argument of the agent's `checkpoint` call. Only paths changed in the chunk are kept; the field is absent when empty. Clients must tolerate its absence.

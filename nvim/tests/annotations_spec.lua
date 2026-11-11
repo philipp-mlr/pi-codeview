@@ -161,4 +161,29 @@ M["clear_root drops only the annotations and unplaced drafts of that root"] = fu
   annotations.clear()
 end
 
+M["list with diagnostics attaches those on the annotation's current lines"] = function()
+  local dir = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()
+  vim.fn.mkdir(dir, "p")
+  dir = vim.uv.fs_realpath(dir)
+  vim.fn.writefile({ "a", "b", "c", "d" }, dir .. "/x.lua")
+  local buf = vim.fn.bufadd(dir .. "/x.lua")
+  vim.fn.bufload(buf)
+  annotations.clear()
+  local ns = vim.api.nvim_create_namespace("pi_test_ann_diag")
+  vim.diagnostic.set(ns, buf, {
+    { lnum = 1, col = 0, severity = vim.diagnostic.severity.ERROR, message = "bad" },
+    { lnum = 3, col = 0, severity = vim.diagnostic.severity.ERROR, message = "elsewhere" },
+  })
+  annotations.add(buf, 2, 3, "note")
+  -- A line inserted above moves the annotation to 3-4; the diagnostic on line 2 moves with it only when set again.
+  vim.api.nvim_buf_set_lines(buf, 0, 0, false, { "new" })
+  local plain = annotations.list(dir)
+  assert(plain[1].diagnostics == nil, vim.inspect(plain))
+  local list = annotations.list(dir, { diagnostics = true })
+  assert(list[1].startLine == 3 and list[1].endLine == 4, vim.inspect(list))
+  assert(#list[1].diagnostics == 1 and list[1].diagnostics[1].message == "elsewhere", vim.inspect(list))
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 return M

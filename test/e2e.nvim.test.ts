@@ -691,4 +691,35 @@ vim.cmd("write")
       return state?.drafts[0]?.startLine === 4;
     }, "draft saved at line 4");
   }, TIMEOUT_MS);
+
+  it("a prompt from nvim carries the buffer's diagnostics into the agent's message", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "off" });
+    repo.write("a.txt", "one\ntwo\nthree\n");
+    await repo.git("add", ".");
+    await repo.git("commit", "-q", "-m", "add a");
+    const nvim = runNvim(
+      repo,
+      `
+local cv = require("pi")
+cv.setup()
+vim.cmd("edit a.txt")
+local buf = vim.api.nvim_get_current_buf()
+vim.diagnostic.set(vim.api.nvim_create_namespace("e2e"), buf, {
+  { lnum = 1, col = 0, severity = vim.diagnostic.severity.ERROR, message = "bad\\nthing", source = "lsp" },
+  { lnum = 2, col = 0, severity = vim.diagnostic.severity.HINT, message = "just a hint" },
+})
+require("pi.session").ensure(function(_, root)
+  cv.prompt("fix it", cv.prompt_context(buf, root, { line1 = 1, line2 = 1 }))
+  vim.notify("PROMPTED")
+end, { buf = buf })
+vim.wait(5000, function() return false end, 20)
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg === "PROMPTED"), "prompted");
+    const sent = await until(() => fake.sent.find((s) => s.kind === "user"), "user message");
+    const content = String(sent.kind === "user" && sent.content);
+    expect(content).toContain("Diagnostics:\n  a.txt:2 error bad thing [lsp]");
+    expect(content).not.toContain("just a hint");
+  }, TIMEOUT_MS);
 });

@@ -1,5 +1,5 @@
 import type { PromptContext } from "./protocol.ts";
-import type { Annotation, Chunk } from "./state.ts";
+import type { Annotation, Chunk, Diagnostic } from "./state.ts";
 
 export const CHECKPOINT_GUIDELINES: string[] = [
   "Call checkpoint after each logical step, before starting the next one.",
@@ -12,13 +12,20 @@ function fenceFor(text: string): string {
   return "`".repeat(Math.max(3, longest + 1));
 }
 
+/** The "Diagnostics:" section, or no lines when there are none. */
+function diagnosticLines(path: string, diagnostics: Diagnostic[] | undefined): string[] {
+  if (!diagnostics || diagnostics.length === 0) return [];
+  const rows = diagnostics.map((d) => `  ${path}:${d.line} ${d.severity} ${d.message}${d.source ? ` [${d.source}]` : ""}`);
+  return ["Diagnostics:", ...rows];
+}
+
 function formatAnnotation(a: Annotation): string {
   const lines = [`${a.path}:${a.startLine}-${a.endLine}`];
   if (a.quote !== undefined) {
     const fence = fenceFor(a.quote);
     lines.push(fence, a.quote, fence);
   }
-  lines.push(`Note: ${a.note}`);
+  lines.push(`Note: ${a.note}`, ...diagnosticLines(a.path, a.diagnostics));
   return lines.join("\n");
 }
 
@@ -68,6 +75,7 @@ export function renderPrompt(text: string, context?: PromptContext): string {
     const fence = fenceFor(context.text);
     lines.push(fence, context.text, fence);
   }
+  lines.push(...diagnosticLines(context.path, context.diagnostics));
   return `${text}\n\n${lines.join("\n")}`;
 }
 

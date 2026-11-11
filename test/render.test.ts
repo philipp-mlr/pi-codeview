@@ -145,6 +145,48 @@ describe("renderPrompt", () => {
   });
 });
 
+describe("diagnostics in renderPrompt", () => {
+  const context = { path: "a.ts", startLine: 3, endLine: 4 };
+
+  it("lists diagnostics after the context with path, line, severity, message and optional source", () => {
+    const out = renderPrompt("fix", {
+      ...context,
+      diagnostics: [
+        { line: 3, severity: "error", message: "Type 'x' is bad", source: "tsserver" },
+        { line: 4, severity: "warning", message: "unused" },
+      ],
+    });
+    expect(out).toBe(
+      "fix\n\nContext: a.ts:3-4\nDiagnostics:\n  a.ts:3 error Type 'x' is bad [tsserver]\n  a.ts:4 warning unused",
+    );
+  });
+
+  it("comes after the quoted text", () => {
+    const out = renderPrompt("fix", { ...context, text: "x", diagnostics: [{ line: 3, severity: "error", message: "m" }] });
+    expect(out).toBe("fix\n\nContext: a.ts:3-4\n```\nx\n```\nDiagnostics:\n  a.ts:3 error m");
+  });
+
+  it("adds no section when empty or absent", () => {
+    expect(renderPrompt("fix", { ...context, diagnostics: [] })).toBe("fix\n\nContext: a.ts:3-4");
+    expect(renderPrompt("fix", context)).not.toContain("Diagnostics:");
+  });
+});
+
+describe("diagnostics in annotations", () => {
+  it("follow the Note line of each annotation", () => {
+    const out = renderAnnotationPrompt(
+      [
+        { path: "src/a.ts", startLine: 3, endLine: 4, note: "rename", diagnostics: [{ line: 4, severity: "error", message: "boom", source: "eslint" }] },
+        { path: "src/b.ts", startLine: 1, endLine: 1, note: "fine", diagnostics: [] },
+      ],
+      "Do it.",
+    );
+    expect(out).toBe(
+      "Do it.\n\nsrc/a.ts:3-4\nNote: rename\nDiagnostics:\n  src/a.ts:4 error boom [eslint]\n\nsrc/b.ts:1-1\nNote: fine",
+    );
+  });
+});
+
 describe("CHECKPOINT_GUIDELINES", () => {
   it("CHECKPOINT_GUIDELINES names checkpoint in every line", () => {
     expect(CHECKPOINT_GUIDELINES.length).toBeGreaterThanOrEqual(2);

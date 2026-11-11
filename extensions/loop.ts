@@ -331,6 +331,13 @@ export class ReviewLoop {
     return { queued: false };
   }
 
+  /** Aborts the agent's run like Escape in pi; false when pi is idle. */
+  cancel(): { cancelled: boolean } {
+    if (this.ctx.isIdle()) return { cancelled: false };
+    this.ctx.abort();
+    return { cancelled: true };
+  }
+
   async setMode(mode: Mode): Promise<void> {
     const open = this.state.openChunk();
     if (mode === "off" && open) {
@@ -386,6 +393,8 @@ export class ReviewLoop {
         return this.prompt(req.text, req.context);
       case "send":
         return this.send({ annotations: req.annotations ?? [], note: req.note ?? "", viewed: req.viewed === true });
+      case "cancel":
+        return this.cancel();
       case "save_drafts":
         this.state.setDrafts(req.annotations ?? []);
         this.persist();

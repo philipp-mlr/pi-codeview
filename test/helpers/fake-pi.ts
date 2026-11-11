@@ -21,6 +21,8 @@ export function makeFakePi(cwd: string, opts: { sessionId?: string; sessionName?
   const commands = new Map<string, CommandDef>();
   let activeTools = ["read", "bash", "edit", "write"];
   let idle = true;
+  const abortCalls: number[] = [];
+  const toolAborts = new Set<AbortController>();
   const sent: SentCall[] = [];
   const entries: FakeEntry[] = [...(opts.entries ?? [])];
   const statuses = new Map<string, string | undefined>();
@@ -66,6 +68,11 @@ export function makeFakePi(cwd: string, opts: { sessionId?: string; sessionName?
       getEntries: () => entries,
     },
     isIdle: () => idle,
+    // Like pi: aborts the in-flight tool calls, which end a waiting checkpoint.
+    abort() {
+      abortCalls.push(abortCalls.length + 1);
+      for (const c of toolAborts) c.abort();
+    },
   };
 
   return {
@@ -76,6 +83,7 @@ export function makeFakePi(cwd: string, opts: { sessionId?: string; sessionName?
     entries,
     statuses,
     notifications,
+    abortCalls,
     setIdle(value: boolean) {
       idle = value;
     },
@@ -87,7 +95,15 @@ export function makeFakePi(cwd: string, opts: { sessionId?: string; sessionName?
     async callTool(name: string, params: object, signal?: AbortSignal) {
       const tool = tools.get(name);
       if (!tool) throw new Error(`no tool ${name}`);
-      return tool.execute("call-1", params, signal, undefined, ctx);
+      // Every call gets its own controller that ctx.abort() fires; the caller's signal aborts it too.
+      const controller = new AbortController();
+      toolAborts.add(controller);
+      signal?.addEventListener("abort", () => controller.abort(), { once: true });
+      try {
+        return await tool.execute("call-1", params, controller.signal, undefined, ctx);
+      } finally {
+        toolAborts.delete(controller);
+      }
     },
     async runCommand(name: string, args: string) {
       const command = commands.get(name);

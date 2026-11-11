@@ -11,7 +11,16 @@ export type Author = "agent" | "human";
  * `reported` marks human steps whose diff already reached the agent in a review.
  */
 export type Step = { from: string; sha: string; author: Author; files: string[]; lines: number; reported?: boolean };
-export type Annotation = { path: string; startLine: number; endLine: number; note: string; quote?: string };
+/** An LSP diagnostic from Philipp's buffer; `line` is 1-based. */
+export type Diagnostic = { line: number; severity: "error" | "warning"; message: string; source?: string };
+export type Annotation = {
+  path: string;
+  startLine: number;
+  endLine: number;
+  note: string;
+  quote?: string;
+  diagnostics?: Diagnostic[];
+};
 export type ChunkStatus = "open" | "reviewed" | "discarded" | "recorded";
 export type Chunk = {
   n: number;

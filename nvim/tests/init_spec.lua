@@ -3,7 +3,7 @@ local annotations = require("pi.annotations")
 
 local M = {}
 
-local KEYS = { "<leader>pa", "<leader>ps", "<leader>pn", "<leader>px", "<leader>pr", "<leader>pv", "<leader>pm" }
+local KEYS = { "<leader>pa", "<leader>ps", "<leader>pn", "<leader>px", "<leader>pr", "<leader>pv", "<leader>pm", "<leader>pc" }
 
 local function reset_maps()
   for _, lhs in ipairs(KEYS) do
@@ -34,6 +34,7 @@ M["default keys live under <leader>p with pi: descriptions"] = function()
     send = "<leader>pr",
     chunks = "<leader>pv",
     checkpoints = "<leader>pm",
+    cancel = "<leader>pc",
   }), vim.inspect(pi.default_keys))
   local notes = capture_notify(function() pi.setup() end)
   local want = {
@@ -46,12 +47,13 @@ M["default keys live under <leader>p with pi: descriptions"] = function()
     { "n", "<leader>pr", "pi: send annotations" },
     { "n", "<leader>pv", "pi: toggle chunk panel" },
     { "n", "<leader>pm", "pi: toggle checkpoint mode" },
+    { "n", "<leader>pc", "pi: cancel the agent's current run" },
   }
   for _, w in ipairs(want) do
     local desc = vim.fn.maparg(w[2], w[1], false, true).desc
     assert(desc == w[3], ("%s (%s): %s"):format(w[2], w[1], tostring(desc)))
   end
-  for _, name in ipairs({ "PiAsk", "PiSession", "PiAnnotate", "PiAnnotationRemove", "PiSendAnnotations", "PiChunks", "PiCheckpoints" }) do
+  for _, name in ipairs({ "PiAsk", "PiSession", "PiAnnotate", "PiAnnotationRemove", "PiSendAnnotations", "PiChunks", "PiCheckpoints", "PiCancel" }) do
     assert(vim.fn.exists(":" .. name) == 2, "missing command " .. name)
   end
   assert(#notes == 0, vim.inspect(notes))
@@ -198,6 +200,123 @@ M["marks fall back to baseline when the extension sends no markBase"] = function
   require("pi.session").refresh_live()
   assert(vim.wait(3000, function() return live_marks(buf) == 1 end, 10), "no marks: " .. live_marks(buf))
   detach()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+local function set_diagnostics(buf, list)
+  local ns = vim.api.nvim_create_namespace("pi_test_diagnostics")
+  local E, W, I, H = vim.diagnostic.severity.ERROR, vim.diagnostic.severity.WARN, vim.diagnostic.severity.INFO, vim.diagnostic.severity.HINT
+  local items = {}
+  for _, d in ipairs(list) do
+    local sev = ({ E = E, W = W, I = I, H = H })[d[2]]
+    items[#items + 1] = { lnum = d[1] - 1, col = 0, severity = sev, message = d[3], source = d[4] }
+  end
+  vim.diagnostic.set(ns, buf, items)
+  return ns
+end
+
+local function scratch_buf(count)
+  local buf = vim.api.nvim_create_buf(false, true)
+  local lines = {}
+  for i = 1, count do
+    lines[i] = "line " .. i
+  end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  return buf
+end
+
+M["diagnostics keeps ERROR and WARN only, errors first then by line, with source"] = function()
+  local buf = scratch_buf(10)
+  set_diagnostics(buf, {
+    { 5, "W", "warn five" },
+    { 3, "I", "info three" },
+    { 7, "E", "error seven", "lsp" },
+    { 2, "H", "hint two" },
+    { 1, "W", "warn one" },
+    { 4, "E", "error four" },
+  })
+  local got = pi.diagnostics(buf)
+  assert(vim.deep_equal(got, {
+    { line = 4, severity = "error", message = "error four" },
+    { line = 7, severity = "error", message = "error seven", source = "lsp" },
+    { line = 1, severity = "warning", message = "warn one" },
+    { line = 5, severity = "warning", message = "warn five" },
+  }), vim.inspect(got))
+  assert(vim.deep_equal(pi.diagnostics(scratch_buf(3)), {}))
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["diagnostics selection keeps the diagnostics inside the lines"] = function()
+  local buf = scratch_buf(10)
+  set_diagnostics(buf, { { 1, "E", "a" }, { 3, "E", "b" }, { 4, "W", "c" }, { 6, "E", "d" } })
+  local got = pi.diagnostics(buf, 3, 5)
+  assert(#got == 2 and got[1].message == "b" and got[2].message == "c", vim.inspect(got))
+  got = pi.diagnostics(buf, 6)
+  assert(#got == 1 and got[1].message == "d", vim.inspect(got))
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["diagnostics takes at most 20, errors first"] = function()
+  local buf = scratch_buf(40)
+  local list = {}
+  for i = 1, 25 do
+    list[#list + 1] = { i, "W", "warn " .. i }
+  end
+  for i = 26, 30 do
+    list[#list + 1] = { i, "E", "error " .. i }
+  end
+  set_diagnostics(buf, list)
+  local got = pi.diagnostics(buf)
+  assert(#got == 20, #got)
+  assert(got[5].severity == "error" and got[6].severity == "warning" and got[6].line == 1, vim.inspect(got))
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["diagnostics collapses whitespace and cuts at 200 characters with an ellipsis"] = function()
+  local buf = scratch_buf(3)
+  set_diagnostics(buf, {
+    { 1, "E", "first\n  second\t\tthird" },
+    { 2, "E", string.rep("x", 200) },
+    { 3, "E", string.rep("x", 201) },
+  })
+  local got = pi.diagnostics(buf)
+  assert(got[1].message == "first second third", got[1].message)
+  assert(got[2].message == string.rep("x", 200), "200 chars stay whole")
+  assert(got[3].message == string.rep("x", 200) .. "…", got[3].message)
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["diagnostics cut multibyte messages by characters"] = function()
+  local buf = scratch_buf(1)
+  set_diagnostics(buf, { { 1, "E", string.rep("ä", 250) } })
+  local msg = pi.diagnostics(buf)[1].message
+  assert(vim.fn.strchars(msg) == 201 and msg == string.rep("ä", 200) .. "…", vim.fn.strchars(msg))
+  assert(vim.fn.strchars(msg) == #vim.fn.split(msg, "\\zs"), "valid utf-8")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["prompt_context attaches diagnostics: whole file in normal mode, the selection in visual mode"] = function()
+  local dir = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()
+  vim.fn.mkdir(dir, "p")
+  dir = vim.uv.fs_realpath(dir)
+  vim.fn.writefile({ "a", "b", "c", "d" }, dir .. "/x.lua")
+  local buf = vim.fn.bufadd(dir .. "/x.lua")
+  vim.fn.bufload(buf)
+  vim.api.nvim_set_current_buf(buf)
+  set_diagnostics(buf, { { 1, "E", "one" }, { 3, "W", "three" } })
+
+  local ctx = pi.prompt_context(buf, dir, { line1 = 2, line2 = 2 })
+  assert(#ctx.diagnostics == 2, vim.inspect(ctx))
+  assert(ctx.diagnostics[1].line == 1 and ctx.diagnostics[2].line == 3, vim.inspect(ctx))
+
+  vim.cmd("normal! ggjVj\27")
+  ctx = pi.prompt_context(buf, dir, { line1 = 2, line2 = 3, visual = true })
+  assert(#ctx.diagnostics == 1 and ctx.diagnostics[1].line == 3, vim.inspect(ctx))
+
+  vim.cmd("normal! ggVj\27")
+  set_diagnostics(buf, { { 4, "E", "four" } })
+  ctx = pi.prompt_context(buf, dir, { line1 = 1, line2 = 2, visual = true })
+  assert(ctx.diagnostics == nil, vim.inspect(ctx))
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
