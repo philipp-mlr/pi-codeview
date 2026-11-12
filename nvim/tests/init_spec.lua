@@ -3,7 +3,7 @@ local annotations = require("pi.annotations")
 
 local M = {}
 
-local KEYS = { "<leader>pa", "<leader>ps", "<leader>pn", "<leader>px", "<leader>pe", "<leader>pi", "<leader>pv", "<leader>pm", "<leader>pc" }
+local KEYS = { "<leader>pa", "<leader>ps", "<leader>pn", "<leader>px", "<leader>pe", "<leader>pi", "<leader>pv", "<leader>pm", "<leader>pc", "<leader>pk" }
 
 local function reset_maps()
   for _, lhs in ipairs(KEYS) do
@@ -36,6 +36,7 @@ M["default keys live under <leader>p with pi: descriptions"] = function()
     checkpoints = "<leader>pv",
     mode = "<leader>pm",
     session = "<leader>pi",
+    peek = "<leader>pk",
   }), vim.inspect(pi.default_keys))
   local notes = capture_notify(function() pi.setup() end)
   local want = {
@@ -50,12 +51,13 @@ M["default keys live under <leader>p with pi: descriptions"] = function()
     { "n", "<leader>pv", "pi: toggle checkpoint list" },
     { "n", "<leader>pm", "pi: toggle checkpoint mode" },
     { "n", "<leader>pi", "pi: choose pi session" },
+    { "n", "<leader>pk", "pi: peek at the full note or annotation" },
   }
   for _, w in ipairs(want) do
     local desc = vim.fn.maparg(w[2], w[1], false, true).desc
     assert(desc == w[3], ("%s (%s): %s"):format(w[2], w[1], tostring(desc)))
   end
-  for _, name in ipairs({ "PiAsk", "PiContinue", "PiStop", "PiAnnotate", "PiAnnotationEdit", "PiAnnotationRemove", "PiCheckpoints", "PiCheckpointMode", "PiSession" }) do
+  for _, name in ipairs({ "PiAsk", "PiContinue", "PiStop", "PiAnnotate", "PiAnnotationEdit", "PiAnnotationRemove", "PiCheckpoints", "PiCheckpointMode", "PiSession", "PiPeek" }) do
     assert(vim.fn.exists(":" .. name) == 2, "missing command " .. name)
   end
   for _, name in ipairs({ "PiSendAnnotations", "PiCancel", "PiChunks" }) do
@@ -212,9 +214,10 @@ M["annotate command refuses before asking for the note, with the right message"]
     { name_buf("pi://2/c.txt@to"), read_only },
     { name_buf("diffview://y/c.txt"), read_only },
   }
-  local original_input = vim.ui.input
+  local editor = require("pi.editor")
+  local original_open = editor.open
   local asked = 0
-  vim.ui.input = function() asked = asked + 1 end
+  editor.open = function() asked = asked + 1 end
   for _, case in ipairs(cases) do
     vim.api.nvim_set_current_buf(case[1])
     local notes = capture_notify(function() vim.cmd("PiAnnotate") end)
@@ -226,7 +229,7 @@ M["annotate command refuses before asking for the note, with the right message"]
   vim.fn.writefile({ "x" }, file)
   vim.cmd("edit " .. vim.fn.fnameescape(file))
   vim.cmd("PiAnnotate")
-  vim.ui.input = original_input
+  editor.open = original_open
   assert(asked == 1, "real file was not asked")
   annotations.clear()
 end
@@ -425,19 +428,26 @@ M["highlight links are restored after a colorscheme change"] = function()
 end
 
 
+-- Stubs the picker (choosing item select_choice) and the editor (sending input_value, or
+-- cancelling when it is nil).
 local function stub_ui(select_choice, input_value)
-  local saved = { select = vim.ui.select, input = vim.ui.input }
+  local editor = require("pi.editor")
+  local saved = { select = vim.ui.select, open = editor.open }
   local seen = {}
   vim.ui.select = function(list, opts, cb)
     seen.select = { n = #list, prompt = opts.prompt, labels = vim.tbl_map(opts.format_item, list) }
     cb(select_choice and list[select_choice] or nil)
   end
-  vim.ui.input = function(opts, cb)
+  editor.open = function(opts)
     seen.input = opts
-    cb(input_value)
+    if input_value then
+      opts.on_submit(input_value)
+    elseif opts.on_cancel then
+      opts.on_cancel()
+    end
   end
   return seen, function()
-    vim.ui.select, vim.ui.input = saved.select, saved.input
+    vim.ui.select, editor.open = saved.select, saved.open
   end
 end
 
@@ -500,7 +510,7 @@ M["PiAnnotationRemove removes a single annotation without a picker; none gives a
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
-M["PiAnnotationEdit changes text and the virtual line; cancelled or empty input keeps it"] = function()
+M["PiAnnotationEdit opens the editor prefilled, titled with file and range, and keeps lines"] = function()
   local buf, dir = three_on_line_2()
   local function virt()
     local ns = vim.api.nvim_create_namespace("pi_annotations")
@@ -510,21 +520,19 @@ M["PiAnnotationEdit changes text and the virtual line; cancelled or empty input 
     end
     return out
   end
-  local seen, restore = stub_ui(3, "  edited\n text ")
+  local seen, restore = stub_ui(3, "edited\nsecond paragraph")
   vim.cmd("PiAnnotationEdit")
   assert(seen.select.prompt == "pi: edit which annotation?")
-  assert(seen.input.prompt == "pi annotation: " and seen.input.default == "second", vim.inspect(seen.input))
-  assert(vim.tbl_contains(notes_of(dir), " edited text ") or vim.tbl_contains(notes_of(dir), "edited text"), vim.inspect(notes_of(dir)))
-  assert(vim.tbl_contains(virt(), "  ✎ " .. annotations.at_cursor()[3].note), vim.inspect(virt()))
+  assert(seen.input.title == " pi edit note · n.txt:2 " and seen.input.text == "second", vim.inspect(seen.input))
+  assert(vim.tbl_contains(notes_of(dir), "edited\nsecond paragraph"), vim.inspect(notes_of(dir)))
+  assert(vim.tbl_contains(virt(), "  ✎ edited second paragraph"), vim.inspect(virt()))
   assert(not vim.tbl_contains(virt(), "  ✎ second"), vim.inspect(virt()))
   restore()
-  for _, value in ipairs({ "", "   ", false }) do
-    local before = notes_of(dir)
-    local _, r = stub_ui(1, value or nil)
-    vim.cmd("PiAnnotationEdit")
-    r()
-    assert(vim.deep_equal(notes_of(dir), before), vim.inspect(notes_of(dir)))
-  end
+  local before = notes_of(dir)
+  local _, r = stub_ui(1, nil)
+  vim.cmd("PiAnnotationEdit")
+  r()
+  assert(vim.deep_equal(notes_of(dir), before), vim.inspect(notes_of(dir)))
   annotations.clear()
 end
 
@@ -686,6 +694,108 @@ M["setup notices legacy key names once"] = function()
   notes = capture_notify(function() pi.setup() end)
   assert(#vim.tbl_filter(function(n) return n.msg:find("renamed", 1, true) end, notes) == 0)
   reset_maps()
+end
+
+-- A file buffer in a fresh directory, current in the window; returns buf and dir.
+local function file_in_dir(name, lines)
+  local dir = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()
+  vim.fn.mkdir(dir, "p")
+  dir = vim.uv.fs_realpath(dir)
+  vim.fn.writefile(lines, dir .. "/" .. name)
+  vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/" .. name))
+  return vim.api.nvim_get_current_buf(), dir
+end
+
+M["PiAsk opens the editor titled with file, line or range and session, and sends what is written"] = function()
+  reset_maps()
+  capture_notify(function() pi.setup() end)
+  local session = require("pi.session")
+  local buf, dir = file_in_dir("ask.lua", { "a", "b", "c", "d" })
+  local saved = { ensure = session.ensure, prompt = pi.prompt, root = session.root, label = session.attached_label }
+  local sent = {}
+  session.root = dir
+  session.attached_label = function() return "refactor-discover" end
+  session.ensure = function(cb) cb(nil, dir) end
+  pi.prompt = function(text, context) sent[#sent + 1] = { text = text, context = context } end
+  local seen, restore = stub_ui(nil, "explain\nthis")
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  vim.cmd("PiAsk")
+  assert(seen.input.title == " pi ask · ask.lua:2 · refactor-discover ", vim.inspect(seen.input))
+  assert(#sent == 1 and sent[1].text == "explain\nthis" and sent[1].context.startLine == 2, vim.inspect(sent))
+  vim.cmd("2,4PiAsk")
+  assert(seen.input.title == " pi ask · ask.lua:2-4 · refactor-discover ", vim.inspect(seen.input))
+  restore()
+  -- Cancelled: nothing is sent; without an attached session the label is left out.
+  session.attached_label = function() return "" end
+  seen, restore = stub_ui(nil, nil)
+  vim.cmd("PiAsk")
+  restore()
+  assert(seen.input.title == " pi ask · ask.lua:2 ", vim.inspect(seen.input))
+  assert(#sent == 2, vim.inspect(sent))
+  session.ensure, pi.prompt, session.root, session.attached_label = saved.ensure, saved.prompt, saved.root, saved.label
+  vim.api.nvim_buf_delete(buf, { force = true })
+  reset_maps()
+end
+
+M["PiAnnotate opens the editor titled with file and range and places the written note"] = function()
+  annotations.clear()
+  local buf, dir = file_in_dir("note.txt", { "a", "b", "c" })
+  local seen, restore = stub_ui(nil, "long\nnote")
+  capture_notify(function() vim.cmd("1,3PiAnnotate") end)
+  restore()
+  assert(seen.input.title == " pi note · note.txt:1-3 " and seen.input.text == nil, vim.inspect(seen.input))
+  local list = annotations.list(dir)
+  assert(#list == 1 and list[1].note == "long\nnote" and list[1].endLine == 3, vim.inspect(list))
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- The floating windows of the current tab.
+local function floats()
+  return vim.tbl_filter(function(w)
+    return vim.api.nvim_win_get_config(w).relative ~= ""
+  end, vim.api.nvim_tabpage_list_wins(0))
+end
+
+local function float_lines()
+  local wins = floats()
+  assert(#wins == 1, "floats: " .. #wins)
+  return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(wins[1]), 0, -1, false)
+end
+
+M["PiPeek shows every full annotation of the line in a wrapping float that closes on cursor move"] = function()
+  annotations.clear()
+  local long = ("word "):rep(60) .. "end"
+  vim.cmd("tabnew") -- earlier specs may leave a checkpoint diff tab current
+  local buf = file_in_dir("peek.txt", { "a", "b", "c" })
+  annotations.add(buf, 2, 2, long)
+  annotations.add(buf, 1, 3, "second\nparagraph")
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  vim.cmd("PiPeek")
+  local win = floats()[1]
+  local text = table.concat(float_lines(), "\n")
+  assert(text:find(long, 1, true) and text:find("second\nparagraph", 1, true), text)
+  assert(vim.wo[win].wrap and vim.api.nvim_win_get_width(win) <= 80, vim.api.nvim_win_get_width(win))
+  assert(vim.api.nvim_get_current_win() ~= win, "peek took focus")
+  -- A second peek focuses the float, where <Esc> closes it.
+  vim.cmd("PiPeek")
+  assert(vim.api.nvim_get_current_win() == win, "second peek did not focus the float")
+  vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "xt", false)
+  assert(vim.wait(500, function() return #floats() == 0 end, 10), "<Esc> did not close the peek")
+  vim.cmd("PiPeek")
+  -- Headless nvim fires CursorMoved only while waiting for typed keys, so fire it by hand.
+  vim.api.nvim_win_set_cursor(0, { 3, 0 })
+  vim.api.nvim_exec_autocmds("CursorMoved", {})
+  vim.wait(500, function() return #floats() == 0 end, 10)
+  assert(#floats() == 0, "peek did not close on cursor move")
+  -- Nothing to peek on a line without annotations, outside a checkpoint diff.
+  vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "d" })
+  vim.api.nvim_win_set_cursor(0, { 4, 0 })
+  local notes = capture_notify(function() vim.cmd("PiPeek") end)
+  assert(#notes == 1 and notes[1].msg == "pi: nothing to peek here" and #floats() == 0, vim.inspect(notes))
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+  pcall(vim.cmd, "tabclose")
 end
 
 return M

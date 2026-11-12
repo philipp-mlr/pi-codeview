@@ -4,6 +4,7 @@ local badge = require("pi.badge")
 local diagnostics = require("pi.diagnostics")
 local diff = require("pi.diff")
 local discover = require("pi.discover")
+local editor = require("pi.editor")
 local highlights = require("pi.highlights")
 local keys_state = require("pi.keys")
 local live = require("pi.live")
@@ -22,6 +23,7 @@ M.default_keys = {
   checkpoints = "<leader>pv",
   mode = "<leader>pm",
   session = "<leader>pi",
+  peek = "<leader>pk",
 }
 
 -- Repo-relative path of buf, or nil when it is not a file inside root.
@@ -295,6 +297,14 @@ function M.prompt_context(buf, root, sel)
   return context
 end
 
+-- `<file>:<line>` or `<file>:<first>-<last>` for editor titles; the file is buf's base name, so
+-- the title stays short.
+local function where(buf, line1, line2)
+  local name = vim.fs.basename(vim.api.nvim_buf_get_name(buf))
+  local lines = line1 == line2 and tostring(line1) or ("%d-%d"):format(line1, line2)
+  return ("%s:%s"):format(name, lines)
+end
+
 local function prompt_command(cmd)
   local buf = vim.api.nvim_get_current_buf()
   local sel
@@ -306,14 +316,16 @@ local function prompt_command(cmd)
     local line = vim.api.nvim_win_get_cursor(0)[1]
     sel = { line1 = line, line2 = line }
   end
-  vim.ui.input({ prompt = "pi ask: " }, function(text)
-    if not text or text == "" then
-      return
-    end
-    session.ensure(function(_, root)
-      M.prompt(text, M.prompt_context(buf, root, sel))
-    end, { buf = buf })
-  end)
+  local label = session.attached_label()
+  local title = (" pi ask · %s%s "):format(where(buf, sel.line1, sel.line2), label ~= "" and " · " .. label or "")
+  editor.open({
+    title = title,
+    on_submit = function(text)
+      session.ensure(function(_, root)
+        M.prompt(text, M.prompt_context(buf, root, sel))
+      end, { buf = buf })
+    end,
+  })
 end
 
 local function annotate_command(cmd)
@@ -323,11 +335,12 @@ local function annotate_command(cmd)
   if refusal then
     return vim.notify(refusal)
   end
-  vim.ui.input({ prompt = "pi annotation: " }, function(note)
-    if note and note ~= "" then
+  editor.open({
+    title = (" pi note · %s "):format(where(buf, start_line, end_line)),
+    on_submit = function(note)
       M.annotate(buf, start_line, end_line, note)
-    end
-  end)
+    end,
+  })
 end
 
 -- Picks one of the annotations at the cursor (no picker when exactly one), then calls act(item).
@@ -352,13 +365,40 @@ end
 
 local function edit_command()
   pick_annotation("pi: edit which annotation?", function(item)
-    vim.ui.input({ prompt = "pi annotation: ", default = item.note }, function(text)
-      text = text and vim.trim(text) or ""
-      if text ~= "" then
+    local start_line, end_line = annotations.range(item)
+    editor.open({
+      title = (" pi edit note · %s "):format(where(item.buf, start_line, end_line)),
+      text = item.note,
+      on_submit = function(text)
         annotations.edit(item, text)
-      end
-    end)
+      end,
+    })
   end)
+end
+
+-- Shows the full text behind the previews at the cursor: the checkpoint note and the file's why in
+-- a checkpoint diff, then every annotation of the cursor line. Closes like LSP hover.
+function M.peek()
+  local lines = diff.peek_lines() or {}
+  for _, item in ipairs(annotations.at_cursor()) do
+    if #lines > 0 then
+      vim.list_extend(lines, { "", "---", "" })
+    end
+    vim.list_extend(lines, vim.split(item.note, "\n", { plain = true }))
+  end
+  if #lines == 0 then
+    return vim.notify("pi: nothing to peek here")
+  end
+  -- A second peek focuses the float; there q (mapped by nvim) and <Esc> close it.
+  local float_buf, float_win = vim.lsp.util.open_floating_preview(lines, "markdown", {
+    border = "rounded",
+    max_width = 80,
+    wrap = true,
+    focus_id = "pi_peek",
+  })
+  if vim.api.nvim_win_is_valid(float_win) then
+    vim.keymap.set("n", "<Esc>", "<cmd>bdelete<CR>", { buffer = float_buf, nowait = true, desc = "pi: close peek" })
+  end
 end
 
 local function report_write(buf)
@@ -431,6 +471,7 @@ function M.setup(opts)
     desc = "pi: checkpoint mode on|off, toggle without argument",
   })
   command("PiSession", M.attach, { desc = "pi: choose the pi session to work with" })
+  command("PiPeek", M.peek, { desc = "pi: peek at the full note or annotation" })
 
   -- Default keys never replace an existing mapping (e.g. another plugin's <leader>p… key); keys passed in
   -- opts.keys always map.
@@ -462,6 +503,7 @@ function M.setup(opts)
   map("n", "checkpoints", "<cmd>PiCheckpoints<CR>", "pi: toggle checkpoint list")
   map("n", "mode", "<cmd>PiCheckpointMode<CR>", "pi: toggle checkpoint mode")
   map("n", "session", "<cmd>PiSession<CR>", "pi: choose pi session")
+  map("n", "peek", "<cmd>PiPeek<CR>", "pi: peek at the full note or annotation")
   if #skipped > 0 then
     vim.notify("pi: kept existing mappings, not mapped: " .. table.concat(skipped, ", "), vim.log.levels.INFO)
   end

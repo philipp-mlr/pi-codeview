@@ -214,6 +214,69 @@ M["annotation text is a virt_lines mark on the last line, single line, and follo
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
+-- The text of each virt line of buf's annotation marks, chunks joined.
+local function virt_text(buf)
+  local out = {}
+  for _, m in ipairs(virt_line_marks(buf)) do
+    for _, line in ipairs(m[4].virt_lines) do
+      out[#out + 1] = table.concat(vim.tbl_map(function(chunk) return chunk[1] end, line))
+    end
+  end
+  return out
+end
+
+-- buf shown alone in a window `width` columns wide with signcolumn=yes:1 and no number column.
+local function show_in_width(buf, width)
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_buf(buf)
+  vim.cmd("leftabove vnew")
+  vim.cmd("wincmd l")
+  vim.cmd("vertical resize " .. width)
+  vim.wo.signcolumn = "yes:1"
+  vim.wo.number = false
+  vim.wo.foldcolumn = "0"
+  return vim.api.nvim_get_current_win()
+end
+
+M["a long annotation wraps to the window text width in at most 2 lines ending in …"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local buf = file_buf(root, "w.txt", numbered(3))
+  local win = show_in_width(buf, 40)
+  local textoff = vim.fn.getwininfo(win)[1].textoff
+  local room = 40 - textoff - 4 -- "  ✎ " and the continuation indent take 4 cells
+  annotations.add(buf, 1, 1, ("word "):rep(40) .. "end")
+  local lines = virt_text(buf)
+  assert(#lines == 2, vim.inspect(lines))
+  assert(vim.startswith(lines[1], "  ✎ word") and vim.startswith(lines[2], "    word"), vim.inspect(lines))
+  for _, line in ipairs(lines) do
+    assert(vim.fn.strdisplaywidth(line) <= 40 - textoff, ("%d > %d: %s"):format(vim.fn.strdisplaywidth(line), 40 - textoff, line))
+  end
+  assert(vim.endswith(lines[2], "…") and vim.fn.strdisplaywidth(lines[2]) > room - 4, vim.inspect(lines))
+  -- Two lines' worth stays uncut, a short note stays one line.
+  annotations.clear()
+  annotations.add(buf, 1, 1, "short note")
+  assert(vim.deep_equal(virt_text(buf), { "  ✎ short note" }), vim.inspect(virt_text(buf)))
+  annotations.clear()
+  vim.cmd("tabclose")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["annotation preview rewraps when its window is resized"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local buf = file_buf(root, "r.txt", numbered(3))
+  show_in_width(buf, 40)
+  annotations.add(buf, 1, 1, ("word "):rep(12) .. "end")
+  assert(#virt_text(buf) == 2, vim.inspect(virt_text(buf)))
+  vim.cmd("only") -- the window takes all 80 columns
+  vim.api.nvim_exec_autocmds("WinResized", {})
+  assert(vim.wait(500, function() return #virt_text(buf) == 1 end, 10), vim.inspect(virt_text(buf)))
+  annotations.clear()
+  vim.cmd("tabclose")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 M["sign has priority 200, above live marks, and the number highlight covers every line of the range"] = function()
   annotations.clear()
   local root = temp_root()

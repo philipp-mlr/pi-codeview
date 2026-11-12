@@ -52,7 +52,57 @@ local function delete_extras(item)
   item.extra_ids = {}
 end
 
--- The main extmark is the source of truth for the range; the number highlight and the text line
+-- The width `buf`'s annotation text may take: the narrowest text area of the windows showing it,
+-- or the editor width when none does.
+local function text_width(buf)
+  local width
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+    local info = vim.fn.getwininfo(win)[1]
+    local room = info.width - info.textoff
+    width = width and math.min(width, room) or room
+  end
+  return width or vim.o.columns
+end
+
+local PREFIX, INDENT = "  ✎ ", "    " -- the same width, so both preview lines start in one column
+
+-- note as at most 2 lines of `width` cells, broken at spaces; the second ends with "…" when cut.
+local function preview(note, width)
+  local room = math.max(10, width - vim.fn.strdisplaywidth(PREFIX))
+  local words = vim.split(vim.trim(note:gsub("%s+", " ")), " ", { plain = true })
+  local lines, current = {}, ""
+  local i = 1
+  while i <= #words and #lines < 2 do
+    local word = words[i]
+    local joined = current == "" and word or current .. " " .. word
+    if vim.fn.strdisplaywidth(joined) <= room then
+      current, i = joined, i + 1
+    elseif current == "" then
+      -- A word longer than the line: cut it.
+      local chars = vim.fn.strchars(word)
+      while vim.fn.strdisplaywidth(vim.fn.strcharpart(word, 0, chars)) > room do
+        chars = chars - 1
+      end
+      lines[#lines + 1] = vim.fn.strcharpart(word, 0, chars)
+      words[i] = vim.fn.strcharpart(word, chars)
+    else
+      lines[#lines + 1], current = current, ""
+    end
+  end
+  if current ~= "" and #lines < 2 then
+    lines[#lines + 1] = current
+  end
+  if i <= #words then
+    local last = lines[#lines]
+    while vim.fn.strdisplaywidth(last) > room - 1 do
+      last = vim.fn.strcharpart(last, 0, vim.fn.strchars(last) - 1)
+    end
+    lines[#lines] = last .. "…"
+  end
+  return lines
+end
+
+-- The main extmark is the source of truth for the range; the number highlight and the text lines
 -- are derived from it, since a ranged extmark highlights only its first line's number.
 local function build_extras(item)
   local s, e = position(item)
@@ -65,9 +115,12 @@ local function build_extras(item)
       number_hl_group = "PiAnnotationSign",
     })
   end
-  local text = item.note:gsub("%s+", " ")
+  local virt = {}
+  for i, line in ipairs(preview(item.note, text_width(item.buf))) do
+    virt[i] = { { (i == 1 and PREFIX or INDENT) .. line, "PiAnnotation" } }
+  end
   item.extra_ids[#item.extra_ids + 1] = vim.api.nvim_buf_set_extmark(item.buf, ns, e - 1, 0, {
-    virt_lines = { { { "  ✎ " .. text, "PiAnnotation" } } },
+    virt_lines = virt,
   })
 end
 
@@ -205,10 +258,35 @@ function M.remove(item)
 end
 
 function M.edit(item, text)
-  item.note = text:gsub("%s+", " ")
+  item.note = text
   build_extras(item)
   notify_change()
 end
+
+-- The current 1-based (start, end) lines of item, or nil when its mark is gone.
+function M.range(item)
+  return position(item)
+end
+
+-- Rewraps the previews of every buffer shown in a resized window.
+local function on_resized()
+  local resized = {}
+  for _, win in ipairs(vim.v.event.windows or vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_is_valid(win) then
+      resized[vim.api.nvim_win_get_buf(win)] = true
+    end
+  end
+  for _, item in ipairs(items) do
+    if resized[item.buf] then
+      build_extras(item)
+    end
+  end
+end
+
+vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+  group = vim.api.nvim_create_augroup("PiAnnotationsResize", { clear = true }),
+  callback = on_resized,
+})
 
 -- opts.diagnostics: attach the ERROR/WARN diagnostics on each annotation's current lines.
 function M.list(root, opts)

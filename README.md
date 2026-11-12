@@ -70,7 +70,7 @@ settings.packages = [ "${inputs.pi-nvim}" ];
 to `false` to leave it unmapped. A default key that is already mapped by
 another plugin is left alone, and `setup()` lists the skipped keys in one
 message. Keys you pass in `keys` are always mapped. The key names are `ask`,
-`continue`, `stop`, `annotate`, `edit`, `remove`, `checkpoints`, `mode`, `session`.
+`continue`, `stop`, `annotate`, `edit`, `remove`, `checkpoints`, `mode`, `session`, `peek`.
 
 ## Keys and commands
 
@@ -85,10 +85,39 @@ message. Keys you pass in `keys` are always mapped. The key names are `ask`,
 | `<leader>pv` | `:PiCheckpoints` | Toggle the checkpoint list. |
 | `<leader>pm` | `:PiCheckpointMode [on\|off]` | Switch checkpoint mode for this repository; without an argument it toggles. |
 | `<leader>pi` | `:PiSession` | Choose the pi session to work with. |
+| `<leader>pk` | `:PiPeek` | Peek: show the full checkpoint note and the file's reason in a checkpoint diff, or the full annotations of the cursor line. |
+
+## Writing and reading long text
+
+`<leader>pa`, `<leader>pn` and `<leader>pe` open a small editor in a floating
+window, about 80 columns wide, that wraps and grows up to 15 lines. Its title
+says where the text goes: ` pi ask · session.lua:5 · refactor-discover `
+(file, line or range, session), ` pi note · session.lua:5-9 `, or
+` pi edit note · session.lua:5-9 ` with the current text filled in. It starts
+in insert mode and is a markdown buffer, so paragraphs and lists work.
+
+- `<C-s>` sends (insert and normal mode); `<CR>` sends in normal mode.
+- `q` or `<Esc>` in normal mode cancels. Closing the window any other way
+  (`:q`, `<C-w>c`, moving to another window) cancels too; nothing is sent.
+- Sending empty text cancels. Trailing blank lines and spaces are dropped.
+
+Long text is previewed where you review it and read in full with
+`<leader>pk`:
+
+- In a checkpoint diff the note and the file's reason show their first 80
+  characters, then `… <leader>pk`. `<leader>pk` opens a float with
+  `checkpoint N — <title>`, the full note and `why: …` for the current file.
+- An annotation shows at most 2 lines below its range, wrapped to the
+  window's text width, the second ending in `…` when cut. The wrap follows
+  window resizes. `<leader>pk` on an annotated line shows every annotation
+  of that line in full.
+- The peek float wraps, is at most 80 columns wide and closes when the cursor
+  moves, like LSP hover (`K`). Pressing `<leader>pk` again enters it to
+  scroll; `q` or `<Esc>` closes it there.
 
 ## Asking
 
-`<leader>pa` opens a prompt and sends your text with context:
+`<leader>pa` opens the editor (see above) and sends your text with context:
 
 - The file path (relative to the repository).
 - Normal mode: the cursor line. Visual mode: the line range and the selected
@@ -142,9 +171,9 @@ attached to a session. `require("pi").status()` returns `"checkpoint N"`,
 
 ## Annotations
 
-`<leader>pn` on a line, or on a visual range, asks for a note. The note
-shows on its own line below the range as `✎ <text>` (highlight
-`PiAnnotation`), with a `✎` sign on the first line and the line numbers of
+`<leader>pn` on a line, or on a visual range, opens the editor for a note.
+The note shows below the range as `✎ <text>`, at most 2 wrapped lines
+(highlight `PiAnnotation`; `<leader>pk` shows it in full), with a `✎` sign on the first line and the line numbers of
 the range highlighted (`PiAnnotationSign`). `<leader>px` removes the one
 under the cursor.
 
@@ -202,7 +231,8 @@ Review flow:
    default), `r` refreshes, `q` closes.
 3. The checkpoint opens in its own tab as a diff view: on the left the file
    before the checkpoint, on the right your file. Above the diff you see the
-   checkpoint note and the agent's one-line reason for the current file.
+   checkpoint note and the agent's one-line reason for the current file
+   (the first 80 characters; `<leader>pk` shows them in full).
    `<Tab>` and `<S-Tab>` move to the next and previous file (they stop at the
    ends), `q` closes the tab and takes you back to where you came from. Vim's
    own diff keys work: `]c` and `[c` jump between changes, `do` and `dp`

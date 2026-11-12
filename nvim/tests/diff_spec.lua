@@ -65,7 +65,7 @@ local function why_text(buf)
   local out = {}
   for _, mark in ipairs(marks) do
     for _, line in ipairs(mark[4].virt_lines or {}) do
-      out[#out + 1] = line[1][1]
+      out[#out + 1] = table.concat(vim.tbl_map(function(chunk) return chunk[1] end, line))
     end
   end
   return out
@@ -367,9 +367,48 @@ M["multi-line note and why render as one line each"] = function()
   assert(topfill == 2, "topfill=" .. topfill)
 end
 
-M["long note is cut to 200 characters with an ellipsis"] = function()
-  local text = open_with_note(("x"):rep(300), nil)
-  assert(vim.deep_equal(text, { "  " .. ("x"):rep(200) .. "…" }), vim.inspect(text))
+M["long note and why show their first 80 characters, then … and the peek key"] = function()
+  local keys = require("pi.keys")
+  local saved = keys.mapped
+  keys.mapped = { peek = "<leader>pk" }
+  local text = open_with_note(("x"):rep(300), ("y"):rep(81))
+  assert(vim.deep_equal(text, {
+    "  " .. ("x"):rep(80) .. "… <leader>pk",
+    "  why: " .. ("y"):rep(80) .. "… <leader>pk",
+  }), vim.inspect(text))
+  keys.mapped = {}
+  text = open_with_note(("x"):rep(80), ("y"):rep(300))
+  assert(vim.deep_equal(text, { "  " .. ("x"):rep(80), "  why: " .. ("y"):rep(80) .. "… :PiPeek" }), vim.inspect(text))
+  keys.mapped = saved
+end
+
+M["peek_lines gives the checkpoint title, full note and the current file's why"] = function()
+  local root, sha = chunk_repo()
+  vim.fn.writefile({ "two" }, root .. "/b.txt")
+  session.root = root
+  session.cached = { sessionId = "peek" }
+  local original = session.request
+  local note = ("long note "):rep(30) .. "\n\nsecond paragraph"
+  session.request = function(_, _, cb)
+    cb(nil, {
+      chunk = {
+        n = 3, status = "open", fromSha = sha, title = "Split the parser", note = note, humanFiles = {},
+        agentFiles = { "a.txt", "b.txt" }, why = { ["b.txt"] = "b needs it" },
+      },
+    })
+  end
+  assert(diff.peek_lines() == nil, "peek outside a checkpoint diff")
+  diff.open(3)
+  session.request = original
+  local lines = diff.peek_lines()
+  local want = { "checkpoint 3 — Split the parser", "" }
+  vim.list_extend(want, vim.split(note, "\n"))
+  assert(vim.deep_equal(lines, want), vim.inspect(lines))
+  press("<Tab>")
+  lines = diff.peek_lines()
+  assert(lines[#lines] == "why: b needs it" and lines[#lines - 1] == "", vim.inspect(lines))
+  vim.cmd("tabclose")
+  session.cached = nil
 end
 
 M["viewed is per pi session, not per chunk number"] = function()

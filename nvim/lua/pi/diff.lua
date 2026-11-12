@@ -5,7 +5,7 @@ local session = require("pi.session")
 local diffview = require("pi.diffview")
 
 local M = {}
-local NOTE_MAX_CHARS = 200 -- virt_lines do not wrap
+local PREVIEW_CHARS = 80 -- virt_lines do not wrap; the full text is one peek away
 
 M.mode = "auto" -- "auto" | "diffview" | "builtin", set by setup({ diff = ... })
 local warned_missing_diffview = false
@@ -217,15 +217,17 @@ end
 function M.place_why(buf, chunk, path)
   local ns = vim.api.nvim_create_namespace("pi_why")
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-  -- virt_lines neither wrap nor span lines: one line each, whitespace collapsed, note capped.
+  -- virt_lines neither wrap nor span lines: one line each, whitespace collapsed, cut to the first
+  -- 80 characters followed by the peek key.
   local function one_line(text)
-    return (vim.trim((text or ""):gsub("%s+", " ")))
+    text = vim.trim((text or ""):gsub("%s+", " "))
+    if vim.fn.strchars(text) > PREVIEW_CHARS then
+      text = vim.fn.strcharpart(text, 0, PREVIEW_CHARS) .. "… " .. keys.label("peek", ":PiPeek")
+    end
+    return text
   end
   local virt = {}
   local note = one_line(chunk.note)
-  if vim.fn.strchars(note) > NOTE_MAX_CHARS then
-    note = vim.fn.strcharpart(note, 0, NOTE_MAX_CHARS) .. "…"
-  end
   if note ~= "" then
     virt[#virt + 1] = { { "  " .. note, "Title" } }
   end
@@ -447,6 +449,44 @@ function M.open(n, path)
     M.show(view, view.index)
     vim.api.nvim_set_current_win(right)
   end)
+end
+
+-- The full text behind the diff previews of the current tab: `checkpoint N — <title>`, the note and
+-- `why: …` for the file shown, blank lines between; nil outside a checkpoint diff.
+function M.peek_lines()
+  current_view()
+  local view = views[vim.api.nvim_get_current_tabpage()]
+  local win = vim.api.nvim_get_current_win()
+  if not view or (view.kind ~= "diffview" and win ~= view.left and win ~= view.right) then
+    return nil
+  end
+  local chunk = view.chunk
+  local title = chunk.title
+  if not title or title == "" then
+    title = vim.trim((chunk.note or ""):match("^%s*([^\n]*)") or "")
+  end
+  local lines = { ("checkpoint %d%s"):format(chunk.n, title ~= "" and " — " .. title or "") }
+  local note = vim.trim(chunk.note or "")
+  if note ~= "" then
+    lines[#lines + 1] = ""
+    vim.list_extend(lines, vim.split(note, "\n", { plain = true }))
+  end
+  local path
+  if view.kind == "diffview" then
+    local name = vim.api.nvim_buf_get_name(0)
+    for _, file in ipairs(view.files) do
+      if vim.endswith(name, "/" .. file.path) and (not path or #file.path > #path) then
+        path = file.path
+      end
+    end
+  else
+    path = view.files[view.index].path
+  end
+  local why = path and chunk.why and chunk.why[path]
+  if why and vim.trim(why) ~= "" then
+    vim.list_extend(lines, { "", "why: " .. vim.trim(why) })
+  end
+  return lines
 end
 
 function M.viewed(n)

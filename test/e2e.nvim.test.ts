@@ -220,7 +220,7 @@ local cv = require("pi")
 cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 2 end
-vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
+require("pi.editor").open = function(o) vim.notify("PROMPT " .. o.title); o.on_cancel() end
 cv.continue()
 `,
     );
@@ -240,7 +240,7 @@ local cv = require("pi")
 cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 local buf = vim.api.nvim_get_current_buf()
-vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
+require("pi.editor").open = function(o) vim.notify("PROMPT " .. o.title); o.on_cancel() end
 cv.annotate(buf, 1, 1, "first")
 cv.annotate(buf, 2, 2, "second")
 cv.continue()
