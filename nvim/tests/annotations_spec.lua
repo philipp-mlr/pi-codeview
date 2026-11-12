@@ -460,4 +460,18 @@ M["remove deletes the sign, number and text marks"] = function()
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
+M["clear_root and clear report every dropped annotation to on_remove"] = function()
+  annotations.clear()
+  local root, other = temp_root(), temp_root()
+  annotations.add(file_buf(root, "a.txt", numbered(3)), 1, 1, "sent")
+  annotations.add(file_buf(other, "b.txt", numbered(3)), 1, 1, "kept")
+  local removed = {}
+  annotations.on_remove(function(item) removed[#removed + 1] = item.note end)
+  annotations.clear_root(root)
+  assert(vim.deep_equal(removed, { "sent" }), vim.inspect(removed))
+  annotations.clear()
+  assert(vim.deep_equal(removed, { "sent", "kept" }), vim.inspect(removed))
+  annotations.on_remove(nil)
+end
+
 return M

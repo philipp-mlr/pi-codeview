@@ -212,6 +212,14 @@ local function drop(item)
   end
 end
 
+local function report_removed(removed)
+  if remove_listener then
+    for _, item in ipairs(removed) do
+      remove_listener(item)
+    end
+  end
+end
+
 -- Items whose current range contains the cursor line in the current buffer, sorted by start line.
 function M.at_cursor()
   local buf = vim.api.nvim_get_current_buf()
@@ -255,13 +263,11 @@ function M.remove(item)
   end
   items = kept
   drop(item)
-  if remove_listener then
-    remove_listener(item)
-  end
+  report_removed({ item })
   notify_change()
 end
 
--- fn(item) runs after M.remove took an annotation away.
+-- fn(item) runs after M.remove, M.clear_root or M.clear took an annotation away.
 function M.on_remove(fn)
   remove_listener = fn
 end
@@ -337,12 +343,13 @@ end
 
 -- Drops the annotations of files under root and the unplaced drafts of root; others stay.
 function M.clear_root(root)
-  local kept = {}
+  local kept, removed = {}, {}
   for _, item in ipairs(items) do
     local name = vim.api.nvim_buf_is_valid(item.buf) and vim.api.nvim_buf_get_name(item.buf) or ""
     local real = name ~= "" and vim.uv.fs_realpath(name) or nil
     if real and discover.relpath(root, real) then
       drop(item)
+      removed[#removed + 1] = item
     else
       kept[#kept + 1] = item
     end
@@ -351,10 +358,12 @@ function M.clear_root(root)
   unplaced = vim.tbl_filter(function(u)
     return u.root ~= root
   end, unplaced)
+  report_removed(removed)
   notify_change()
 end
 
 function M.clear()
+  local removed = items
   for _, item in ipairs(items) do
     drop(item)
   end
@@ -363,6 +372,7 @@ function M.clear()
   for buf in pairs(timers) do
     stop_timer(buf)
   end
+  report_removed(removed)
   notify_change()
 end
 

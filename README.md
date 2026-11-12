@@ -265,6 +265,12 @@ at the start of a new codebase. It is off by default and set per repository
 
 A checkpoint with no changes is skipped: the agent is told nothing needs review. Opening one from the list says `pi: checkpoint N has no file changes — <leader>pc to continue`. The empty list reads `checkpoint mode is off — <leader>pm to turn it on`, or `no checkpoints yet` with the mode on. If the agent edits files outside the worktree pi was started in, pi and Neovim warn once per run (`pi: the agent is editing outside <worktree> — start pi in that worktree to review it`).
 
+Checkpoint mode only applies in a pi session that can stop for review: one with
+a UI whose tools include `checkpoint`. Subagents and other sessions started with
+a tool list without `checkpoint`, or without a UI (`pi -p`), work as with
+checkpoint mode off: no size cap, no end-of-run checkpoint. `/checkpoints` there
+says `checkpoint mode is on for this repo, but this session can't stop for review`.
+
 Switch it with `<leader>pm` / `:PiCheckpointMode on|off` in Neovim, or in pi:
 
 - `/checkpoints` shows the state.

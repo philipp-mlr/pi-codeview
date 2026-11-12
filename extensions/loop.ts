@@ -22,6 +22,9 @@ export const CHECKPOINT_TOOL = "checkpoint";
 export const NOTHING_CHANGED = "Nothing changed since the last checkpoint; no review needed. Continue.";
 export const REVIEW_PENDING = "Review pending. Philipp will send it later.";
 export const END_OF_RUN_NOTE = "end of run, no checkpoint";
+export const NO_REVIEW =
+  "This session can't stop for review (no checkpoint tool or no UI here), so checkpoint mode does not apply. Continue.";
+export const CANT_REVIEW_HERE = "checkpoint mode is on for this repo, but this session can't stop for review";
 export const ONE_REVIEW_SESSION =
   "another pi session is in checkpoint mode for this worktree (one checkpoint-mode session per worktree)";
 
@@ -172,6 +175,7 @@ export class ReviewLoop {
     files?: Array<{ path: string; why: string }>,
     title?: string,
   ): Promise<string> {
+    if (!this.canBeReviewed()) return NO_REVIEW;
     const chunk = await this.serial(async () => {
       const open = this.state.openChunk();
       if (open) return open;
@@ -186,9 +190,22 @@ export class ReviewLoop {
     return this.waitForReview(chunk.n, signal);
   }
 
+  /**
+   * Whether this session can stop for review: it has a UI and its tool allowlist lets `checkpoint` be
+   * active. Checked whenever it matters, since a child runtime may apply its allowlist after session_start.
+   */
+  canBeReviewed(): boolean {
+    return this.ctx.hasUI && this.pi.getActiveTools().includes(CHECKPOINT_TOOL);
+  }
+
+  /** The mode in effect: the repo's mode, but off in a session that can't stop for review. */
+  effectiveMode(): Mode {
+    return this.state.mode === "checkpoints" && this.canBeReviewed() ? "checkpoints" : "off";
+  }
+
   /** Block reason for a tool call, or undefined when it may run. */
   capBlock(toolName: string): string | undefined {
-    if (this.state.mode !== "checkpoints" || isReadOnlyTool(toolName)) return undefined;
+    if (isReadOnlyTool(toolName) || this.effectiveMode() !== "checkpoints") return undefined;
     if (this.state.agentLines() <= this.cap) return undefined;
     return `Changed lines since the last checkpoint exceed ${this.cap}. Call checkpoint with a note first.`;
   }
@@ -198,14 +215,14 @@ export class ReviewLoop {
     if (isReadOnlyTool(toolName)) return;
     this.mayHaveChanged = true;
     // With checkpoints off, changes are recorded at turn_end only, so mutating tools stay cheap.
-    if (this.state.mode !== "checkpoints") return;
+    if (this.effectiveMode() !== "checkpoints") return;
     await this.serial(async () => {
       if ((await this.recordSince("agent")).files.length > 0) this.persist();
     });
   }
 
   async endOfRun(): Promise<void> {
-    if (this.state.mode !== "checkpoints") return;
+    if (this.effectiveMode() !== "checkpoints") return;
     await this.serial(async () => {
       if (this.state.openChunk()) return;
       const { sha } = await this.recordSince("agent");
@@ -218,7 +235,7 @@ export class ReviewLoop {
   }
 
   async turnEnd(turnIndex: number): Promise<void> {
-    if (this.state.mode !== "off" || !this.mayHaveChanged) return;
+    if (this.effectiveMode() !== "off" || !this.mayHaveChanged) return;
     this.mayHaveChanged = false;
     await this.serial(async () => {
       const { sha } = await this.recordSince("agent");
@@ -296,7 +313,7 @@ export class ReviewLoop {
   markBase(): string {
     const open = this.state.openChunk();
     if (open) return open.fromSha;
-    if (this.state.mode === "checkpoints") return this.state.baseline;
+    if (this.effectiveMode() === "checkpoints") return this.state.baseline;
     return this.runBaseline ?? this.state.baseline;
   }
 
@@ -419,14 +436,14 @@ export class ReviewLoop {
       this.state.mode = mode;
       this.applyTools();
       this.persist();
-      this.broadcast("mode_changed", { mode });
+      this.broadcast("mode_changed", { mode: this.effectiveMode() });
     });
   }
 
   describe(): string {
     const open = this.state.openChunk();
     const chunk = open ? `checkpoint ${open.n} open ("${open.note}")` : "no open checkpoint";
-    const mode = this.state.mode === "checkpoints" ? "checkpoint mode on" : "checkpoint mode off";
+    const mode = this.modeNote() ?? (this.state.mode === "checkpoints" ? "checkpoint mode on" : "checkpoint mode off");
     return `pi: ${mode}, ${chunk}, socket ${this.sockPath}`;
   }
 
@@ -436,7 +453,8 @@ export class ReviewLoop {
     switch (req.type) {
       case "status":
         return {
-          mode: this.state.mode,
+          mode: this.effectiveMode(),
+          modeNote: this.modeNote(),
           root: this.root,
           sessionId: this.sessionId,
           name: this.ctx.sessionManager.getSessionName?.() ?? null,
@@ -478,7 +496,7 @@ export class ReviewLoop {
         const mode = parseMode(req.mode);
         if (!mode) throw new Error(`unknown mode "${req.mode}": use checkpoints or off (on/off)`);
         await this.setMode(mode);
-        return { mode: this.state.mode };
+        return { mode: this.effectiveMode() };
       }
       default:
         throw new Error(`unknown request ${(req as { type?: string }).type}`);
@@ -599,9 +617,15 @@ export class ReviewLoop {
     return false;
   }
 
+  /** Why the repo's checkpoint mode is not in effect here; undefined when it is, or when the repo's mode is off. */
+  private modeNote(): string | undefined {
+    return this.state.mode === "checkpoints" && !this.canBeReviewed() ? CANT_REVIEW_HERE : undefined;
+  }
+
+  /** Activates `checkpoint` in checkpoint mode when there is a UI; a tool allowlist may still keep it out. */
   private applyTools(): void {
     const others = this.pi.getActiveTools().filter((t) => t !== CHECKPOINT_TOOL);
-    this.pi.setActiveTools(this.state.mode === "checkpoints" ? [...others, CHECKPOINT_TOOL] : others);
+    this.pi.setActiveTools(this.state.mode === "checkpoints" && this.ctx.hasUI ? [...others, CHECKPOINT_TOOL] : others);
   }
 
   private persist(): void {
@@ -610,7 +634,7 @@ export class ReviewLoop {
     const open = this.state.openChunk();
     const status = open
       ? `pi: checkpoint ${open.n} waiting for review`
-      : this.state.mode === "checkpoints"
+      : this.effectiveMode() === "checkpoints"
         ? "pi: checkpoints"
         : undefined;
     if (this.ctx.hasUI) this.ctx.ui.setStatus(STATUS_KEY, status);

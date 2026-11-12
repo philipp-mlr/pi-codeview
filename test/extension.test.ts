@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ReviewLoop } from "../extensions/loop.ts";
+import { NO_REVIEW, ReviewLoop } from "../extensions/loop.ts";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -34,11 +34,22 @@ afterEach(async () => {
 
 async function start(
   repo: TestRepo | string,
-  opts: { mode?: "checkpoints" | "off"; sessionId?: string; entries?: FakeEntry[] } = {},
+  opts: {
+    mode?: "checkpoints" | "off";
+    sessionId?: string;
+    entries?: FakeEntry[];
+    hasUI?: boolean;
+    allowedTools?: string[];
+  } = {},
 ): Promise<FakePi> {
   const cwd = typeof repo === "string" ? repo : repo.root;
   if (opts.mode && typeof repo !== "string") await repo.git("config", "pi-nvim.checkpoints", String(opts.mode === "checkpoints"));
-  const fake = makeFakePi(cwd, { sessionId: opts.sessionId, entries: opts.entries });
+  const fake = makeFakePi(cwd, {
+    sessionId: opts.sessionId,
+    entries: opts.entries,
+    hasUI: opts.hasUI,
+    allowedTools: opts.allowedTools,
+  });
   piNvim(fake.pi);
   await fake.fire("session_start", { reason: "startup" });
   cleanups.push(() => fake.fire("session_shutdown", { reason: "quit" }).then(() => {}));
@@ -1016,5 +1027,72 @@ describe("pi-nvim activity", () => {
     await client.request("prompt", { text: "fix", context: { path: "a.ts", startLine: 1, endLine: 3, diagnostics } });
     const sent = fake.sent.find((s) => s.kind === "user");
     expect(String(sent!.kind === "user" && sent!.content)).toContain("Diagnostics:\n  a.ts:2 error bad [lsp]");
+  });
+});
+
+describe("pi-nvim checkpoint mode in a session nobody can review", () => {
+  const BASE_TOOLS = ["read", "bash", "edit", "write"];
+
+  async function pastTheCap(fake: FakePi, repo: TestRepo): Promise<void> {
+    await agentWrite(fake, repo, "a.txt", lines(151));
+  }
+
+  it("a tool allowlist without checkpoint: no cap block, no chunk at end of run, status says off and why", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints", allowedTools: BASE_TOOLS });
+    expect(fake.pi.getActiveTools()).not.toContain("checkpoint");
+    await pastTheCap(fake, repo);
+    expect(await fake.fire("tool_call", { toolName: "edit", input: {} })).toEqual([undefined]);
+    await fake.fire("agent_before_settle");
+    await fake.fire("agent_settled", { aborted: true });
+    const client = await connect(repo);
+    const status = (await client.request("status")).result;
+    expect(status.openChunk).toBeNull();
+    expect(status.mode).toBe("off");
+    expect(status.modeNote).toBe("checkpoint mode is on for this repo, but this session can't stop for review");
+    await fake.runCommand("checkpoints", "");
+    expect(fake.notifications.at(-1)?.message).toContain("checkpoint mode is on for this repo, but this session can't stop for review");
+    expect(fake.confirms).toEqual([]);
+  });
+
+  it("an allowlisted session records turn chunks like checkpoints off", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints", allowedTools: BASE_TOOLS });
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    await fake.fire("turn_end", { turnIndex: 0 });
+    const client = await connect(repo);
+    expect((await client.request("list_chunks")).result).toMatchObject([{ n: 1, status: "recorded" }]);
+  });
+
+  it("without a UI: no cap block, no chunk at end of run, a checkpoint call returns at once", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints", hasUI: false });
+    expect(fake.pi.getActiveTools()).not.toContain("checkpoint");
+    await pastTheCap(fake, repo);
+    expect(await fake.fire("tool_call", { toolName: "edit", input: {} })).toEqual([undefined]);
+    expect(text(await fake.callTool("checkpoint", { note: "x" }))).toBe(NO_REVIEW);
+    await fake.fire("agent_before_settle");
+    const client = await connect(repo);
+    const status = (await client.request("status")).result;
+    expect(status.openChunk).toBeNull();
+    expect(status.mode).toBe("off");
+  });
+
+  it("checkpoint taken away after start (a child runtime applying its allowlist late) stops blocking", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    await pastTheCap(fake, repo);
+    expect(await fake.fire("tool_call", { toolName: "edit", input: {} })).toHaveLength(1);
+    expect((await fake.fire("tool_call", { toolName: "edit", input: {} }))[0]).toMatchObject({ block: true });
+    fake.pi.setActiveTools(BASE_TOOLS);
+    expect(await fake.fire("tool_call", { toolName: "edit", input: {} })).toEqual([undefined]);
+  });
+
+  it("a session in checkpoint mode that can't be reviewed does not keep another session out of checkpoint mode", async () => {
+    const repo = await makeRepo();
+    await start(repo, { mode: "checkpoints", hasUI: false, sessionId: "child" });
+    const main = await start(repo, { sessionId: "main" });
+    expect(main.pi.getActiveTools()).toContain("checkpoint");
+    expect(main.notifications.some((n) => n.message.includes("one checkpoint-mode session per worktree"))).toBe(false);
   });
 });

@@ -179,6 +179,11 @@ In checkpoint mode the agent stops at the end of each step (or after 150
 changed lines) and waits for your review. It is off by default and set per
 repository. Switch it with |:PiCheckpointMode| or `/checkpoints on|off` in pi.
 
+It only applies in a pi session that can stop for review: one with a UI whose
+tools include `checkpoint`. Subagents and other sessions without that tool or
+without a UI work as with the mode off (no size cap, no end-of-run
+checkpoint); `/checkpoints` there says why.
+
 The checkpoint list (|:PiCheckpoints|) opens when a checkpoint arrives. In it:
 
     <CR>   open the checkpoint (on a file line: at that file)

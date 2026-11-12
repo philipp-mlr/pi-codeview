@@ -47,7 +47,9 @@ The extension renders them under the context or the annotation's note as a `Diag
 ### Results
 
 - `status`: `{"mode":"checkpoints","root":"/abs/worktree","sessionId":"…","name":"my session"|null,"baseline":"<sha>","markBase":"<sha>","openChunk":<chunk>|null,"drafts":[<annotation>],"busy":false,"queued":0,"activity":{"tool":"edit","target":"a.ts"}|null,"lastActive":1731400000000}`.
-  `mode` is `checkpoints` or `off` (checkpoint mode on or off). `name` is the pi session name or `null`. `baseline` is the sha of the latest recorded snapshot.
+  `mode` is `checkpoints` or `off`: the checkpoint mode in effect for this session. A session that can't stop for review
+  (no UI, or its tool allowlist keeps the `checkpoint` tool out) reports `off` even when the repo's mode is on, and then
+  `modeNote` (optional, absent otherwise) says why: `"checkpoint mode is on for this repo, but this session can't stop for review"`. `name` is the pi session name or `null`. `baseline` is the sha of the latest recorded snapshot.
   `root` is the worktree the session runs in; clients attach only to sessions whose `root` is their own worktree.
   `busy` is true while the agent is working (`activity_current` events carry it too); `queued` counts prompts waiting behind the open chunk.
   `lastActive` is the epoch ms of the session's last sign of life (agent start or settle, tool call or result, prompt or send from nvim; session start otherwise). Optional: older extensions omit it.
@@ -61,7 +63,7 @@ The extension renders them under the context or the annotation's note as a `Diag
 - A chunk may carry `title` (the agent's short title, at most 60 characters, whitespace collapsed); clients show the first sentence of `note` when it is absent.
 - A chunk may carry `why`: `{"<repo-relative path>":"<one short line, max 200 chars>"}`, set from the `files` argument of the agent's `checkpoint` call. Only paths changed in the chunk are kept; the field is absent when empty. Clients must tolerate its absence.
 - `send`: `{"chunk":<closed chunk>}` for a review, `{"chunk":null}` when sent as a prompt (no open chunk).
-- `save_drafts`: `{"saved":<count>}`. `human_write`: `{"files":[<paths changed since the last snapshot>]}`. `set_mode`: `{"mode":"checkpoints"}`.
+- `save_drafts`: `{"saved":<count>}`. `human_write`: `{"files":[<paths changed since the last snapshot>]}`. `set_mode`: `{"mode":"checkpoints"}` (the mode in effect, as in `status`).
 
 ## Events
 

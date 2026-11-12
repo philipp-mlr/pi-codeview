@@ -80,7 +80,7 @@ local function save_drafts(cb)
       cb()
     end
     if err then
-      vim.notify("pi: saving drafts failed: " .. err, vim.log.levels.WARN)
+      pi_text.notify_fit({ "pi: saving drafts failed: " .. err, "pi: saving drafts failed" }, vim.log.levels.WARN)
     end
   end)
 end
@@ -226,7 +226,7 @@ local function open(path)
       M.conn, M.cached = nil, nil
       live.clear()
       redraw()
-      vim.notify("pi: disconnected from pi", vim.log.levels.WARN)
+      pi_text.notify_fit({ "pi: disconnected from pi", "pi: disconnected" }, vim.log.levels.WARN)
     end
   end)
   return conn, err
