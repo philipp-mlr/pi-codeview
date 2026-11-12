@@ -9,6 +9,11 @@
 - Continue (`pc`): with a checkpoint waiting → send all annotations and saved edits as the review, no message prompt, no y/n; the agent continues. A message for the agent goes via `pa` first (queued behind the review, existing behaviour). With no checkpoint waiting → send annotations as a new prompt; none → `pi: nothing to send`.
 - Empty checkpoints are skipped: if the agent calls `checkpoint` and nothing changed since the last checkpoint (no agent or human steps, no files), no checkpoint is created, nothing is shown, and the tool returns immediately with a short text telling the agent nothing changed and to continue.
 - User-facing "chunk" → "checkpoint" (messages, badge, statusline, panel, winbar, README, picker labels). Protocol and code names stay "chunk" (no protocol change for the rename).
+- Checkpoint list (Philipp: "very long and barely readable"; he said "start building" to the proposed layout, fold variant):
+  - The `checkpoint` tool gets an optional `title` (max 60 chars); guidelines ask for a short title. Checkpoints without one show the note's first sentence, cut to 60 chars.
+  - Panel 60 columns wide; first line is key help `pi checkpoints — <CR> open · za details · a all · <pc> continue`; one line per checkpoint, newest first, waiting one on top and highlighted: `● 4  waiting   <title>   N files` / `✓ 3  reviewed  <title>   2 files`.
+  - `za` toggles details in place: full note wrapped to the panel width, each file on its own line with `+added −removed`, annotations. `<CR>` on a checkpoint line opens it; on a file line opens it at that file.
+  - Per-turn records from vibe mode (status "recorded") are hidden by default; `a` toggles showing them.
 - Outside-worktree warning: when the agent changes a file outside the session's worktree root, warn once per run: `pi: the agent is editing files outside <root> — checkpoint mode can't show them; start pi in that worktree`.
 
 ## Global Constraints
@@ -59,3 +64,10 @@
 - `checkpoint()`: if no open chunk and `recordSince("agent")` finds no changes AND there are no steps since the last checkpoint (no agent or human changes) → return the exact empty text immediately; nothing persisted or broadcast.
 - Outside worktree: on `tool_call` (or tool_result) for a mutating tool with a `path` argument, resolve it against ctx.cwd; if it is outside the root (realpath-safe) and not yet warned this run → `ctx.ui.notify` the exact text in pi and broadcast `outside_worktree { path }`; nvim shows the same text once. Reset per run (agent_start).
 - [ ] Tests: empty checkpoint returns immediately, no chunk, drafts untouched; checkpoint with only human changes still opens; warning once per run with absolute and relative paths; nvim shows it. Commit `feat: skip empty checkpoints, warn when the agent edits outside the worktree`.
+
+### Task 4: Readable checkpoint list
+
+**Files:** `extensions/pi-nvim.ts` (tool param `title?`), `extensions/state.ts` (Chunk `title?`, createChunk), `extensions/loop.ts` (pass title; `get_chunk` or `list_chunks` can include per-file `+/-` counts — add `stats: { path, added, removed }[]` to `get_chunk`), `extensions/render.ts` (guidelines ask for a title), `docs/protocol.md`; `nvim/lua/pi/panel.lua` (layout, folding, `a`, `<CR>` on file lines), `nvim/lua/pi/diff.lua` / `diffview.lua` (open at a given file), tests, `README.md`.
+
+- [ ] Tests: title stored and capped; guideline mentions title; fallback title from the note's first sentence; panel line format and order (waiting first, then newest first); recorded hidden, `a` shows them; `za` expands note wrapped to width, file lines with counts, annotations; `<CR>` on a file line opens that file. Commit `feat: readable checkpoint list with titles and details`.
+
