@@ -1,5 +1,6 @@
 local discover = require("pi.discover")
 local diagnostics = require("pi.diagnostics")
+local pi_text = require("pi.text")
 
 local M = {}
 
@@ -66,39 +67,15 @@ local function text_width(buf)
 end
 
 local PREFIX, INDENT = "  ✎ ", "    " -- the same width, so both preview lines start in one column
+local LABEL_TEXT_WIDTH = 80
 
 -- note as at most 2 lines of `width` cells, broken at spaces; the second ends with "…" when cut.
 local function preview(note, width)
   local room = math.max(10, width - vim.fn.strdisplaywidth(PREFIX))
-  local words = vim.split(vim.trim(note:gsub("%s+", " ")), " ", { plain = true })
-  local lines, current = {}, ""
-  local i = 1
-  while i <= #words and #lines < 2 do
-    local word = words[i]
-    local joined = current == "" and word or current .. " " .. word
-    if vim.fn.strdisplaywidth(joined) <= room then
-      current, i = joined, i + 1
-    elseif current == "" then
-      -- A word longer than the line: cut it.
-      local chars = vim.fn.strchars(word)
-      while vim.fn.strdisplaywidth(vim.fn.strcharpart(word, 0, chars)) > room do
-        chars = chars - 1
-      end
-      lines[#lines + 1] = vim.fn.strcharpart(word, 0, chars)
-      words[i] = vim.fn.strcharpart(word, chars)
-    else
-      lines[#lines + 1], current = current, ""
-    end
-  end
-  if current ~= "" and #lines < 2 then
-    lines[#lines + 1] = current
-  end
-  if i <= #words then
-    local last = lines[#lines]
-    while vim.fn.strdisplaywidth(last) > room - 1 do
-      last = vim.fn.strcharpart(last, 0, vim.fn.strchars(last) - 1)
-    end
-    lines[#lines] = last .. "…"
+  local lines = pi_text.wrap(note, room)
+  if #lines > 2 then
+    -- The "…" always follows a cut second line, also when the line itself is short.
+    lines = { lines[1], pi_text.fit(lines[2] .. "…", room) }
   end
   return lines
 end
@@ -244,12 +221,12 @@ function M.at_cursor()
   end, found)
 end
 
--- Picker label: `L<start>-<end>: <text>`, text cut to 80 characters.
+-- Picker label: `L<start>-<end>: <text>`, text cut to 80 cells followed by "…".
 function M.label(item)
   local s, e = position(item)
   local text = item.note:gsub("%s+", " ")
-  if vim.fn.strchars(text) > 80 then
-    text = vim.fn.strcharpart(text, 0, 80) .. "…"
+  if vim.fn.strdisplaywidth(text) > LABEL_TEXT_WIDTH then
+    text = pi_text.fit(text .. "…", LABEL_TEXT_WIDTH + 1)
   end
   return ("L%d-%d: %s"):format(s or 0, e or 0, text)
 end

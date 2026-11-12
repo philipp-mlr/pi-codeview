@@ -48,10 +48,10 @@ function M.wrap(text, width)
   return out
 end
 
-local TARGET_MAX_CHARS = 40
+local TARGET_MAX_WIDTH = 40
 
 -- A tool target for the statusline and badge: a path becomes its file name; a command (it has
--- spaces) stays; either is cut to 40 characters with "…". "" for no target.
+-- spaces) stays; either is cut to 40 cells followed by "…". "" for no target.
 function M.short_target(target)
   if type(target) ~= "string" or target == "" then
     return ""
@@ -60,8 +60,8 @@ function M.short_target(target)
     local tail = vim.fs.basename((target:gsub("/+$", "")))
     target = tail ~= "" and tail or target
   end
-  if vim.fn.strchars(target) > TARGET_MAX_CHARS then
-    target = vim.fn.strcharpart(target, 0, TARGET_MAX_CHARS) .. "…"
+  if vim.fn.strdisplaywidth(target) > TARGET_MAX_WIDTH then
+    target = M.fit(target .. "…", TARGET_MAX_WIDTH + 1)
   end
   return target
 end

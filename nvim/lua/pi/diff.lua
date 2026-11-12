@@ -9,7 +9,7 @@ local pi_text = require("pi.text")
 local fit = pi_text.fit
 
 local M = {}
-local PREVIEW_CHARS = 80 -- at most this much of a note or why shows; the full text is one peek away
+local PREVIEW_MAX_WIDTH = 80 -- cells of a note or why shown at most; the full text is one peek away
 
 M.mode = "auto" -- "auto" | "diffview" | "builtin", set by setup({ diff = ... })
 local warned_missing_diffview = false
@@ -330,11 +330,11 @@ function M.place_why(buf, chunk, path, win)
       return ""
     end
     local room = width - vim.fn.strdisplaywidth(prefix)
-    if vim.fn.strdisplaywidth(text) <= math.min(PREVIEW_CHARS, room) then
+    if vim.fn.strdisplaywidth(text) <= math.min(PREVIEW_MAX_WIDTH, room) then
       return prefix .. text
     end
     local hint = keys.label("peek", ":PiPeek")
-    local text_room = math.min(PREVIEW_CHARS + 1, room - vim.fn.strdisplaywidth(hint) - 1)
+    local text_room = math.min(PREVIEW_MAX_WIDTH + 1, room - vim.fn.strdisplaywidth(hint) - 1)
     if text_room < 2 then
       return prefix .. hint
     end
