@@ -685,6 +685,40 @@ M["outside_worktree event shows the warning text via WARN"] = function()
   assert(notes[1].msg == "pi: the agent is editing files outside /work/a — checkpoint mode can't show them; start pi in that worktree", notes[1].msg)
 end
 
+-- Fires chunk_ready through the handler setup(opts) registers; returns the notices and whether the panel opened.
+local function chunk_ready_with(opts)
+  local session = require("pi.session")
+  local panel = require("pi.panel")
+  local handlers = {}
+  local real_on = session.on_event
+  session.on_event = function(fn) handlers[#handlers + 1] = fn end
+  capture_notify(function() pi.setup(opts) end)
+  session.on_event = real_on
+  local diff = require("pi.diff")
+  local saved = { open = panel.open, refresh = panel.refresh, visible = panel.visible, live = require("pi.live").schedule, in_diff = diff.is_diff_window }
+  local opened = false
+  diff.is_diff_window = function() return false end
+  panel.open = function() opened = true end
+  panel.refresh = function() end
+  panel.visible = function() return false end
+  require("pi.live").schedule = function() end
+  local notes = capture_notify(function() handlers[#handlers]("chunk_ready", { chunk = { n = 7 } }) end)
+  panel.open, panel.refresh, panel.visible, require("pi.live").schedule = saved.open, saved.refresh, saved.visible, saved.live
+  diff.is_diff_window = saved.in_diff
+  return notes, opened
+end
+
+M["chunk_ready opens the checkpoint list unless panel.auto_open is false"] = function()
+  reset_maps()
+  local notes, opened = chunk_ready_with(nil)
+  assert(opened and #notes == 0, vim.inspect(notes))
+  notes, opened = chunk_ready_with({ panel = { auto_open = false } })
+  assert(not opened, "panel opened with auto_open = false")
+  assert(#notes == 1 and notes[1].msg:find("^pi: checkpoint 7 waiting"), vim.inspect(notes))
+  capture_notify(function() pi.setup() end)
+  reset_maps()
+end
+
 M["setup notices legacy key names once"] = function()
   reset_maps()
   local notes = capture_notify(function() pi.setup({ keys = { send = "<leader>pr", cancel = "<leader>px", chunks = "<leader>pl" } }) end)

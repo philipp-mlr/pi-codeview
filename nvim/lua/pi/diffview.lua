@@ -36,12 +36,14 @@ local function ensure_autocmds()
     callback = function()
       local win = vim.api.nvim_get_current_win()
       local buf = vim.api.nvim_get_current_buf()
-      if handlers and vim.startswith(vim.api.nvim_buf_get_name(buf), "diffview://") then
-        if M.is_left_window(win) then
-          handlers.on_left(buf, win)
-        elseif vim.wo[win].diff then
-          handlers.on_right(buf, win)
-        end
+      if not handlers then
+        return
+      end
+      -- The left side is always a diffview:// revision; the right one is the real file for an open chunk.
+      if vim.startswith(vim.api.nvim_buf_get_name(buf), "diffview://") and M.is_left_window(win) then
+        handlers.on_left(buf, win)
+      elseif vim.wo[win].diff and not M.is_left_window(win) then
+        handlers.on_right(buf, win)
       end
     end,
   })

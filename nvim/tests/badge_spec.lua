@@ -87,6 +87,29 @@ M["VimResized keeps it right-aligned"] = function()
   badge.close()
 end
 
+M["sits below a visible tabline and moves when it appears or goes"] = function()
+  reset()
+  require("pi").setup()
+  local saved = vim.o.showtabline
+  vim.cmd("tabonly")
+  vim.o.showtabline = 1
+  badge.update({ busy = true, tool = "edit", target = "a.ts" })
+  assert(vim.api.nvim_win_get_config(badge.window()).row == 0, "row with one tab and showtabline=1")
+  vim.cmd("tabnew")
+  assert(vim.api.nvim_win_get_config(badge.window()).row == 1, "row with two tabs and showtabline=1")
+  vim.cmd("tabclose")
+  assert(vim.api.nvim_win_get_config(badge.window()).row == 0, "row after TabClosed")
+  vim.o.showtabline = 2
+  badge.update({ busy = true, tool = "edit", target = "a.ts" })
+  assert(vim.api.nvim_win_get_config(badge.window()).row == 1, "row with showtabline=2")
+  vim.o.showtabline = 0
+  vim.cmd("tabnew")
+  assert(vim.api.nvim_win_get_config(badge.window()).row == 0, "row with showtabline=0")
+  vim.cmd("tabonly")
+  vim.o.showtabline = saved
+  badge.close()
+end
+
 M["is never focusable and never the current window"] = function()
   reset()
   local before = vim.api.nvim_get_current_win()

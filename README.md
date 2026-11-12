@@ -72,6 +72,10 @@ another plugin is left alone, and `setup()` lists the skipped keys in one
 message. Keys you pass in `keys` are always mapped. The key names are `ask`,
 `continue`, `stop`, `annotate`, `edit`, `remove`, `checkpoints`, `mode`, `session`, `peek`.
 
+The checkpoint list opens on its own when a checkpoint arrives;
+`setup({ panel = { auto_open = false } })` turns that off, and you only get
+the notice.
+
 ## Keys and commands
 
 | Key | Command | What it does |
@@ -152,8 +156,8 @@ attached to a session. `require("pi").status()` returns `"checkpoint N"`,
 
 - A small badge in the top-right corner shows that the agent works:
   `⠋ pi · <tool> <target>` or `⠋ pi · working`, with a spinner. While a
-  checkpoint waits it reads `pi · checkpoint N waiting — <leader>pc continue`. It
-  never takes focus and is hidden when idle or not attached. Turn it off with
+  checkpoint waits it reads `pi · checkpoint N waiting — <leader>pc continue`.
+  With a tabline showing it sits just below it. It never takes focus and is hidden when idle or not attached. Turn it off with
   `setup({ badge = false })`; colors come from the `PiBadge` highlight group
   (links to `PmenuSel`).
 - When a run ends you get one notice: `pi: done — N files changed`
@@ -222,9 +226,14 @@ Switch it with `<leader>pm` / `:PiCheckpointMode on|off` in Neovim, or in pi:
 Review flow:
 
 1. Turn checkpoint mode on and give the agent a task with `<leader>pa`.
-2. The agent stops at a checkpoint. The checkpoint list (`<leader>pv`) opens
-   with the new checkpoint. It is 60 columns wide with one line per
-   checkpoint: `● 4  waiting   <title>   3 files`. The waiting checkpoint is
+2. The agent stops at a checkpoint. The checkpoint list (`<leader>pv`,
+   buffer `pi://checkpoints`) opens with the new checkpoint (unless
+   `panel.auto_open` is `false`). It takes 35% of the screen, at least 40 and
+   at most 60 columns, has no sign or number column, and fits every line to
+   its width, cutting with `…`; it re-fits when you resize. Its first line is
+   ` pi checkpoints — <CR> open · za more · g? keys` (just the keys when the
+   window is narrow). One line per checkpoint:
+   `● 4  waiting   <title>   3 files`. The waiting checkpoint is
    first and highlighted (`PiCheckpointWaiting`), the others follow newest
    first (`✓` reviewed, `✗` discarded). The title is the one the agent gave
    the step, or the first sentence of its note. `za` on a line shows the
@@ -233,7 +242,9 @@ Review flow:
    opens it, on a file line it opens the checkpoint at that file (the built-in
    view starts there; diffview starts at that file via `--selected-file`).
    `a` shows or hides the per-turn records vibe mode keeps (hidden by
-   default), `r` refreshes, `q` closes.
+   default; `pi: no recorded turns` when there are none), `r` refreshes,
+   `q` closes. `g?` opens a float listing all these keys plus the continue
+   and peek keys; `q` or `<Esc>` closes it.
 3. The checkpoint opens in its own tab as a diff view: on the left the file
    before the checkpoint, on the right your file. Above the diff you see the
    checkpoint note and the agent's one-line reason for the current file
@@ -242,13 +253,18 @@ Review flow:
    ends), `q` closes the tab and takes you back to where you came from. Vim's
    own diff keys work: `]c` and `[c` jump between changes, `do` and `dp`
    take or put a change. For the open checkpoint the right side is the real file,
-   so LSP and editing work; past checkpoints are read-only. A help line in the
-   window bar lists the keys.
+   so LSP and editing work; past checkpoints are read-only. The window bar
+   of the left side says `checkpoint N · i/M · <file> (agent|you|agent+you)`
+   (who changed the file); the right side lists the keys:
+   `<Tab> next · <leader>pn note · <leader>pk peek · <leader>pc continue · q back`.
+   Each is cut with `…` to its window.
 
    With [diffview.nvim](https://github.com/sindrets/diffview.nvim) installed
    the checkpoint opens there instead (`:DiffviewOpen <from> -- <files>`): its keys
-   apply (`<Tab>` / `<S-Tab>` for files, `:DiffviewClose` to go back) and the
-   note and reason show above the left side. diffview is optional; without it
+   apply (`<Tab>` / `<S-Tab>` for files) and the note and reason show above
+   the left side. `q` in its diff windows closes it like the built-in view
+   (`:DiffviewClose`) and takes you back to the tab you came from; with
+   unsaved edits and `'hidden'` off it asks you to `:w` first. diffview is optional; without it
    the built-in view above is used. `setup({ diff = "builtin" })` always uses
    the built-in view, `"diffview"` prefers diffview (with a warning when it is
    missing), the default `"auto"` uses it when present.

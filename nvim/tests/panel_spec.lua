@@ -15,8 +15,8 @@ local function chunk(n, status, extra)
 end
 
 -- Opens the panel against a stubbed session; returns its buffer and window.
-local function open_panel(list, get_chunk)
-  vim.o.columns = 200
+local function open_panel(list, get_chunk, columns)
+  vim.o.columns = columns or 200
   vim.cmd("only")
   vim.cmd("enew")
   session.ensure = function(cb) cb() end
@@ -38,6 +38,20 @@ local function open_panel(list, get_chunk)
   error("panel not visible")
 end
 
+-- Runs the WinResized autocmds of `group` as nvim would after `windows` changed size; headless
+-- `-l` runs have no main loop, so nvim itself never fires WinResized here.
+local function win_resized(group, windows)
+  local real = vim.v
+  vim.v = { event = { windows = windows } }
+  local ok, err = pcall(function()
+    for _, au in ipairs(vim.api.nvim_get_autocmds({ group = group, event = "WinResized" })) do
+      au.callback({})
+    end
+  end)
+  vim.v = real
+  assert(ok, err)
+end
+
 local function lines(buf)
   return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 end
@@ -46,17 +60,102 @@ local function press(keys)
   vim.api.nvim_feedkeys(vim.keycode(keys), "x", false)
 end
 
-M["panel: help line, filetype and width"] = function()
-  keys_state.mapped = { continue = "<leader>pc" }
+M["panel: help line, filetype, buffer name and width"] = function()
   local buf, win = open_panel({})
   assert(vim.bo[buf].filetype == "pi-checkpoints")
+  assert(vim.api.nvim_buf_get_name(buf) == "pi://checkpoints", vim.api.nvim_buf_get_name(buf))
   assert(vim.api.nvim_win_get_width(win) == 60, vim.api.nvim_win_get_width(win))
   local l = lines(buf)
-  assert(l[1] == "pi checkpoints — <CR> open · za details · a all · <leader>pc continue", l[1])
+  assert(l[1] == " pi checkpoints — <CR> open · za more · g? keys", l[1])
   assert(l[2] == "no checkpoints yet", l[2])
+end
+
+M["panel: window options leave the whole width to text"] = function()
+  local _, win = open_panel({})
+  local wo = vim.wo[win]
+  assert(wo.signcolumn == "no" and wo.foldcolumn == "0" and not wo.number and not wo.relativenumber, vim.inspect({ wo.signcolumn, wo.foldcolumn, wo.number }))
+  assert(wo.cursorline and wo.winfixwidth, "cursorline/winfixwidth not set")
+  assert(vim.fn.getwininfo(win)[1].textoff == 0, vim.fn.getwininfo(win)[1].textoff)
+end
+
+M["panel: width is 35% of the columns, between 40 and 60"] = function()
+  for columns, want in pairs({ [200] = 60, [120] = 42, [100] = 40 }) do
+    local _, win = open_panel({}, nil, columns)
+    local width = vim.api.nvim_win_get_width(win)
+    assert(width == want, columns .. " columns: width " .. tostring(width))
+  end
+  vim.o.columns = 200
+end
+
+M["panel: help line drops its prefix, then cuts with … to fit"] = function()
+  local buf, win = open_panel({}, nil, 120)
+  assert(lines(buf)[1] == " <CR> open · za more · g? keys", lines(buf)[1])
+  vim.api.nvim_win_set_width(win, 20)
+  win_resized("PiPanelResize", { win })
+  local help = lines(buf)[1]
+  assert(vim.fn.strdisplaywidth(help) == 20 and vim.endswith(help, "…") and vim.startswith(help, " <CR> open"), help)
+  vim.o.columns = 200
+end
+
+M["panel: rows and details fit the text width, also with a sign column"] = function()
+  local list = { chunk(1, "reviewed", { title = ("x"):rep(80), note = NOTE }) }
+  local buf, win = open_panel(list)
+  vim.wo[win].signcolumn = "yes:2"
+  vim.api.nvim_win_set_width(win, 45)
+  win_resized("PiPanelResize", { win })
+  vim.api.nvim_win_set_cursor(win, { 2, 0 })
+  press("za")
+  local room = 45 - vim.fn.getwininfo(win)[1].textoff
+  assert(room == 41, room)
+  for _, line in ipairs(lines(buf)) do
+    assert(vim.fn.strdisplaywidth(line) <= room, line)
+  end
+end
+
+M["panel: VimResized resizes the panel to the new columns"] = function()
+  local _, win = open_panel({})
+  vim.o.columns = 120
+  vim.api.nvim_exec_autocmds("VimResized", {})
+  assert(vim.api.nvim_win_get_width(win) == 42, vim.api.nvim_win_get_width(win))
+  vim.o.columns = 200
+end
+
+M["panel: g? lists every key in a float that q and <Esc> close"] = function()
+  keys_state.mapped = { continue = "<leader>pc", peek = "<leader>pk" }
+  local _, win = open_panel({})
+  for _, close in ipairs({ "q", "<Esc>" }) do
+    vim.api.nvim_set_current_win(win)
+    press("g?")
+    local float = vim.api.nvim_get_current_win()
+    local cfg = vim.api.nvim_win_get_config(float)
+    assert(cfg.relative ~= "" and cfg.title, vim.inspect(cfg))
+    assert(vim.deep_equal(cfg.border, { "╭", "─", "╮", "│", "╯", "─", "╰", "│" }), vim.inspect(cfg.border))
+    local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+    for _, key in ipairs({ "<CR>", "za", "a", "r", "q", "g?", "<leader>pc", "<leader>pk" }) do
+      assert(text:find("\n" .. vim.pesc(key) .. " ") or text:find("^" .. vim.pesc(key) .. " "), key .. " missing:\n" .. text)
+    end
+    for _, w in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+      assert(vim.fn.strdisplaywidth(w) <= cfg.width, w)
+    end
+    press(close)
+    assert(not vim.api.nvim_win_is_valid(float), close .. " did not close the help")
+    assert(vim.api.nvim_get_current_win() == win)
+  end
   keys_state.mapped = {}
-  buf = open_panel({})
-  assert(lines(buf)[1]:find("a all · :PiContinue continue", 1, true), lines(buf)[1])
+  press("g?")
+  local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+  assert(text:find(":PiContinue", 1, true) and text:find(":PiPeek", 1, true), text)
+  press("q")
+end
+
+M["panel: a without recorded turns says so"] = function()
+  local buf = open_panel({ chunk(2, "reviewed") })
+  local notes, notify = {}, vim.notify
+  vim.notify = function(msg) notes[#notes + 1] = msg end
+  press("a")
+  vim.notify = notify
+  assert(vim.deep_equal(notes, { "pi: no recorded turns" }), vim.inspect(notes))
+  assert(#lines(buf) == 2)
 end
 
 M["panel: open checkpoint first, then newest first, title falls back to the note's first sentence"] = function()
@@ -233,7 +332,8 @@ M["panel: <CR> on a file line opens the built-in view at that file"] = function(
   end
   vim.api.nvim_win_set_cursor(0, { row, 0 })
   press("<CR>")
-  assert(vim.wo.winbar:find("2/2", 1, true) and vim.wo.winbar:find("b.txt", 1, true), vim.wo.winbar)
+  local left_bar = vim.wo[vim.fn.win_getid(1)].winbar
+  assert(left_bar:find("2/2", 1, true) and left_bar:find("b.txt", 1, true), left_bar)
   vim.cmd("tabclose")
   diff.cleanup()
 end

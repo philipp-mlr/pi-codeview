@@ -151,9 +151,9 @@ end)
 vim.notify("PANEL " .. tostring(panel_line))
 cv.open_chunk(1)
 vim.wait(5000, function() return #vim.api.nvim_list_tabpages() == 2 end)
-vim.notify("WINBAR " .. vim.wo.winbar)
+vim.notify("WINBAR " .. vim.wo[vim.fn.win_getid(1)].winbar)
 vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
-vim.notify("WINBAR " .. vim.wo.winbar)
+vim.notify("WINBAR " .. vim.wo[vim.fn.win_getid(1)].winbar)
 vim.api.nvim_feedkeys(vim.keycode("<S-Tab>"), "x", false)
 local buf = vim.fn.bufnr(vim.uv.fs_realpath("a.txt"))
 cv.annotate(buf, 1, 1, "why one?")
@@ -171,8 +171,8 @@ cv.continue()
     expect(notes.filter((n) => n.level === ERROR)).toEqual([]);
     expect(notes.map((n) => n.msg)).toContain("PANEL ● 1  waiting   add a   2 files");
     expect(notes.map((n) => n.msg).filter((m) => m.startsWith("WINBAR"))).toEqual([
-      "WINBAR checkpoint 1 · 1/2 · a.txt · agent   <Tab> next · <leader>pn annotate · <leader>pc continue · q back",
-      "WINBAR checkpoint 1 · 2/2 · b.txt · agent   <Tab> next · <leader>pn annotate · <leader>pc continue · q back",
+      "WINBAR checkpoint 1 · 1/2 · a.txt (agent)",
+      "WINBAR checkpoint 1 · 2/2 · b.txt (agent)",
     ]);
   }, TIMEOUT_MS);
 

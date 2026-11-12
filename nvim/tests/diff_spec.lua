@@ -317,20 +317,84 @@ M["a global expr map with a Lua callback feeds its returned keys outside the chu
   session.cached = nil
 end
 
-M["winbar shows the help line with keys or commands"] = function()
+-- Runs the WinResized autocmds of `group` as nvim would after `windows` changed size; headless
+-- `-l` runs have no main loop, so nvim itself never fires WinResized here.
+local function win_resized(group, windows)
+  local real = vim.v
+  vim.v = { event = { windows = windows } }
+  local ok, err = pcall(function()
+    for _, au in ipairs(vim.api.nvim_get_autocmds({ group = group, event = "WinResized" })) do
+      au.callback({})
+    end
+  end)
+  vim.v = real
+  assert(ok, err)
+end
+
+local function winbars()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local left, right = vim.fn.win_getid(1, vim.fn.tabpagenr()), vim.fn.win_getid(2, vim.fn.tabpagenr())
+  assert(vim.api.nvim_win_get_tabpage(left) == tab)
+  return vim.wo[left].winbar, vim.wo[right].winbar, left, right
+end
+
+M["winbar: file on the left, keys or commands on the right"] = function()
   local keys = require("pi.keys")
   local saved = keys.mapped
+  vim.o.columns = 200
   vim.cmd("tabnew")
-  vim.cmd("tabnew")
-  keys.mapped = { annotate = "<leader>pn", continue = "<leader>pc" }
+  keys.mapped = { annotate = "<leader>pn", continue = "<leader>pc", peek = "<leader>pk" }
   open_two_files("winbar")
-  assert(vim.wo.winbar:find("checkpoint 1 · 1/2 · a.txt · agent   <Tab> next · <leader>pn annotate · <leader>pc continue · q back", 1, true), vim.wo.winbar)
+  local left, right = winbars()
+  assert(left == "checkpoint 1 · 1/2 · a.txt (agent)", left)
+  assert(right == "<Tab> next · <leader>pn note · <leader>pk peek · <leader>pc continue · q back", right)
   vim.cmd("tabclose")
   keys.mapped = {}
   open_two_files("winbar2")
-  assert(vim.wo.winbar:find("<Tab> next · :PiAnnotate annotate · :PiContinue continue · q back", 1, true), vim.wo.winbar)
+  left, right = winbars()
+  assert(right == "<Tab> next · :PiAnnotate note · :PiPeek peek · :PiContinue continue · q back", right)
   vim.cmd("tabclose")
   keys.mapped = saved
+  session.cached = nil
+end
+
+M["winbar: agent+you for a file both changed, you for yours"] = function()
+  local root, sha = chunk_repo()
+  vim.fn.writefile({ "two" }, root .. "/b.txt")
+  session.root = root
+  session.cached = { sessionId = "labels" }
+  local original = session.request
+  session.request = function(_, _, cb)
+    cb(nil, { chunk = { n = 2, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = { "a.txt", "b.txt" } } })
+  end
+  diff.open(2)
+  session.request = original
+  local left = winbars()
+  assert(left == "checkpoint 2 · 1/2 · a.txt (agent+you)", left)
+  press("<Tab>")
+  left = winbars()
+  assert(left == "checkpoint 2 · 2/2 · b.txt (you)", left)
+  vim.cmd("tabclose")
+  session.cached = nil
+end
+
+M["winbar: each side is cut with … to its window's text width"] = function()
+  vim.o.columns = 120
+  vim.cmd("tabnew")
+  open_two_files("narrow")
+  local left, right, lwin, rwin = winbars()
+  for _, side in ipairs({ { left, lwin }, { right, rwin } }) do
+    local room = vim.api.nvim_win_get_width(side[2])
+    assert(vim.fn.strdisplaywidth(side[1]) <= room, side[1] .. " > " .. room)
+  end
+  vim.api.nvim_win_set_width(rwin, 30)
+  win_resized("PiDiffWinbar", { rwin })
+  left, right = winbars()
+  local room = 30 - vim.fn.getwininfo(rwin)[1].textoff -- diff mode adds a fold column
+  assert(vim.fn.strdisplaywidth(right) == room and vim.endswith(right, "…"), room .. ": " .. right)
+  assert(vim.startswith(right, "<Tab> next"), right)
+  vim.o.columns = 200
+  vim.cmd("tabclose")
   session.cached = nil
 end
 
@@ -566,7 +630,83 @@ M["auto with diffview opens an open chunk with the exact DiffviewOpen args"] = w
   local expected = ("%s -C%s -- a.txt b\\ c.txt"):format(sha, vim.fn.fnameescape(root))
   assert(fake.calls[1] == expected, vim.inspect(fake.calls))
   assert(diff.viewed(1), "diffview chunk not viewed")
-  assert(seen[1].msg == "pi: checkpoint 1 — <Tab> next file · :PiAnnotate annotate · :PiContinue continue · :DiffviewClose to go back", seen[1].msg)
+  assert(seen[1].msg == "pi: checkpoint 1 — <Tab> next file · :PiAnnotate annotate · :PiContinue continue · q back", seen[1].msg)
+end)
+
+M["q in the diffview checkpoint tab closes it and returns to the origin tab"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  vim.cmd("tabnew")
+  local origin = vim.api.nvim_get_current_tabpage()
+  vim.cmd("tabnew") -- the tab right of the checkpoint tab, where :tabclose alone would land
+  vim.api.nvim_set_current_tabpage(origin)
+  fetch({ n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = {} })
+  local tab = fake.tab
+  for _, win in ipairs({ fake.left, fake.right }) do
+    assert(buffer_map(vim.api.nvim_win_get_buf(win), "q").desc == "pi: back from checkpoint view", "q not mapped in " .. win)
+  end
+  vim.api.nvim_set_current_win(fake.right)
+  press("q")
+  assert(fake.closes == 1, "DiffviewClose not used")
+  assert(not vim.api.nvim_tabpage_is_valid(tab), "diffview tab still open")
+  assert(vim.api.nvim_get_current_tabpage() == origin, "not back on the origin tab")
+end)
+
+M["q in the diffview checkpoint tab with unsaved edits warns and stays"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  vim.cmd("tabnew")
+  fetch({ n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = {} })
+  local tab = fake.tab
+  local saved_hidden = vim.o.hidden
+  vim.o.hidden = false
+  vim.api.nvim_set_current_win(fake.right)
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "edited" })
+  local seen, restore = capture_notify()
+  press("q")
+  restore()
+  vim.o.hidden = saved_hidden
+  assert(fake.closes == 0, "DiffviewClose ran over unsaved edits")
+  assert(vim.api.nvim_tabpage_is_valid(tab) and vim.api.nvim_get_current_tabpage() == tab)
+  assert(#seen == 1 and seen[1].msg == "pi: save your changes first (:w), then q" and seen[1].level == vim.log.levels.WARN, vim.inspect(seen))
+  vim.cmd("write")
+  press("q")
+  assert(fake.closes == 1 and not vim.api.nvim_tabpage_is_valid(tab), "q after :w did not close")
+end)
+
+M["diffview moving to another file moves q to the new buffers"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  vim.fn.writefile({ "y" }, root .. "/b.txt")
+  vim.cmd("tabnew")
+  fetch({ n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt", "b.txt" }, humanFiles = {} })
+  local old_right = vim.api.nvim_win_get_buf(fake.right)
+  -- like diffview's <Tab>: each window gets its new buffer, then fires its event; left first
+  local left = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(left, "diffview://" .. root .. "/.git/abc/b.txt")
+  vim.api.nvim_win_set_buf(fake.left, left)
+  vim.wo[fake.left].diff = true
+  vim.api.nvim_set_current_win(fake.left)
+  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+  vim.api.nvim_win_call(fake.right, function() vim.cmd("hide edit " .. vim.fn.fnameescape(root .. "/b.txt")) end)
+  vim.wo[fake.right].diff = true
+  vim.api.nvim_set_current_win(fake.right)
+  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+  local right = vim.api.nvim_win_get_buf(fake.right)
+  assert(buffer_map(left, "q").desc == "pi: back from checkpoint view", "left q")
+  assert(buffer_map(right, "q").desc == "pi: back from checkpoint view", "right q")
+  assert(vim.tbl_isempty(buffer_map(old_right, "q")), "old right buffer kept q")
+end)
+
+M["diffview q leaves the buffers' keys once the tab is gone"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  vim.cmd("tabnew")
+  fetch({ n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = {} })
+  local real = vim.api.nvim_win_get_buf(fake.right)
+  vim.api.nvim_set_current_win(fake.right)
+  press("q")
+  assert(vim.tbl_isempty(buffer_map(real, "q")), vim.inspect(buffer_map(real, "q")))
 end)
 
 M["auto with diffview opens a past chunk as a revision range"] = with_fake(function()

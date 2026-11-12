@@ -5,7 +5,9 @@ local session = require("pi.session")
 
 local M = {}
 
-local PANEL_WIDTH = 60
+local MIN_WIDTH, MAX_WIDTH, WIDTH_SHARE = 40, 60, 0.35
+local HELP_PREFIX = " pi checkpoints —"
+local HELP_KEYS = " <CR> open · za more · g? keys"
 local ICONS = { open = "●", reviewed = "✓", discarded = "✗", recorded = "·" }
 local STATUS_WORDS = { open = "waiting", reviewed = "reviewed", discarded = "discarded", recorded = "recorded" }
 
@@ -115,9 +117,24 @@ local function wrap(text, width)
   return out
 end
 
-local function help_line()
-  local go = keys.label("continue", ":PiContinue")
-  return ("pi checkpoints — <CR> open · za details · a all · %s continue"):format(go)
+-- 35% of the screen, at least 40 and at most 60 columns.
+local function panel_width()
+  return math.max(MIN_WIDTH, math.min(MAX_WIDTH, math.floor(vim.o.columns * WIDTH_SHARE)))
+end
+
+-- Columns of `win` left for text after the sign, fold and number columns.
+local function text_width(win)
+  local info = vim.fn.getwininfo(win)[1]
+  return info.width - info.textoff
+end
+
+-- The full help line when it fits, else without the " pi checkpoints —" prefix, cut with … if needed.
+local function help_line(width)
+  local full = HELP_PREFIX .. HELP_KEYS
+  if vim.fn.strdisplaywidth(full) <= width then
+    return full
+  end
+  return fit(HELP_KEYS, width)
 end
 
 -- Open checkpoint first, then the rest newest first; recorded ones only while `show_recorded`.
@@ -140,7 +157,7 @@ end
 
 local function detail_lines(chunk, width)
   local out = {}
-  for _, text in ipairs(wrap(chunk.note or "", width - 4)) do
+  for _, text in ipairs(wrap(chunk.note or "", math.max(width - 4, 1))) do
     out[#out + 1] = { text = "    " .. text }
   end
   local counts = stats[chunk.n]
@@ -170,25 +187,25 @@ local function render()
     return
   end
   local win = panel_win()
-  local width = win and vim.api.nvim_win_get_width(win) or PANEL_WIDTH
-  local lines = { help_line() }
+  local width = win and text_width(win) or panel_width()
+  local lines = { help_line(width) }
   local waiting_lines = {}
   lines_info = {}
   for _, chunk in ipairs(visible_chunks()) do
-    lines[#lines + 1] = format(chunk, width)
+    lines[#lines + 1] = fit(format(chunk, width), width)
     lines_info[#lines] = { n = chunk.n }
     if chunk.status == "open" then
       waiting_lines[#lines] = true
     end
     if expanded[chunk.n] then
       for _, detail in ipairs(detail_lines(chunk, width)) do
-        lines[#lines + 1] = detail.text
+        lines[#lines + 1] = fit(detail.text, width)
         lines_info[#lines] = { n = chunk.n, path = detail.path }
       end
     end
   end
   if #lines == 1 then
-    lines[2] = "no checkpoints yet"
+    lines[2] = fit("no checkpoints yet", width)
   end
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -281,6 +298,78 @@ local function cursor_info()
   return lines_info[vim.api.nvim_win_get_cursor(0)[1]]
 end
 
+-- Shows or hides the per-turn records; says so when there are none.
+local function toggle_recorded()
+  local any = false
+  for _, chunk in ipairs(list) do
+    any = any or chunk.status == "recorded"
+  end
+  if not any and not show_recorded then
+    return vim.notify("pi: no recorded turns")
+  end
+  show_recorded = not show_recorded
+  render()
+end
+
+-- Every panel key with a word each, plus the global continue and peek keys.
+local function help_rows()
+  return {
+    { "<CR>", "open the checkpoint (on a file line: at that file)" },
+    { "za", "more: note, files and annotations" },
+    { "a", "show or hide per-turn records" },
+    { "r", "refresh" },
+    { "q", "close the list" },
+    { "g?", "these keys" },
+    { keys.label("continue", ":PiContinue"), "continue" },
+    { keys.label("peek", ":PiPeek"), "peek at the full note" },
+  }
+end
+
+-- A float listing the panel keys, styled like the editor; q or <Esc> closes it.
+local function show_help()
+  local rows = help_rows()
+  local key_width = 0
+  for _, row in ipairs(rows) do
+    key_width = math.max(key_width, vim.fn.strdisplaywidth(row[1]))
+  end
+  local width = math.max(1, math.min(vim.o.columns - 4, 60))
+  local text = {}
+  for _, row in ipairs(rows) do
+    local key = row[1] .. (" "):rep(key_width - vim.fn.strdisplaywidth(row[1]))
+    text[#text + 1] = fit(key .. "  " .. row[2], width)
+  end
+  local content = 0
+  for _, line in ipairs(text) do
+    content = math.max(content, vim.fn.strdisplaywidth(line))
+  end
+  width = math.min(width, math.max(content, 20))
+  local help_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(help_buf, 0, -1, false, text)
+  vim.bo[help_buf].modifiable = false
+  vim.bo[help_buf].bufhidden = "wipe"
+  local origin = vim.api.nvim_get_current_win()
+  local float = vim.api.nvim_open_win(help_buf, true, {
+    relative = "editor",
+    width = width,
+    height = #text,
+    row = math.max(0, math.floor((vim.o.lines - #text) / 2) - 1),
+    col = math.max(0, math.floor((vim.o.columns - width) / 2) - 1),
+    style = "minimal",
+    border = "rounded",
+    title = " pi checkpoint keys ",
+    title_pos = "center",
+  })
+  local function close()
+    pcall(vim.api.nvim_win_close, float, true)
+    if vim.api.nvim_win_is_valid(origin) then
+      vim.api.nvim_set_current_win(origin)
+    end
+  end
+  for _, lhs in ipairs({ "q", "<Esc>" }) do
+    vim.keymap.set("n", lhs, close, { buffer = help_buf, nowait = true, desc = "pi: close keys help" })
+  end
+end
+
 local function toggle_details()
   local info = cursor_info()
   if not info then
@@ -302,7 +391,7 @@ local function ensure_buf()
     return buf
   end
   buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(buf, "pi://panel")
+  vim.api.nvim_buf_set_name(buf, "pi://checkpoints")
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].swapfile = false
@@ -316,14 +405,34 @@ local function ensure_buf()
     end
   end, vim.tbl_extend("force", opts, { desc = "pi: open checkpoint diff" }))
   vim.keymap.set("n", "za", toggle_details, vim.tbl_extend("force", opts, { desc = "pi: toggle checkpoint details" }))
-  vim.keymap.set("n", "a", function()
-    show_recorded = not show_recorded
-    render()
-  end, vim.tbl_extend("force", opts, { desc = "pi: toggle per-turn records" }))
+  vim.keymap.set("n", "a", toggle_recorded, vim.tbl_extend("force", opts, { desc = "pi: toggle per-turn records" }))
   vim.keymap.set("n", "r", M.refresh, vim.tbl_extend("force", opts, { desc = "pi: refresh panel" }))
   vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "pi: close panel" }))
+  vim.keymap.set("n", "g?", show_help, vim.tbl_extend("force", opts, { desc = "pi: panel keys" }))
   return buf
 end
+
+local resize_group = vim.api.nvim_create_augroup("PiPanelResize", { clear = true })
+-- A new screen size gives the panel its share of the columns again; any resize re-fits the text.
+vim.api.nvim_create_autocmd("VimResized", {
+  group = resize_group,
+  callback = function()
+    local win = panel_win()
+    if win then
+      vim.api.nvim_win_set_width(win, panel_width())
+      render()
+    end
+  end,
+})
+vim.api.nvim_create_autocmd("WinResized", {
+  group = resize_group,
+  callback = function()
+    local win = panel_win()
+    if win and vim.tbl_contains(vim.v.event.windows or {}, win) then
+      render()
+    end
+  end,
+})
 
 function M.open()
   session.ensure(function()
@@ -331,13 +440,17 @@ function M.open()
     if not win then
       list, expanded, stats = {}, {}, {} -- a freshly opened panel starts collapsed
       local previous = vim.api.nvim_get_current_win()
-      vim.cmd("topleft vertical " .. PANEL_WIDTH .. "split")
+      vim.cmd("topleft vertical " .. panel_width() .. "split")
       win = vim.api.nvim_get_current_win()
       vim.api.nvim_win_set_buf(win, ensure_buf())
-      vim.wo[win].winfixwidth = true
-      vim.wo[win].number = false
-      vim.wo[win].relativenumber = false
-      vim.wo[win].wrap = false
+      local wo = vim.wo[win]
+      wo.winfixwidth = true
+      wo.number = false
+      wo.relativenumber = false
+      wo.signcolumn = "no"
+      wo.foldcolumn = "0"
+      wo.cursorline = true
+      wo.wrap = false
       vim.api.nvim_set_current_win(previous)
     end
     M.refresh()

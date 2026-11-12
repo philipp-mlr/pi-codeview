@@ -10,8 +10,8 @@ local PREVIEW_CHARS = 80 -- virt_lines do not wrap; the full text is one peek aw
 M.mode = "auto" -- "auto" | "diffview" | "builtin", set by setup({ diff = ... })
 local warned_missing_diffview = false
 
--- tabpage -> { key, n, chunk, root, files, index, left, right } (kind nil: built-in view) or
--- { key, n, chunk, root, files, kind = "diffview" }
+-- tabpage -> { key, n, chunk, root, files, index, origin, left, right } (kind nil: built-in view) or
+-- { key, n, chunk, root, files, origin, kind = "diffview" }
 local views = {}
 local viewed = {} -- chunk key -> true once one of its files was shown in this nvim
 
@@ -65,9 +65,9 @@ local function files_of(chunk)
   for _, path in ipairs(chunk.humanFiles or {}) do
     if not label[path] then
       files[#files + 1] = path
-      label[path] = "human"
+      label[path] = "you"
     elseif label[path] == "agent" then
-      label[path] = "agent+human"
+      label[path] = "agent+you"
     end
   end
   table.sort(files)
@@ -139,18 +139,58 @@ local function step(buf, lhs, delta)
   M.show(view, index)
 end
 
--- Closes the chunk tab and returns to the tab it was opened from; the last tab is never closed.
--- The view stays registered until the tab is really gone (an unsaved real file blocks :tabclose).
+local SAVE_FIRST = "pi: save your changes first (:w), then q"
+
+-- Whether a diffview tab holds unsaved edits the built-in view's :tabclose would refuse to leave: a
+-- modified file shown only in `tab` while 'hidden' is off. diffview sets bufhidden=hide on the files
+-- it opens, so that option is not consulted.
+local function unsaved_in(tab)
+  if vim.o.hidden then
+    return false
+  end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.bo[buf].modified and vim.bo[buf].buftype == "" then
+      local elsewhere = false
+      for _, other in ipairs(vim.fn.win_findbuf(buf)) do
+        elsewhere = elsewhere or vim.api.nvim_win_get_tabpage(other) ~= tab
+      end
+      if not elsewhere then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+-- Closes the chunk tab (built-in or diffview) and returns to the tab it was opened from; the last
+-- tab is never closed. The view stays registered until the tab is really gone (an unsaved real file
+-- blocks :tabclose).
 local function back(buf)
   local tab = vim.api.nvim_get_current_tabpage()
-  local view = current_view()
+  current_view()
+  local view = views[tab]
   if not view then
     return passthrough(buf, "q")
+  end
+  if view.kind == "diffview" then
+    if unsaved_in(tab) then
+      return vim.notify(SAVE_FIRST, vim.log.levels.WARN)
+    end
+    diffview.close(tab)
+    if vim.api.nvim_tabpage_is_valid(tab) then
+      return vim.notify(SAVE_FIRST, vim.log.levels.WARN)
+    end
+    views[tab] = nil
+    if view.origin and vim.api.nvim_tabpage_is_valid(view.origin) then
+      vim.api.nvim_set_current_tabpage(view.origin)
+    end
+    return M.cleanup()
   end
   if #vim.api.nvim_list_tabpages() > 1 then
     pcall(vim.cmd, "tabclose " .. vim.api.nvim_tabpage_get_number(tab))
     if vim.api.nvim_tabpage_is_valid(tab) then
-      return vim.notify("pi: save your changes first (:w), then q", vim.log.levels.WARN)
+      return vim.notify(SAVE_FIRST, vim.log.levels.WARN)
     end
     views[tab] = nil
     local origin = view.origin
@@ -166,8 +206,9 @@ end
 function M.cleanup()
   local shown = {}
   for tab, view in pairs(views) do
-    if vim.api.nvim_tabpage_is_valid(tab) and view.kind ~= "diffview" then
-      for _, win in ipairs({ view.left, view.right }) do
+    if vim.api.nvim_tabpage_is_valid(tab) then
+      local wins = view.kind == "diffview" and vim.api.nvim_tabpage_list_wins(tab) or { view.left, view.right }
+      for _, win in ipairs(wins) do
         if vim.api.nvim_win_is_valid(win) then
           shown[vim.api.nvim_win_get_buf(win)] = true
         end
@@ -191,9 +232,10 @@ function M.cleanup()
   end
 end
 
-local function map_file_keys(buf)
+-- Remembers the user's own buffer-local maps of `lhs_list` in `buf`, so cleanup can restore them.
+local function save_user_maps(buf, lhs_list)
   mapped[buf] = mapped[buf] or {}
-  for _, lhs in ipairs({ "<Tab>", "<S-Tab>", "q" }) do
+  for _, lhs in ipairs(lhs_list) do
     if mapped[buf][lhs] == nil then
       local existing = vim.api.nvim_buf_call(buf, function()
         return vim.fn.maparg(lhs, "n", false, true)
@@ -202,15 +244,63 @@ local function map_file_keys(buf)
       mapped[buf][lhs] = user_owned and existing or false
     end
   end
+end
+
+local function map_back_key(buf)
+  vim.keymap.set("n", "q", function()
+    back(buf)
+  end, { buffer = buf, desc = "pi: back from checkpoint view" })
+end
+
+local function map_file_keys(buf)
+  save_user_maps(buf, { "<Tab>", "<S-Tab>", "q" })
   vim.keymap.set("n", "<Tab>", function()
     step(buf, "<Tab>", 1)
   end, { buffer = buf, desc = "pi: next file in checkpoint" })
   vim.keymap.set("n", "<S-Tab>", function()
     step(buf, "<S-Tab>", -1)
   end, { buffer = buf, desc = "pi: previous file in checkpoint" })
-  vim.keymap.set("n", "q", function()
-    back(buf)
-  end, { buffer = buf, desc = "pi: back from checkpoint view" })
+  map_back_key(buf)
+end
+
+-- diffview maps <Tab> and <S-Tab> itself; pi adds only q to the diff windows of its tab.
+local function map_diffview_keys(tab)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if vim.wo[win].diff then
+      local buf = vim.api.nvim_win_get_buf(win)
+      save_user_maps(buf, { "q" })
+      map_back_key(buf)
+    end
+  end
+end
+
+-- `text` cut to at most `width` display cells, ending in "…" when cut.
+local function fit(text, width)
+  if width <= 0 then
+    return ""
+  end
+  if vim.fn.strdisplaywidth(text) <= width then
+    return text
+  end
+  local chars = vim.fn.strchars(text)
+  while chars > 0 and vim.fn.strdisplaywidth(vim.fn.strcharpart(text, 0, chars)) > width - 1 do
+    chars = chars - 1
+  end
+  return vim.fn.strcharpart(text, 0, chars) .. "…"
+end
+
+local function set_winbar(win, text)
+  local info = vim.fn.getwininfo(win)[1]
+  vim.wo[win].winbar = fit(text, info.width - info.textoff):gsub("%%", "%%%%")
+end
+
+-- Left: which file of which checkpoint and who changed it; right: the keys. Each fits its window.
+local function place_winbars(view)
+  local file = view.files[view.index]
+  set_winbar(view.left, ("checkpoint %d · %d/%d · %s (%s)"):format(view.chunk.n, view.index, #view.files, file.path, file.label))
+  set_winbar(view.right, ("<Tab> next · %s note · %s peek · %s continue · q back"):format(
+    keys.label("annotate", ":PiAnnotate"), keys.label("peek", ":PiPeek"), keys.label("continue", ":PiContinue")
+  ))
 end
 
 -- Puts the chunk note and the file's why as virt_lines above line 1 of `buf`; returns them.
@@ -265,12 +355,8 @@ function M.show(view, index)
 
   local virt = M.place_why(left, chunk, file.path)
 
-  local winbar = ("checkpoint %d · %d/%d · %s · %s   <Tab> next · %s annotate · %s continue · q back"):format(
-    chunk.n, index, #view.files, file.path, file.label,
-    keys.label("annotate", ":PiAnnotate"), keys.label("continue", ":PiContinue")
-  )
+  place_winbars(view)
   for _, win in ipairs({ view.left, view.right }) do
-    vim.wo[win].winbar = winbar:gsub("%%", "%%%%")
     map_file_keys(vim.api.nvim_win_get_buf(win))
     vim.api.nvim_win_call(win, function()
       vim.cmd("diffthis")
@@ -356,11 +442,42 @@ vim.api.nvim_create_autocmd("TabEnter", {
   end,
 })
 
+-- Re-fits the winbars of the built-in views whose windows changed size.
+local function refit_winbars(windows)
+  for tab, view in pairs(views) do
+    if vim.api.nvim_tabpage_is_valid(tab) and view.kind ~= "diffview" and view.index
+      and vim.api.nvim_win_is_valid(view.left) and vim.api.nvim_win_is_valid(view.right)
+      and (not windows or vim.tbl_contains(windows, view.left) or vim.tbl_contains(windows, view.right)) then
+      place_winbars(view)
+    end
+  end
+end
+
+-- Not cleared: a second load of this module (specs do that) must not drop the first one's autocmds.
+local winbar_group = vim.api.nvim_create_augroup("PiDiffWinbar", { clear = false })
+vim.api.nvim_create_autocmd("WinResized", {
+  group = winbar_group,
+  callback = function()
+    refit_winbars(vim.v.event.windows or {})
+  end,
+})
+vim.api.nvim_create_autocmd("VimResized", {
+  group = winbar_group,
+  callback = function()
+    refit_winbars(nil)
+  end,
+})
+
 local diffview_handlers = {
   on_left = function(buf)
     local entry = diffview_entry()
     if entry then
-      place_tab_explanation(vim.api.nvim_get_current_tabpage(), entry, buf)
+      local tab = vim.api.nvim_get_current_tabpage()
+      place_tab_explanation(tab, entry, buf)
+      map_diffview_keys(tab)
+      if views[tab] then
+        M.cleanup() -- the buffer diffview just replaced keeps no q
+      end
     end
   end,
   -- The buffer may carry another chunk's explanation (shared per revision and path), and diffview
@@ -368,6 +485,11 @@ local diffview_handlers = {
   on_right = function(buf)
     if diffview_entry() then
       vim.api.nvim_buf_clear_namespace(buf, vim.api.nvim_create_namespace("pi_why"), 0, -1)
+      local tab = vim.api.nvim_get_current_tabpage()
+      map_diffview_keys(tab)
+      if views[tab] then
+        M.cleanup()
+      end
     end
   end,
   on_closed = function()
@@ -376,6 +498,7 @@ local diffview_handlers = {
         views[registered] = nil
       end
     end
+    M.cleanup()
   end,
 }
 
@@ -387,7 +510,8 @@ local function open_in_diffview(n, chunk, files, selected)
   local range = chunk.status == "open" and chunk.fromSha or (chunk.fromSha .. ".." .. chunk.toSha)
   local root = session.root
   local key = chunk_key(n)
-  pending = { key = key, chunk = chunk, files = files, origin = vim.api.nvim_get_current_tabpage() }
+  local pending_origin = vim.api.nvim_get_current_tabpage()
+  pending = { key = key, chunk = chunk, files = files, origin = pending_origin }
   local ok, tab = pcall(diffview.open, { range = range, root = root, files = paths, selected = selected }, diffview_handlers)
   pending = nil
   if not ok then
@@ -396,9 +520,11 @@ local function open_in_diffview(n, chunk, files, selected)
   if not tab then
     return false
   end
-  views[tab] = { key = key, n = n, chunk = chunk, root = root, files = files, kind = "diffview" }
+  views[tab] = { key = key, n = n, chunk = chunk, root = root, files = files, origin = pending_origin, kind = "diffview" }
+  map_diffview_keys(tab)
+  M.cleanup()
   viewed[key] = true
-  vim.notify(("pi: checkpoint %d — <Tab> next file · %s annotate · %s continue · :DiffviewClose to go back"):format(
+  vim.notify(("pi: checkpoint %d — <Tab> next file · %s annotate · %s continue · q back"):format(
     n, keys.label("annotate", ":PiAnnotate"), keys.label("continue", ":PiContinue")
   ))
   return true

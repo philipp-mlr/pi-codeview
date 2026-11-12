@@ -32,10 +32,16 @@ local function text()
   return spinning and (FRAMES[frame] .. " " .. label) or label
 end
 
+-- Row 1 while a tabline takes row 0, so the badge does not cover the tab names.
+local function row()
+  local tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  return tabline and 1 or 0
+end
+
 local function config(width)
   return {
     relative = "editor",
-    row = 0,
+    row = row(),
     col = math.max(vim.o.columns - width - 1, 0),
     width = width,
     height = 1,
@@ -111,7 +117,7 @@ function M.window()
   return shown() and win or nil
 end
 
--- Keeps the badge at the right edge after the screen size changed.
+-- Keeps the badge at the right edge and below the tabline after the screen or the tabs changed.
 function M.reposition()
   if label ~= nil then
     draw()

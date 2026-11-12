@@ -13,6 +13,8 @@ local session = require("pi.session")
 
 local M = {}
 
+M.auto_open_panel = true -- setup({ panel = { auto_open = false } }) only notifies when a checkpoint arrives
+
 M.default_keys = {
   ask = "<leader>pa",
   continue = "<leader>pc",
@@ -95,7 +97,7 @@ local function on_event(name, data)
   if name == "chunk_ready" then
     -- The server sends { chunk = {...} }.
     local n = data and (data.chunk and data.chunk.n) or "?"
-    if panel.visible() or diff.is_diff_window(vim.api.nvim_get_current_win()) then
+    if not M.auto_open_panel or panel.visible() or diff.is_diff_window(vim.api.nvim_get_current_win()) then
       M.notify_waiting(n)
     else
       panel.open()
@@ -459,6 +461,7 @@ function M.setup(opts)
   end
   session.on_event(on_event)
   diff.mode = opts.diff or "auto"
+  M.auto_open_panel = (opts.panel or {}).auto_open ~= false
 
   highlights.define()
   badge.enabled = opts.badge ~= false
@@ -542,7 +545,7 @@ function M.setup(opts)
       session.flush()
     end,
   })
-  vim.api.nvim_create_autocmd({ "VimResized", "TabEnter" }, { group = group, callback = badge.reposition })
+  vim.api.nvim_create_autocmd({ "VimResized", "TabEnter", "TabNew", "TabClosed" }, { group = group, callback = badge.reposition })
   vim.api.nvim_create_autocmd("TabClosed", { group = group, callback = diff.cleanup })
 end
 
