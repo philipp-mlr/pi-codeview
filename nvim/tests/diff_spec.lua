@@ -105,11 +105,11 @@ M["diff view shows the note and why above the left buffer and updates on <Tab>"]
   session.cached = nil
 end
 
-local function open_two_files()
+local function open_two_files(session_id)
   local root, sha = chunk_repo()
   vim.fn.writefile({ "two" }, root .. "/b.txt")
   session.root = root
-  session.cached = { sessionId = "keys" }
+  session.cached = { sessionId = session_id or "keys" }
   local original = session.request
   session.request = function(_, _, cb)
     cb(nil, { chunk = { n = 1, status = "open", fromSha = sha, humanFiles = {}, agentFiles = { "a.txt", "b.txt" } } })
@@ -175,6 +175,77 @@ M["q on the last tab does nothing"] = function()
   local ok, err = pcall(press, "q")
   assert(ok, err)
   assert(#vim.api.nvim_list_tabpages() == 1)
+  session.cached = nil
+end
+
+M["q with unsaved edits keeps the chunk tab, its keys and says so; works after :w"] = function()
+  vim.cmd("tabnew")
+  local count = #vim.api.nvim_list_tabpages()
+  local root = open_two_files("unsaved")
+  local saved_hidden = vim.o.hidden
+  vim.o.hidden = false
+  local buf = vim.api.nvim_get_current_buf()
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "edited" })
+  local notes, original = {}, vim.notify
+  vim.notify = function(msg, level) notes[#notes + 1] = { msg = msg, level = level } end
+  press("q")
+  vim.notify = original
+  assert(#vim.api.nvim_list_tabpages() == count + 1, "chunk tab was closed")
+  assert(#notes == 1 and notes[1].msg == "pi: save your changes first (:w), then q" and notes[1].level == vim.log.levels.WARN, vim.inspect(notes))
+  assert(buffer_map(buf, "q").desc == "pi: back from chunk view", "q unmapped")
+  assert(buffer_map(buf, "<Tab>").desc == "pi: next file in chunk", "<Tab> unmapped")
+  vim.cmd("write")
+  press("q")
+  vim.o.hidden = saved_hidden
+  assert(#vim.api.nvim_list_tabpages() == count, "chunk tab not closed after :w")
+  vim.cmd("tabclose")
+  session.cached = nil
+end
+
+M["<Tab> and q on the real file outside the chunk tab keep the user's keys"] = function()
+  vim.cmd("tabnew")
+  local root = open_two_files("elsewhere")
+  local chunk_tab = vim.api.nvim_get_current_tabpage()
+  local buf = vim.api.nvim_get_current_buf()
+  vim.cmd("tabnew")
+  local other = vim.api.nvim_get_current_tabpage()
+  vim.api.nvim_win_set_buf(0, buf)
+  -- no user map: the plain key is fed
+  local fed, original = {}, vim.api.nvim_feedkeys
+  vim.api.nvim_feedkeys = function(k, mode, esc)
+    if mode == "n" then
+      fed[#fed + 1] = { k = k, mode = mode }
+    else
+      original(k, mode, esc)
+    end
+  end
+  press("<Tab>")
+  press("q")
+  vim.api.nvim_feedkeys = original
+  assert(#fed == 2 and fed[1].k == vim.keycode("<Tab>") and fed[1].mode == "n", vim.inspect(fed))
+  assert(fed[2].k == "q" and fed[2].mode == "n", vim.inspect(fed))
+  assert(vim.api.nvim_get_current_tabpage() == other and #vim.api.nvim_list_tabpages() >= 3)
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_tabpage(chunk_tab)
+  vim.cmd("tabclose")
+  diff.cleanup()
+  vim.cmd("tabclose")
+  -- user map: it is called
+  vim.cmd("tabnew")
+  local buf2 = vim.fn.bufadd(root .. "/a.txt")
+  vim.fn.bufload(buf2)
+  local calls = 0
+  vim.keymap.set("n", "<Tab>", function() calls = calls + 1 end, { buffer = buf2, desc = "user" })
+  open_chunk(root, vim.trim(vim.fn.system({ "git", "-C", root, "rev-parse", "HEAD" })))
+  local chunk2 = vim.api.nvim_get_current_tabpage()
+  vim.cmd("tabnew")
+  vim.api.nvim_win_set_buf(0, buf2)
+  press("<Tab>")
+  assert(calls == 1, "user <Tab> map not run: " .. calls)
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_tabpage(chunk2)
+  vim.cmd("tabclose")
+  vim.cmd("tabclose")
   session.cached = nil
 end
 

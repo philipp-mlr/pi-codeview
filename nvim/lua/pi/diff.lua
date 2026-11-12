@@ -79,10 +79,34 @@ local function current_view()
   return views[vim.api.nvim_get_current_tabpage()]
 end
 
-local function step(delta)
+local mapped = {} -- buf -> { ["<Tab>"] = user map dict or false, ... } while it carries the pi view keys
+
+local function feed(keys_text, remap)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys_text, true, false, true), remap and "m" or "n", false)
+end
+
+-- Outside the chunk tab the pi key must act as if it were not mapped: run the user's own
+-- buffer-local map for lhs if there was one, otherwise the plain key.
+local function passthrough(buf, lhs)
+  local count = vim.v.count > 0 and tostring(vim.v.count1) or ""
+  local saved = mapped[buf] and mapped[buf][lhs]
+  if saved then
+    if saved.callback then
+      return saved.callback()
+    end
+    local rhs = saved.rhs or ""
+    if saved.expr == 1 then
+      rhs = vim.api.nvim_eval(rhs)
+    end
+    return feed(count .. rhs, saved.noremap ~= 1)
+  end
+  feed(count .. lhs, false)
+end
+
+local function step(buf, lhs, delta)
   local view = current_view()
   if not view then
-    return
+    return passthrough(buf, lhs)
   end
   local index = view.index + delta
   if index < 1 or index > #view.files then
@@ -92,21 +116,26 @@ local function step(delta)
 end
 
 -- Closes the chunk tab and returns to the tab it was opened from; the last tab is never closed.
-local function back()
+-- The view stays registered until the tab is really gone (an unsaved real file blocks :tabclose).
+local function back(buf)
   local tab = vim.api.nvim_get_current_tabpage()
   local view = current_view()
-  if view and #vim.api.nvim_list_tabpages() > 1 then
+  if not view then
+    return passthrough(buf, "q")
+  end
+  if #vim.api.nvim_list_tabpages() > 1 then
+    pcall(vim.cmd, "tabclose " .. vim.api.nvim_tabpage_get_number(tab))
+    if vim.api.nvim_tabpage_is_valid(tab) then
+      return vim.notify("pi: save your changes first (:w), then q", vim.log.levels.WARN)
+    end
     views[tab] = nil
     local origin = view.origin
-    pcall(vim.cmd, "tabclose " .. vim.api.nvim_tabpage_get_number(tab))
     if origin and vim.api.nvim_tabpage_is_valid(origin) then
       vim.api.nvim_set_current_tabpage(origin)
     end
   end
   M.cleanup()
 end
-
-local mapped = {} -- buf -> { ["<Tab>"] = user map dict or false, ... } while it carries the pi view keys
 
 -- Removes the view keys from every buffer no live diff window shows any more, so they do not
 -- linger on the user's real file buffers.
@@ -150,12 +179,14 @@ local function map_file_keys(buf)
     end
   end
   vim.keymap.set("n", "<Tab>", function()
-    step(1)
+    step(buf, "<Tab>", 1)
   end, { buffer = buf, desc = "pi: next file in chunk" })
   vim.keymap.set("n", "<S-Tab>", function()
-    step(-1)
+    step(buf, "<S-Tab>", -1)
   end, { buffer = buf, desc = "pi: previous file in chunk" })
-  vim.keymap.set("n", "q", back, { buffer = buf, desc = "pi: back from chunk view" })
+  vim.keymap.set("n", "q", function()
+    back(buf)
+  end, { buffer = buf, desc = "pi: back from chunk view" })
 end
 
 function M.show(view, index)

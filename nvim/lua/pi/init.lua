@@ -31,6 +31,11 @@ local function relpath(buf, root)
     return nil
   end
   local real = vim.uv.fs_realpath(name)
+  if not real then
+    -- A named buffer whose file is not on disk yet: resolve its directory instead.
+    local dir = vim.uv.fs_realpath(vim.fs.dirname(name))
+    real = dir and (dir:gsub("/+$", "") .. "/" .. vim.fs.basename(name))
+  end
   return real and discover.relpath(root, real) or nil
 end
 

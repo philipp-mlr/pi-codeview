@@ -175,6 +175,15 @@ M["annotate refuses buffers that are not files in the attached root"] = function
   vim.env.XDG_RUNTIME_DIR = old_env
   assert(not vim.tbl_contains(vim.tbl_map(function(n) return n.msg end, notes), notice))
   assert(#annotations.list(dir) == 1, "real file annotation missing")
+  -- A named file that is not on disk yet is still annotatable.
+  local fresh = vim.fn.bufadd(dir .. "/new.txt")
+  vim.fn.bufload(fresh)
+  vim.env.XDG_RUNTIME_DIR = dir .. "/run"
+  notes = capture_notify(function() pi.annotate(fresh, 1, 1, "new") end)
+  vim.env.XDG_RUNTIME_DIR = old_env
+  assert(not vim.tbl_contains(vim.tbl_map(function(n) return n.msg end, notes), notice), vim.inspect(notes))
+  local placed = vim.api.nvim_buf_call(fresh, function() return annotations.at_cursor() end)
+  assert(#placed == 1, "unsaved new file annotation missing")
   session.root = old_root
   annotations.clear()
 end
