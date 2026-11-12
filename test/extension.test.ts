@@ -163,7 +163,7 @@ describe("pi-nvim extension", () => {
     await agentWrite(fake, repo, "a.txt", "a\n");
     const pending = fake.callTool("checkpoint", { note: "add a" });
     await until(() => client.events.find((e) => e.event === "chunk_ready"));
-    expect(fake.statuses.get("pi-nvim")).toBe("pi: chunk 1 waiting for review");
+    expect(fake.statuses.get("pi-nvim")).toBe("pi: checkpoint 1 waiting for review");
     expect(await settled(pending)).toBe(false);
     const status = (await client.request("status")).result;
     expect(status).toMatchObject({ mode: "checkpoints", root: repo.root, sessionId: "test-session", queued: 0 });
@@ -334,10 +334,10 @@ describe("pi-nvim extension", () => {
     await fake.fire("agent_before_settle", { entries: [], continue: false });
     const status = (await client.request("status")).result;
     expect(status.openChunk).toMatchObject({ n: 1, note: "end of run, no checkpoint" });
-    expect(fake.statuses.get("pi-nvim")).toBe("pi: chunk 1 waiting for review");
+    expect(fake.statuses.get("pi-nvim")).toBe("pi: checkpoint 1 waiting for review");
 
     expect(await fake.fire("input", { text: "next do b", source: "interactive" })).toEqual([{ action: "handled" }]);
-    expect(fake.notifications.at(-1)?.message).toBe("Prompt queued until chunk 1 is reviewed");
+    expect(fake.notifications.at(-1)?.message).toBe("Prompt queued until checkpoint 1 is reviewed");
     expect(await fake.fire("input", { text: "from extension", source: "extension" })).toEqual([undefined]);
     expect((await client.request("prompt", { text: "and c" })).ok).toBe(true);
     expect((await client.request("status")).result.queued).toBe(2);
@@ -529,6 +529,67 @@ describe("pi-nvim extension", () => {
     expect((await offClient.request("list_chunks")).result).toEqual([]);
   });
 
+  it("checkpoint with nothing changed returns at once: no checkpoint, no event, drafts kept", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    const drafts = [{ path: "README.md", startLine: 1, endLine: 1, text: "keep" }];
+    expect((await client.request("save_drafts", { annotations: drafts })).ok).toBe(true);
+    const out = await fake.callTool("checkpoint", { note: "nothing" });
+    expect(text(out)).toBe("Nothing changed since the last checkpoint; no review needed. Continue.");
+    expect((await client.request("list_chunks")).result).toEqual([]);
+    expect(client.events.filter((e) => e.event === "chunk_ready")).toEqual([]);
+    expect((await client.request("status")).result.drafts).toEqual(drafts);
+  });
+
+  it("checkpoint after only a human change still opens", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    repo.write("human.txt", "h\n");
+    expect((await client.request("human_write", { path: "human.txt" })).ok).toBe(true);
+    const pending = fake.callTool("checkpoint", { note: "human only" });
+    expect(await until(async () => (await client.request("status")).result.openChunk)).toMatchObject({ n: 1 });
+    await fake.runCommand("checkpoints", "discard done");
+    await pending;
+  });
+
+  describe("outside-worktree warning", () => {
+    const warning = (root: string) =>
+      `pi: the agent is editing files outside ${root} — checkpoint mode can't show them; start pi in that worktree`;
+
+    it("warns once per run for absolute and relative paths, resets on agent_start", async () => {
+      const repo = await makeRepo();
+      const other = await makeRepo();
+      const fake = await start(repo, { mode: "checkpoints" });
+      const client = await connect(repo);
+      const warnings = () => fake.notifications.filter((n) => n.level === "warning");
+      await fake.fire("tool_call", { toolName: "write", input: { path: path.join(other.root, "x.al") } });
+      await fake.fire("tool_call", { toolName: "edit", input: { path: "../" + path.basename(other.root) + "/x.al" } });
+      expect(warnings().map((n) => n.message)).toEqual([warning(repo.root)]);
+      const events = client.events.filter((e) => e.event === "outside_worktree");
+      await until(() => client.events.some((e) => e.event === "outside_worktree"));
+      expect(events.length).toBeLessThanOrEqual(1);
+      expect(client.events.filter((e) => e.event === "outside_worktree")).toEqual([
+        { event: "outside_worktree", data: { path: path.join(other.root, "x.al") } },
+      ]);
+      await fake.fire("agent_start", {});
+      await fake.fire("tool_call", { toolName: "edit", input: { path: "../" + path.basename(other.root) + "/x.al" } });
+      expect(warnings()).toHaveLength(2);
+      expect(client.events.filter((e) => e.event === "outside_worktree").at(-1)).toBeDefined();
+    });
+
+    it("stays quiet for paths inside the root, new files, and read-only tools", async () => {
+      const repo = await makeRepo();
+      const other = await makeRepo();
+      const fake = await start(repo, { mode: "checkpoints" });
+      await fake.fire("tool_call", { toolName: "write", input: { path: "a.txt" } });
+      await fake.fire("tool_call", { toolName: "write", input: { path: path.join(repo.root, "new/dir/b.txt") } });
+      await fake.fire("tool_call", { toolName: "read", input: { path: path.join(other.root, "x.al") } });
+      expect(fake.notifications.filter((n) => n.level === "warning")).toEqual([]);
+    });
+  });
+
   it("a prompt with images is not queued while a chunk is open", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "checkpoints" });
@@ -536,7 +597,7 @@ describe("pi-nvim extension", () => {
     await fake.fire("agent_before_settle", { entries: [], continue: false });
     const images = [{ type: "image", data: "AAAA", mimeType: "image/png" }];
     expect(await fake.fire("input", { text: "look at this", images, source: "interactive" })).toEqual([undefined]);
-    expect(fake.notifications.at(-1)?.message).toBe("Prompt with images not queued: review chunk 1 first");
+    expect(fake.notifications.at(-1)?.message).toBe("Prompt with images not queued: review checkpoint 1 first");
     const client = await connect(repo);
     expect((await client.request("status")).result.queued).toBe(0);
   });
@@ -549,7 +610,7 @@ describe("pi-nvim extension", () => {
     await fake.runCommand("checkpoints", "off");
     expect(fake.notifications.at(-1)).toMatchObject({
       level: "error",
-      message: "pi: chunk 1 is open — send a review or /checkpoints discard <note> first",
+      message: "pi: checkpoint 1 is open — continue (<leader>pc) or /checkpoints discard <note> first",
     });
     expect(fake.pi.getActiveTools()).toContain("checkpoint");
     expect((await repo.git("config", "pi-nvim.checkpoints")).trim()).toBe("true");
@@ -579,7 +640,7 @@ describe("pi-nvim extension", () => {
     const client = await connect(repo);
     const status = (await client.request("status")).result;
     expect(status.openChunk).toMatchObject({ n: 1, note: "end of run, no checkpoint", agentFiles: ["a.txt"] });
-    expect(fake2.statuses.get("pi-nvim")).toBe("pi: chunk 1 waiting for review");
+    expect(fake2.statuses.get("pi-nvim")).toBe("pi: checkpoint 1 waiting for review");
     // New snapshots after the restore must not overwrite refs the restored state points at.
     await agentWrite(fake2, repo, "b.txt", "b\n");
     await agentWrite(fake2, repo, "c.txt", "c\n");

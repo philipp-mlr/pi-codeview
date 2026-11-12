@@ -18,6 +18,7 @@ export const STATE_ENTRY = "pi-nvim-state";
 export const OLD_STATE_ENTRY = "pi-codeview-state";
 export const STATUS_KEY = "pi-nvim";
 export const CHECKPOINT_TOOL = "checkpoint";
+export const NOTHING_CHANGED = "Nothing changed since the last checkpoint; no review needed. Continue.";
 export const REVIEW_PENDING = "Review pending. Philipp will send it later.";
 export const END_OF_RUN_NOTE = "end of run, no checkpoint";
 export const ONE_REVIEW_SESSION =
@@ -92,6 +93,11 @@ function probeStatus(sockPath: string): Promise<{ root?: string; mode?: string }
   });
 }
 
+/** The warning for edits outside the session's worktree; the same text shows in pi and in nvim. */
+export function outsideWorktreeText(root: string): string {
+  return `pi: the agent is editing files outside ${root} — checkpoint mode can't show them; start pi in that worktree`;
+}
+
 /** The review loop for one pi session in one git worktree. */
 export class ReviewLoop {
   readonly state: PiNvimState;
@@ -106,6 +112,8 @@ export class ReviewLoop {
   /** `state.baseline` when the current or last agent run started (mark base with checkpoints off); in memory only. */
   private runBaseline: string | null = null;
   private runAgentFiles = new Set<string>();
+  /** Whether the outside-worktree warning was already shown in the current run. */
+  private warnedOutside = false;
 
   private constructor(
     private readonly pi: ExtensionAPI,
@@ -156,12 +164,14 @@ export class ReviewLoop {
     const chunk = await this.serial(async () => {
       const open = this.state.openChunk();
       if (open) return open;
-      const { sha } = await this.recordSince("agent");
+      const { sha, files: changed } = await this.recordSince("agent");
+      if (changed.length === 0 && this.state.steps.length === 0) return null;
       const created = this.state.createChunk(note, sha, "open", files);
       this.persist();
       this.broadcast("chunk_ready", { chunk: created });
       return created;
     });
+    if (!chunk) return NOTHING_CHANGED;
     return this.waitForReview(chunk.n, signal);
   }
 
@@ -221,7 +231,44 @@ export class ReviewLoop {
   runStarted(): void {
     this.runBaseline = this.state.baseline;
     this.runAgentFiles = new Set();
+    this.warnedOutside = false;
     this.broadcast("activity_current", { current: null, busy: true });
+  }
+
+  /** Warns once per run when a mutating tool targets a path outside the session's worktree. Never blocks the tool. */
+  toolCall(toolName: string, input: unknown): void {
+    if (this.warnedOutside || isReadOnlyTool(toolName) || typeof input !== "object" || input === null) return;
+    const args = input as Record<string, unknown>;
+    for (const key of ["path", "file_path"]) {
+      const value = args[key];
+      if (typeof value !== "string" || value === "") continue;
+      const target = path.resolve(this.ctx.cwd, value);
+      if (this.isOutsideRoot(target)) {
+        this.warnedOutside = true;
+        this.notify(outsideWorktreeText(this.root), "warning");
+        this.broadcast("outside_worktree", { path: target });
+        return;
+      }
+    }
+  }
+
+  private isOutsideRoot(target: string): boolean {
+    const real = (p: string): string => {
+      let cur = p;
+      const rest: string[] = [];
+      for (;;) {
+        try {
+          return path.join(fs.realpathSync(cur), ...rest);
+        } catch {
+          const parent = path.dirname(cur);
+          if (parent === cur) return p;
+          rest.unshift(path.basename(cur));
+          cur = parent;
+        }
+      }
+    };
+    const rel = path.relative(real(this.root), real(target));
+    return rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
   }
 
   /**
@@ -249,12 +296,12 @@ export class ReviewLoop {
     const chunk = this.state.openChunk();
     if (!chunk) return false;
     if (hasImages) {
-      this.notify(`Prompt with images not queued: review chunk ${chunk.n} first`, "warning");
+      this.notify(`Prompt with images not queued: review checkpoint ${chunk.n} first`, "warning");
       return false;
     }
     this.state.queuePrompt(text);
     this.persist();
-    this.notify(`Prompt queued until chunk ${chunk.n} is reviewed`, "info");
+    this.notify(`Prompt queued until checkpoint ${chunk.n} is reviewed`, "info");
     return true;
   }
 
@@ -291,7 +338,7 @@ export class ReviewLoop {
 
   async continueWith(note: string): Promise<void> {
     if (!note) throw new Error("continue needs a note: /checkpoints continue <note>");
-    if (!this.state.openChunk()) throw new Error("no open chunk");
+    if (!this.state.openChunk()) throw new Error("no open checkpoint");
     await this.send({ annotations: this.state.drafts, note, viewed: true });
   }
 
@@ -299,9 +346,9 @@ export class ReviewLoop {
     if (!note) throw new Error("discard needs a note: /checkpoints discard <note>");
     await this.serial(async () => {
       const open = this.state.openChunk();
-      if (!open) throw new Error("no open chunk");
+      if (!open) throw new Error("no open checkpoint");
       const chunk = this.state.closeChunk(open.n, { status: "discarded", annotations: [], reviewNote: note });
-      this.resolveWaiters(`Philipp discarded chunk ${chunk.n}. His note:\n${note}`, chunk.n);
+      this.resolveWaiters(`Philipp discarded checkpoint ${chunk.n}. His note:\n${note}`, chunk.n);
       this.deliverQueued();
       this.persist();
       this.broadcast("chunk_reviewed", { chunk });
@@ -339,7 +386,7 @@ export class ReviewLoop {
   async setMode(mode: Mode): Promise<void> {
     const open = this.state.openChunk();
     if (mode === "off" && open) {
-      throw new Error(`chunk ${open.n} is open — send a review or /checkpoints discard <note> first`);
+      throw new Error(`checkpoint ${open.n} is open — continue (<leader>pc) or /checkpoints discard <note> first`);
     }
     if (mode === "checkpoints" && (await this.otherReviewSession())) throw new Error(ONE_REVIEW_SESSION);
     await writeMode(this.root, mode);
@@ -357,7 +404,7 @@ export class ReviewLoop {
 
   describe(): string {
     const open = this.state.openChunk();
-    const chunk = open ? `chunk ${open.n} open ("${open.note}")` : "no open chunk";
+    const chunk = open ? `checkpoint ${open.n} open ("${open.note}")` : "no open checkpoint";
     const mode = this.state.mode === "checkpoints" ? "checkpoint mode on" : "checkpoint mode off";
     return `pi: ${mode}, ${chunk}, socket ${this.sockPath}`;
   }
@@ -384,7 +431,7 @@ export class ReviewLoop {
         return this.state.chunks;
       case "get_chunk": {
         const chunk = this.state.chunks.find((c) => c.n === req.n);
-        if (!chunk) throw new Error(`no chunk ${req.n}`);
+        if (!chunk) throw new Error(`no checkpoint ${req.n}`);
         return { chunk, diff: await diffText(this.root, chunk.fromSha, chunk.toSha) };
       }
       case "prompt":
@@ -518,7 +565,7 @@ export class ReviewLoop {
     this.pi.appendEntry(STATE_ENTRY, data);
     const open = this.state.openChunk();
     const status = open
-      ? `pi: chunk ${open.n} waiting for review`
+      ? `pi: checkpoint ${open.n} waiting for review`
       : this.state.mode === "checkpoints"
         ? "pi: checkpoints"
         : undefined;

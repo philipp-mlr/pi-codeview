@@ -663,4 +663,19 @@ M["statusline says checkpoint N while a checkpoint waits"] = function()
   assert(short == "checkpoint 3", short)
 end
 
+M["outside_worktree event shows the warning text via WARN"] = function()
+  local session = require("pi.session")
+  local real = session.cached
+  session.cached = { root = "/work/a" }
+  local handlers = {}
+  local real_on = session.on_event
+  session.on_event = function(fn) handlers[#handlers + 1] = fn end
+  capture_notify(function() pi.setup() end)
+  session.on_event = real_on
+  local notes = capture_notify(function() handlers[#handlers]("outside_worktree", { path = "/x/y" }) end)
+  session.cached = real
+  assert(#notes == 1 and notes[1].level == vim.log.levels.WARN, vim.inspect(notes))
+  assert(notes[1].msg == "pi: the agent is editing files outside /work/a — checkpoint mode can't show them; start pi in that worktree", notes[1].msg)
+end
+
 return M

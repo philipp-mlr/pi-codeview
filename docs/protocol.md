@@ -71,10 +71,15 @@ The extension renders them under the context or the annotation's note as a `Diag
 | `chunk_reviewed` | `{"event":"chunk_reviewed","data":{"chunk":{"n":2,"status":"reviewed","...":"..."}}}` |
 | `mode_changed` | `{"event":"mode_changed","data":{"mode":"checkpoints"}}` |
 | `run_settled` | `{"event":"run_settled","data":{"aborted":false,"files":2}}` |
+| `outside_worktree` | `{"event":"outside_worktree","data":{"path":"/abs/other-worktree/x.al"}}` |
 | `activity_current` | `{"event":"activity_current","data":{"current":{"tool":"edit","target":"a.ts"},"mutating":true,"busy":true}}` |
 
 `activity_current` is sent on tool start (`busy` true, `current` the tool), tool end (`current` the still-running tool or `null`; `mutating` only here), `agent_start` (`busy` true, `current` null) and `agent_settled` (`busy` false, `current` null).
 `mutating` is false when the tool that ended cannot change files (e.g. `read`); clients reload buffers only when it is true.
+
+`outside_worktree` is sent at most once per agent run, when a mutating tool's `path` argument resolves outside the session's root (the tool is not blocked). Clients show a warning.
+
+A `checkpoint` call with no changes since the last checkpoint (no agent and no human steps) creates no chunk and broadcasts nothing; it returns "Nothing changed since the last checkpoint; no review needed. Continue." Drafts are untouched.
 
 `run_settled.files` is the number of distinct files the agent changed during the run (Philipp's edits do not count).
 

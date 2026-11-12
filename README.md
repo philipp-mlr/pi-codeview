@@ -176,6 +176,8 @@ step. Use it when you want to be forced to look at every step, for example
 at the start of a new codebase. It is off by default and set per repository
 (git config `pi-nvim.checkpoints`).
 
+A checkpoint with no changes is skipped: the agent is told nothing needs review. If the agent edits files outside the worktree pi was started in, pi and Neovim warn once per run; start pi in that worktree.
+
 Switch it with `<leader>pm` / `:PiCheckpointMode on|off` in Neovim, or in pi:
 
 - `/checkpoints` shows the state.

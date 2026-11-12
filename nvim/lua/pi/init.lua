@@ -82,6 +82,14 @@ local function on_event(name, data)
   if mutating or name == "chunk_ready" or name == "chunk_reviewed" then
     live.schedule(session.refresh_live)
   end
+  -- The extension sends this once per agent run.
+  if name == "outside_worktree" then
+    local root = session.cached and session.cached.root
+    vim.notify(
+      ("pi: the agent is editing files outside %s — checkpoint mode can't show them; start pi in that worktree"):format(root or "its worktree"),
+      vim.log.levels.WARN
+    )
+  end
   if name == "chunk_ready" then
     -- The server sends { chunk = {...} }.
     local n = data and (data.chunk and data.chunk.n) or "?"

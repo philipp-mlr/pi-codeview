@@ -74,6 +74,7 @@ export default function piNvim(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_call", (event) => {
+    loop?.toolCall(event.toolName, event.input);
     const reason = loop?.capBlock(event.toolName);
     return reason ? { block: true, reason } : undefined;
   });
