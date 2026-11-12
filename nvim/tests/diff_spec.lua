@@ -892,4 +892,26 @@ M["forget closes the diffview tab; ViewClosed unregisters it"] = with_fake(funct
   assert(#fake.calls == 3, vim.inspect(fake.calls))
 end)
 
+M["a checkpoint without file changes is an INFO notice naming the continue key"] = function()
+  local keys_state = require("pi.keys")
+  local root = chunk_repo()
+  session.root = root
+  session.cached = { sessionId = "empty" }
+  local original, notify = session.request, vim.notify
+  local notes = {}
+  vim.notify = function(msg, level) notes[#notes + 1] = { msg = msg, level = level } end
+  session.request = function(_, _, cb)
+    cb(nil, { chunk = { n = 3, status = "open", agentFiles = {}, humanFiles = {} } })
+  end
+  keys_state.mapped = { continue = "<leader>pc" }
+  diff.open(3)
+  keys_state.mapped = {}
+  diff.open(3)
+  session.request, vim.notify = original, notify
+  session.cached = nil
+  assert(#notes == 2, vim.inspect(notes))
+  assert(notes[1].msg == "pi: checkpoint 3 has no file changes — <leader>pc to continue" and notes[1].level == vim.log.levels.INFO, vim.inspect(notes))
+  assert(notes[2].msg == "pi: checkpoint 3 has no file changes — :PiContinue to continue", vim.inspect(notes))
+end
+
 return M

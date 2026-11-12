@@ -239,7 +239,9 @@ function M.continue()
       local open_chunk = type(status.openChunk) == "table" and status.openChunk or nil
       local count = #annotations.list(root)
       if not open_chunk and count == 0 then
-        return vim.notify("pi: nothing to send")
+        local annotate = keys_state.label("annotate", ":PiAnnotate")
+        local ask = keys_state.label("ask", ":PiAsk")
+        return vim.notify(("pi: nothing to send — %s to annotate, %s to ask"):format(annotate, ask))
       end
       local payload = {
         annotations = annotations.list(root, { diagnostics = true }),
@@ -474,6 +476,45 @@ local function on_write(args)
   end, { buf = args.buf, quiet = true })
 end
 
+-- Splits a key notation into keys: "<leader>pa" → { "<leader>", "p", "a" }.
+local function key_tokens(lhs)
+  local tokens = {}
+  local i = 1
+  while i <= #lhs do
+    local special = lhs:match("^<[^>]+>", i)
+    tokens[#tokens + 1] = special or lhs:sub(i, i)
+    i = i + #(special or lhs:sub(i, i))
+  end
+  return tokens
+end
+
+-- The key prefix (at least two keys, e.g. "<leader>p") shared by every key setup mapped; nil if none.
+local function common_prefix()
+  local prefix
+  for _, lhs in pairs(keys_state.mapped) do
+    local tokens = key_tokens(lhs)
+    if not prefix then
+      prefix = tokens
+    else
+      local n = 0
+      while n < #prefix and n < #tokens and prefix[n + 1] == tokens[n + 1] do
+        n = n + 1
+      end
+      prefix = vim.list_slice(prefix, 1, n)
+    end
+  end
+  return prefix and #prefix >= 2 and table.concat(prefix) or nil
+end
+
+-- Names the shared key prefix "pi" in which-key; which-key is optional and never required.
+local function register_which_key_group()
+  local prefix = common_prefix()
+  local loaded, wk = pcall(require, "which-key")
+  if prefix and loaded and type(wk) == "table" and type(wk.add) == "function" then
+    pcall(wk.add, { { prefix, group = "pi" } })
+  end
+end
+
 function M.setup(opts)
   opts = opts or {}
   local keys = vim.tbl_extend("force", M.default_keys, opts.keys or {})
@@ -526,6 +567,7 @@ function M.setup(opts)
   -- opts.keys always map.
   local skipped = {}
   keys_state.mapped = {}
+  keys_state.skipped = skipped
   local function map(modes, name, rhs, desc)
     local lhs = keys[name]
     if not lhs then
@@ -556,6 +598,8 @@ function M.setup(opts)
   if #skipped > 0 then
     vim.notify("pi: kept existing mappings, not mapped: " .. table.concat(skipped, ", "), vim.log.levels.INFO)
   end
+
+  register_which_key_group()
 
   local group = vim.api.nvim_create_augroup("pi", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", { group = group, callback = on_write })

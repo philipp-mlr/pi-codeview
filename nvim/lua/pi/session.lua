@@ -333,7 +333,7 @@ function M.ensure(cb, opts)
   end
   collect(dir, root, function(live)
     if #live == 0 then
-      return fail("pi: no pi session with pi-nvim for " .. root)
+      return fail(("pi: no pi session for %s — start pi in that worktree"):format(vim.fs.basename(root)))
     end
     if #live == 1 then
       return pick_from(live, live[1], root, attached)
@@ -357,7 +357,7 @@ function M.choose(cb)
   end
   collect(dir, root, function(live)
     if #live == 0 then
-      return vim.notify("pi: no pi session with pi-nvim for " .. root, vim.log.levels.ERROR)
+      return vim.notify(("pi: no pi session for %s — start pi in that worktree"):format(vim.fs.basename(root)), vim.log.levels.ERROR)
     end
     select_session(live, "pi: attach to which pi session?", function(choice)
       if not choice then

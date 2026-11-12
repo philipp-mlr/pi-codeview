@@ -351,4 +351,19 @@ M["panel: <CR> on a file line opens the built-in view at that file"] = function(
   diff.cleanup()
 end
 
+M["panel: empty text names the mode key when checkpoint mode is off"] = function()
+  keys_state.mapped = { mode = "<leader>pm" }
+  session.cached = { mode = "off" }
+  local buf = open_panel({})
+  assert(lines(buf)[2] == "checkpoint mode is off — <leader>pm to turn it on", lines(buf)[2])
+  keys_state.mapped = {}
+  buf = open_panel({})
+  assert(lines(buf)[2] == "checkpoint mode is off — :PiCheckpointMode to turn it on", lines(buf)[2])
+  session.cached = { mode = "checkpoints" }
+  buf = open_panel({})
+  assert(lines(buf)[2] == "no checkpoints yet", lines(buf)[2])
+  session.cached = nil
+  panel.close()
+end
+
 return M

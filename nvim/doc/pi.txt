@@ -1,0 +1,240 @@
+*pi.txt*  Ask pi, annotate lines and review the agent's work from Neovim
+
+==============================================================================
+CONTENTS                                                          *pi-contents*
+
+    1. Introduction ................................ |pi-intro|
+    2. Setup ....................................... |pi-setup|
+    3. Keys ........................................ |pi-keys|
+    4. Commands .................................... |pi-commands|
+    5. Writing and reading long text ............... |pi-editor|
+    6. Checkpoint mode ............................. |pi-checkpoints|
+    7. Sessions .................................... |pi-sessions|
+    8. Highlight groups ............................ |pi-highlights|
+    9. Statusline .................................. |pi-statusline|
+   10. Health check ................................ |pi-health|
+
+==============================================================================
+1. Introduction                                                      *pi-intro*
+                                                                          *pi*
+
+pi.nvim connects Neovim to a running pi coding agent (https://pi.dev). pi
+keeps running in its own window and Neovim talks to that session over a local
+socket. The pi side is an extension: `pi install /path/to/pi-nvim`. The
+Neovim side is this plugin; it needs Neovim 0.10 and git.
+
+With it you can ask pi with the file, the cursor line or the selection as
+context, watch the agent work in your buffers, annotate lines and send the
+annotations back with one key. In checkpoint mode the agent stops after each
+step so you can review it before it continues.
+
+Run `:checkhealth pi` when something does not work: see |pi-health|.
+
+==============================================================================
+2. Setup                                                             *pi-setup*
+
+Call setup once, for example from lazy.nvim's `config`: >lua
+
+    require("pi").setup({})
+<
+Options (all optional):
+
+    keys = { name = lhs | false }                              *pi-setup-keys*
+        Overrides single keys, see |pi-keys|. `false` leaves a key unmapped.
+        A default key that is already mapped by something else is left
+        alone and listed in one message; keys you pass here always map.
+
+    diff = "auto" | "builtin" | "diffview"                     *pi-setup-diff*
+        Which view opens a checkpoint. "auto" (default) uses diffview.nvim
+        when it is installed, "builtin" always uses the built-in view,
+        "diffview" prefers diffview and warns when it is missing.
+
+    panel = { auto_open = true }                              *pi-setup-panel*
+        With `false` the checkpoint list does not open on its own when a
+        checkpoint arrives; you only get a notice.
+
+    live = { sign = "▎", line_hl = false }                     *pi-setup-live*
+        The sign for lines the agent changed, and whether changed lines are
+        also highlighted with |PiLive|.
+
+    badge = true                                              *pi-setup-badge*
+        With `false` the badge in the top-right corner is not shown.
+
+If which-key.nvim is installed, setup names the shared key prefix (by default
+`<leader>p`) "pi" there. which-key is never required.
+
+==============================================================================
+3. Keys                                                               *pi-keys*
+
+All default keys live under `<leader>p`. Names in `setup({ keys = ... })`
+are in the second column.
+
+    `<leader>pa`  ask          |:PiAsk|           ask pi (visual: selection)
+    `<leader>pc`  continue     |:PiContinue|      review the checkpoint / send
+    `<leader>ps`  stop         |:PiStop|          stop the current run
+    `<leader>pn`  annotate     |:PiAnnotate|      annotate line or selection
+    `<leader>pe`  edit         |:PiAnnotationEdit|   edit annotation at cursor
+    `<leader>px`  remove       |:PiAnnotationRemove| remove annotation
+    `<leader>pv`  checkpoints  |:PiCheckpoints|   toggle the checkpoint list
+    `<leader>pm`  mode         |:PiCheckpointMode| toggle checkpoint mode
+    `<leader>pi`  session      |:PiSession|       choose the pi session
+    `<leader>pk`  peek         |:PiPeek|          show the full note
+
+Messages name your configured key, or the command when a key is not mapped.
+
+==============================================================================
+4. Commands                                                       *pi-commands*
+
+                                                                      *:PiAsk*
+:[range]PiAsk           Ask pi. Opens the editor (|pi-editor|) and sends the
+                        text with the file path, the cursor line (or the
+                        selected lines and text) and the LSP errors and
+                        warnings. If pi is busy the text is a follow-up; with
+                        a checkpoint open it waits until that is reviewed.
+
+                                                                 *:PiContinue*
+:PiContinue             Move on. With a checkpoint waiting, sends your
+                        annotations and saved edits as its review and the
+                        agent goes on; no message, no confirmation. Without
+                        one, sends the annotations as a new prompt. Only
+                        modified buffers inside the session's worktree are
+                        saved first. To tell the agent something, use
+                        |:PiAsk| first.
+
+                                                                     *:PiStop*
+:PiStop                 Stop the agent's current run. A waiting checkpoint
+                        stays open.
+
+                                                                 *:PiAnnotate*
+:[range]PiAnnotate      Annotate the current line or the range. The note shows
+                        below the range as `✎ <text>`.
+
+                                                             *:PiAnnotationEdit*
+:PiAnnotationEdit       Edit the annotation at the cursor; pick one when
+                        several cover the line.
+
+                                                           *:PiAnnotationRemove*
+:PiAnnotationRemove     Remove the annotation at the cursor; pick one when
+                        several cover the line.
+
+                                                              *:PiCheckpoints*
+:PiCheckpoints          Toggle the checkpoint list. See |pi-checkpoints|.
+
+                                                           *:PiCheckpointMode*
+:PiCheckpointMode [on|off]
+                        Switch checkpoint mode for this repository; without
+                        an argument it toggles.
+
+                                                                  *:PiSession*
+:PiSession              Choose the pi session to work with.
+
+                                                                     *:PiPeek*
+:PiPeek                 Show the full text behind a preview in a float: the
+                        checkpoint note and the file's reason in a checkpoint
+                        diff, or every annotation of the cursor line. The
+                        float closes when the cursor moves.
+
+==============================================================================
+5. Writing and reading long text                                    *pi-editor*
+
+|:PiAsk|, |:PiAnnotate| and |:PiAnnotationEdit| open a small floating editor
+about 80 columns wide. It wraps, grows up to 15 lines and is a markdown
+buffer. Its title says where the text goes. It starts in insert mode.
+
+    <C-s>       send (insert and normal mode)
+    <CR>        send (normal mode)
+    q, <Esc>    cancel (normal mode); `:q` and `<C-w>c` cancel too
+
+Text you cancelled, or that failed to send, is offered again by the next
+editor of the same kind. Sending empty text cancels.
+
+==============================================================================
+6. Checkpoint mode                                              *pi-checkpoints*
+
+In checkpoint mode the agent stops at the end of each step (or after 150
+changed lines) and waits for your review. It is off by default and set per
+repository. Switch it with |:PiCheckpointMode| or `/checkpoints on|off` in pi.
+
+The checkpoint list (|:PiCheckpoints|) opens when a checkpoint arrives. In it:
+
+    <CR>   open the checkpoint (on a file line: at that file)
+    za     show or hide the details
+    a      show or hide the per-turn records
+    r      refresh
+    q      close
+    g?     list all keys
+
+A checkpoint opens in its own tab as a diff: the file before on the left,
+your file on the right. `<Tab>` and `<S-Tab>` move between files, `q` closes
+the tab. Annotate on the right side, then |:PiContinue| sends the review.
+With diffview.nvim installed it is used instead (see |pi-setup-diff|).
+
+==============================================================================
+7. Sessions                                                       *pi-sessions*
+
+Neovim attaches to a pi session running in the same worktree as the current
+buffer. With one such session it attaches on first use; with several it
+asks. Running a command from a buffer in another worktree switches to that
+worktree's session and says so. |:PiSession| picks one on purpose. Name your
+pi sessions with `/name` in pi to tell them apart.
+
+When there is none you get `pi: no pi session for <worktree> — start pi in
+that worktree`.
+
+==============================================================================
+8. Highlight groups                                             *pi-highlights*
+
+All groups are defined with `default`, so colorschemes and your config can
+override them.
+
+    PiBadge                 the working badge; links to `PmenuSel`
+    PiAnnotation            annotation text; italic in the `Comment` colour
+    PiAnnotationSign        `✎` sign and annotated line numbers; `Special`
+    PiCheckpointWaiting     the waiting checkpoint; `DiagnosticWarn`
+    PiCheckpointWaitingRow  its row in the list; bold `DiagnosticWarn`
+    PiLive                  changed lines (only with `live.line_hl`);
+                            `DiffChange`
+    PiLiveSignAdd           sign of an added line; `Added`
+    PiLiveSignChange        sign of a changed line; `Changed`
+    PiLiveSignDelete        sign of a deleted line; `Removed`
+
+==============================================================================
+9. Statusline                                                  *pi-statusline*
+
+`require("pi").statusline()` returns `pi: <session> · <state>`, where state is
+`working · <tool> <target>`, `working`, `checkpoint N` or `idle`. While
+checkpoint mode is on and nothing waits, `[checkpoints]` follows the name.
+It is empty when Neovim is not attached. With lualine: >lua
+
+    lualine_x = { function() return require("pi").statusline() end }
+<
+To colour the waiting checkpoint, use `require("pi").statusline_parts()`,
+a list of `{ text, hl }` (hl is nil for plain text): >lua
+
+    lualine_x = { function()
+      local out = {}
+      for _, part in ipairs(require("pi").statusline_parts()) do
+        local hl = part.hl
+        local text = part.text
+        out[#out + 1] = hl and ("%#" .. hl .. "#" .. text .. "%*") or text
+      end
+      return table.concat(out)
+    end }
+<
+`require("pi").status()` returns `"checkpoint N"`, `"working"`, `"idle"` or
+`""`, and `require("pi").session_label()` the attached session's name.
+
+==============================================================================
+10. Health check                                                   *pi-health*
+
+>
+    :checkhealth pi
+<
+Checks Neovim 0.10 or newer, git on PATH, the runtime directory, the live pi
+sessions of the current worktree with the protocol version of each, whether
+diffview.nvim is installed and which `diff` setting is used, and which default
+keys were skipped because they were already mapped. It works without
+|pi-setup| having run, outside a git repository and without a runtime
+directory.
+
+ vim:tw=78:ts=8:ft=help:norl:

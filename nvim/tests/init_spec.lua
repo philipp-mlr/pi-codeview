@@ -673,13 +673,15 @@ M["continue with a checkpoint open and annotations counts them and clears them"]
 end
 
 M["continue without a checkpoint sends annotations as a prompt, or says nothing to send"] = function()
+  reset_maps()
+  capture_notify(function() pi.setup() end)
   local notes, requests = continue_with(nil, 2)
   assert(#requests == 1 and #requests[1].payload.annotations == 2, vim.inspect(requests))
   assert(#notes == 1 and notes[1].msg == "pi[wt-a]: 2 annotations sent", vim.inspect(notes))
   notes = continue_with(nil, 1)
   assert(notes[1].msg == "pi[wt-a]: 1 annotation sent", vim.inspect(notes))
   notes, requests = continue_with(nil, 0)
-  assert(#requests == 0 and #notes == 1 and notes[1].msg == "pi: nothing to send", vim.inspect(notes))
+  assert(#requests == 0 and #notes == 1 and notes[1].msg == "pi: nothing to send — <leader>pn to annotate, <leader>pa to ask", vim.inspect(notes))
 end
 
 -- Buffers for save-scope tests: a modified file buffer in dir.
@@ -1120,6 +1122,92 @@ M["PiPeek shows every full annotation of the line in a wrapping float that close
   annotations.clear()
   vim.api.nvim_buf_delete(buf, { force = true })
   pcall(vim.cmd, "tabclose")
+end
+
+M["no session notice names the worktree and the next step"] = function()
+  local session = require("pi.session")
+  local dir = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()
+  vim.fn.mkdir(dir, "p")
+  dir = vim.uv.fs_realpath(dir)
+  assert(vim.system({ "git", "init", "-q" }, { cwd = dir }):wait().code == 0)
+  vim.fn.writefile({ "x" }, dir .. "/a.txt")
+  local old_env = vim.env.XDG_RUNTIME_DIR
+  vim.env.XDG_RUNTIME_DIR = dir .. "/run"
+  local buf = vim.fn.bufadd(dir .. "/a.txt")
+  vim.fn.bufload(buf)
+  local notes = capture_notify(function()
+    session.ensure(function() error("must not attach") end, { buf = buf })
+    session.choose()
+  end)
+  vim.env.XDG_RUNTIME_DIR = old_env
+  local want = "pi: no pi session for " .. vim.fs.basename(dir) .. " — start pi in that worktree"
+  assert(#notes >= 1 and notes[1].msg == want and notes[1].level == vim.log.levels.ERROR, vim.inspect(notes))
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["setup remembers the keys it skipped"] = function()
+  local keys_state = require("pi.keys")
+  reset_maps()
+  vim.keymap.set("n", "<leader>pn", "<cmd>echo 'mine'<CR>", { desc = "mine" })
+  capture_notify(function() pi.setup() end)
+  assert(vim.deep_equal(keys_state.skipped, { "<leader>pn (n)" }), vim.inspect(keys_state.skipped))
+  reset_maps()
+  capture_notify(function() pi.setup() end)
+  assert(vim.deep_equal(keys_state.skipped, {}), vim.inspect(keys_state.skipped))
+  reset_maps()
+end
+
+local function with_which_key(stub, fn)
+  local saved = package.loaded["which-key"]
+  local saved_preload = package.preload["which-key"]
+  package.loaded["which-key"] = stub
+  if stub == nil then
+    package.preload["which-key"] = nil
+  end
+  local ok, err = pcall(fn)
+  package.loaded["which-key"] = saved
+  package.preload["which-key"] = saved_preload
+  assert(ok, err)
+end
+
+M["which-key: setup registers the pi group under the keys' common prefix"] = function()
+  reset_maps()
+  local added = {}
+  with_which_key({ add = function(spec) added[#added + 1] = spec end }, function()
+    capture_notify(function() pi.setup() end)
+  end)
+  assert(#added == 1 and vim.deep_equal(added[1], { { "<leader>p", group = "pi" } }), vim.inspect(added))
+  -- Custom keys sharing another prefix get that prefix; keys with nothing in common get no group.
+  added = {}
+  local custom = {}
+  for name in pairs(pi.default_keys) do custom[name] = "<leader>r" .. name:sub(1, 2) end
+  custom.ask, custom.annotate = "<leader>raa", "<leader>rab"
+  with_which_key({ add = function(spec) added[#added + 1] = spec end }, function()
+    capture_notify(function() pi.setup({ keys = custom }) end)
+  end)
+  assert(#added == 1 and added[1][1][1] == "<leader>r", vim.inspect(added))
+  added = {}
+  with_which_key({ add = function(spec) added[#added + 1] = spec end }, function()
+    capture_notify(function() pi.setup({ keys = { ask = "<C-a>", continue = "<C-b>", stop = false, annotate = false, edit = false, remove = false, checkpoints = false, mode = false, session = false, peek = false } }) end)
+  end)
+  assert(#added == 0, vim.inspect(added))
+  for _, lhs in ipairs({ "<C-a>", "<C-b>" }) do pcall(vim.keymap.del, "n", lhs) end
+  reset_maps()
+  for _, lhs in ipairs({ "<leader>raa", "<leader>rab" }) do pcall(vim.keymap.del, "n", lhs); pcall(vim.keymap.del, "x", lhs) end
+end
+
+M["which-key: absent, without add, or failing never breaks setup"] = function()
+  reset_maps()
+  with_which_key(nil, function()
+    assert(#capture_notify(function() pi.setup() end) == 0)
+  end)
+  with_which_key({}, function()
+    assert(#capture_notify(function() pi.setup() end) == 0)
+  end)
+  with_which_key({ add = function() error("boom") end }, function()
+    assert(#capture_notify(function() pi.setup() end) == 0)
+  end)
+  reset_maps()
 end
 
 return M

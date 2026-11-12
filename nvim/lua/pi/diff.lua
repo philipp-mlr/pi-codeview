@@ -559,7 +559,7 @@ function M.open(n, path)
     local chunk = result.chunk
     local files = files_of(chunk)
     if #files == 0 then
-      return vim.notify(("pi: checkpoint %d changes no files"):format(n), vim.log.levels.WARN)
+      return vim.notify(("pi: checkpoint %d has no file changes — %s to continue"):format(n, keys.label("continue", ":PiContinue")), vim.log.levels.INFO)
     end
     local origin = vim.api.nvim_get_current_tabpage()
     if use_diffview() and open_in_diffview(n, chunk, files, path) then

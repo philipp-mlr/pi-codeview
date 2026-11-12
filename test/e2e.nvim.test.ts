@@ -268,7 +268,7 @@ cv.setup({ diff = "builtin" })
 cv.continue()
 `,
     );
-    await until(() => nvim.notifications().some((n) => n.msg === "pi: nothing to send"), "notice");
+    await until(() => nvim.notifications().some((n) => n.msg === "pi: nothing to send — <leader>pn to annotate, <leader>pa to ask"), "notice");
     expect(fake.sent).toEqual([]);
   }, TIMEOUT_MS);
 

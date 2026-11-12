@@ -34,7 +34,7 @@ function M.repo_hash(dir)
   return vim.fn.sha256(real):sub(1, 12)
 end
 
-local function runtime_dir()
+function M.runtime_dir()
   local xdg = vim.env.XDG_RUNTIME_DIR
   if xdg and xdg ~= "" then
     return xdg
@@ -63,7 +63,7 @@ function M.sockets(dir)
   if not hash then
     return {}
   end
-  local sock_dir = runtime_dir() .. "/pi-nvim/" .. hash
+  local sock_dir = M.runtime_dir() .. "/pi-nvim/" .. hash
   local entries = {}
   for name, kind in vim.fs.dir(sock_dir) do
     if name:match("%.sock$") and (kind == "socket" or kind == "unknown") then

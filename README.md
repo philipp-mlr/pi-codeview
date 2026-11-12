@@ -8,6 +8,13 @@ window; Neovim talks to that session over a local socket. An optional
 checkpoint mode makes the agent stop after each step so you can
 review it before it continues.
 
+Help is built in: `:help pi` and `:checkhealth pi` (Neovim and git versions,
+the runtime directory, the live pi sessions of this worktree with their protocol
+versions, diffview and the `diff` setting, and default keys skipped because they
+were taken). If which-key.nvim is installed, `setup()` names the `<leader>p`
+prefix "pi" there. `nvim/doc/pi.txt` is the vimdoc; run `:helptags` on it if
+your plugin manager does not.
+
 ## Install
 
 pi side, as a pi package:
@@ -205,7 +212,7 @@ message (use `<leader>pa` for that). With a checkpoint waiting it is the
 review (`pi[my-session]: continuing — checkpoint 2 reviewed with 3 annotations`);
 otherwise the annotations go as a prompt (`pi[my-session]: 3 annotations sent`).
 Before sending, only the modified buffers whose files lie inside that session's worktree are saved (other projects' buffers, `pi://` views and scratch buffers are left alone). With no annotations and no waiting checkpoint
-nothing is sent (`pi: nothing to send`). Each annotation
+nothing is sent (`pi: nothing to send — <leader>pn to annotate, <leader>pa to ask`). Each annotation
 carries the LSP errors and warnings on its lines, under a `Diagnostics:`
 heading in the agent's message.
 
@@ -230,6 +237,9 @@ When Neovim moves from one worktree's session to another's it says
 attach on entering a buffer; the first attach is silent.
 `require("pi").session_label()` gives the attached session's name.
 
+With no session for the worktree you get `pi: no pi session for <worktree> —
+start pi in that worktree`.
+
 ## Checkpoint mode
 
 In checkpoint mode the agent works in small steps and stops at the end of
@@ -240,7 +250,7 @@ step. Use it when you want to be forced to look at every step, for example
 at the start of a new codebase. It is off by default and set per repository
 (git config `pi-nvim.checkpoints`).
 
-A checkpoint with no changes is skipped: the agent is told nothing needs review. If the agent edits files outside the worktree pi was started in, pi and Neovim warn once per run; start pi in that worktree.
+A checkpoint with no changes is skipped: the agent is told nothing needs review. Opening one from the list says `pi: checkpoint N has no file changes — <leader>pc to continue`. The empty list reads `checkpoint mode is off — <leader>pm to turn it on`, or `no checkpoints yet` with the mode on. If the agent edits files outside the worktree pi was started in, pi and Neovim warn once per run; start pi in that worktree.
 
 Switch it with `<leader>pm` / `:PiCheckpointMode on|off` in Neovim, or in pi:
 
