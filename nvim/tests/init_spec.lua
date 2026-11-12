@@ -140,6 +140,45 @@ M["annotate keeps the note when no pi session is reachable"] = function()
   annotations.clear()
 end
 
+M["annotate refuses buffers that are not files in the attached root"] = function()
+  annotations.clear()
+  local dir = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()
+  vim.fn.mkdir(dir, "p")
+  dir = vim.uv.fs_realpath(dir)
+  vim.fn.writefile({ "one" }, dir .. "/a.txt")
+  local session = require("pi.session")
+  local old_root = session.root
+  session.root = dir
+  local notice = "pi: annotate your file — in a diff, the right side"
+  local function refused(buf)
+    local notes = capture_notify(function() pi.annotate(buf, 1, 1, "x") end)
+    assert(#notes == 1 and notes[1].msg == notice, vim.inspect(notes))
+    assert(#annotations.list(dir) == 0, "annotation was added")
+  end
+  local scratch = vim.api.nvim_create_buf(false, true)
+  refused(scratch)
+  vim.api.nvim_buf_set_name(scratch, "pi://1/a.txt@from")
+  refused(scratch)
+  local dv = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(dv, "diffview://x/a.txt")
+  refused(dv)
+  local outside = vim.fn.tempname()
+  vim.fn.writefile({ "o" }, outside)
+  local out = vim.fn.bufadd(outside)
+  vim.fn.bufload(out)
+  refused(out)
+  local old_env = vim.env.XDG_RUNTIME_DIR
+  vim.env.XDG_RUNTIME_DIR = dir .. "/run"
+  local buf = vim.fn.bufadd(dir .. "/a.txt")
+  vim.fn.bufload(buf)
+  local notes = capture_notify(function() pi.annotate(buf, 1, 1, "ok") end)
+  vim.env.XDG_RUNTIME_DIR = old_env
+  assert(not vim.tbl_contains(vim.tbl_map(function(n) return n.msg end, notes), notice))
+  assert(#annotations.list(dir) == 1, "real file annotation missing")
+  session.root = old_root
+  annotations.clear()
+end
+
 -- A git repo with a.txt and b.txt committed and then changed on disk; returns root and the commit.
 local function changed_repo()
   local root = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()

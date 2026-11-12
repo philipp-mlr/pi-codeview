@@ -33,6 +33,10 @@ local function open_chunk(root, sha, session_id)
   session.request = original
 end
 
+local function press(key)
+  vim.api.nvim_feedkeys(vim.keycode(key), "x", false)
+end
+
 local function buffer_map(buf, lhs)
   return vim.api.nvim_buf_call(buf, function()
     return vim.fn.maparg(lhs, "n", false, true)
@@ -43,13 +47,16 @@ M["user buffer-local file keys are restored after the diff tab closes"] = functi
   local root, sha = chunk_repo()
   local buf = vim.fn.bufadd(root .. "/a.txt")
   vim.fn.bufload(buf)
-  vim.keymap.set("n", "]f", "<Nop>", { buffer = buf, desc = "user" })
+  vim.keymap.set("n", "<Tab>", "<Nop>", { buffer = buf, desc = "user" })
+  vim.keymap.set("n", "q", "<Nop>", { buffer = buf, desc = "user q" })
   open_chunk(root, sha)
-  assert(buffer_map(buf, "]f").desc ~= "user", "pi did not map ]f")
+  assert(buffer_map(buf, "<Tab>").desc ~= "user", "pi did not map <Tab>")
+  assert(buffer_map(buf, "q").desc ~= "user q", "pi did not map q")
   vim.cmd("tabclose")
   diff.cleanup()
-  assert(buffer_map(buf, "]f").desc == "user", vim.inspect(buffer_map(buf, "]f")))
-  assert(vim.tbl_isempty(buffer_map(buf, "[f")), "[f leaked: " .. vim.inspect(buffer_map(buf, "[f")))
+  assert(buffer_map(buf, "<Tab>").desc == "user", vim.inspect(buffer_map(buf, "<Tab>")))
+  assert(buffer_map(buf, "q").desc == "user q", vim.inspect(buffer_map(buf, "q")))
+  assert(vim.tbl_isempty(buffer_map(buf, "<S-Tab>")), "<S-Tab> leaked: " .. vim.inspect(buffer_map(buf, "<S-Tab>")))
 end
 
 local function why_text(buf)
@@ -64,7 +71,7 @@ local function why_text(buf)
   return out
 end
 
-M["diff view shows the note and why above the left buffer and updates on ]f"] = function()
+M["diff view shows the note and why above the left buffer and updates on <Tab>"] = function()
   local root, sha = chunk_repo()
   vim.fn.writefile({ "two" }, root .. "/b.txt")
   session.root = root
@@ -90,11 +97,101 @@ M["diff view shows the note and why above the left buffer and updates on ]f"] = 
   assert(topfill() == 2, "explanation not visible, topfill=" .. topfill())
   local left = vim.api.nvim_win_get_buf(view_left)
   assert(vim.deep_equal(why_text(left), { "  did things", "  why: because a" }), vim.inspect(why_text(left)))
-  vim.cmd("normal ]f")
-  assert(topfill() == 1, "explanation not visible after ]f, topfill=" .. topfill())
+  press("<Tab>")
+  assert(topfill() == 1, "explanation not visible after <Tab>, topfill=" .. topfill())
   left = vim.api.nvim_win_get_buf(view_left)
   assert(vim.deep_equal(why_text(left), { "  did things" }), vim.inspect(why_text(left)))
   vim.cmd("tabclose")
+  session.cached = nil
+end
+
+local function open_two_files()
+  local root, sha = chunk_repo()
+  vim.fn.writefile({ "two" }, root .. "/b.txt")
+  session.root = root
+  session.cached = { sessionId = "keys" }
+  local original = session.request
+  session.request = function(_, _, cb)
+    cb(nil, { chunk = { n = 1, status = "open", fromSha = sha, humanFiles = {}, agentFiles = { "a.txt", "b.txt" } } })
+  end
+  diff.open(1)
+  session.request = original
+  return root
+end
+
+local function shown_path()
+  return vim.api.nvim_buf_get_name(0):match("[^/]+$")
+end
+
+M["<Tab> and <S-Tab> move between files and stop at the ends"] = function()
+  open_two_files()
+  assert(shown_path() == "a.txt")
+  press("<Tab>")
+  assert(shown_path() == "b.txt", shown_path())
+  press("<Tab>")
+  assert(shown_path() == "b.txt", "wrapped: " .. shown_path())
+  press("<S-Tab>")
+  assert(shown_path() == "a.txt", shown_path())
+  press("<S-Tab>")
+  assert(shown_path() == "a.txt", "wrapped back: " .. shown_path())
+  vim.cmd("tabclose")
+  session.cached = nil
+end
+
+M["q closes the chunk tab and returns to the origin tab"] = function()
+  vim.cmd("tabnew")
+  local origin = vim.api.nvim_get_current_tabpage()
+  local count = #vim.api.nvim_list_tabpages()
+  open_two_files()
+  assert(#vim.api.nvim_list_tabpages() == count + 1)
+  press("q")
+  assert(#vim.api.nvim_list_tabpages() == count, "chunk tab not closed")
+  assert(vim.api.nvim_get_current_tabpage() == origin, "not back on origin tab")
+  vim.cmd("tabclose")
+  session.cached = nil
+end
+
+M["q with the origin tab gone just closes the chunk tab"] = function()
+  vim.cmd("tabnew")
+  local count = #vim.api.nvim_list_tabpages()
+  open_two_files()
+  local chunk_tab = vim.api.nvim_get_current_tabpage()
+  vim.cmd("tabprevious")
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_tabpage(chunk_tab)
+  press("q")
+  assert(#vim.api.nvim_list_tabpages() == count - 1, "chunk tab not closed")
+  session.cached = nil
+end
+
+M["q on the last tab does nothing"] = function()
+  while #vim.api.nvim_list_tabpages() > 1 do
+    vim.cmd("tabclose")
+  end
+  open_two_files()
+  vim.cmd("tabprevious")
+  vim.cmd("tabclose")
+  assert(#vim.api.nvim_list_tabpages() == 1)
+  local ok, err = pcall(press, "q")
+  assert(ok, err)
+  assert(#vim.api.nvim_list_tabpages() == 1)
+  session.cached = nil
+end
+
+M["winbar shows the help line with keys or commands"] = function()
+  local keys = require("pi.keys")
+  local saved = keys.mapped
+  vim.cmd("tabnew")
+  vim.cmd("tabnew")
+  keys.mapped = { annotate = "<leader>pn", send = "<leader>pr" }
+  open_two_files()
+  assert(vim.wo.winbar:find("chunk 1 · 1/2 · a.txt · agent   <Tab> next · <leader>pn annotate · <leader>pr send · q back", 1, true), vim.wo.winbar)
+  vim.cmd("tabclose")
+  keys.mapped = {}
+  open_two_files()
+  assert(vim.wo.winbar:find("<Tab> next · :PiAnnotate annotate · :PiSendAnnotations send · q back", 1, true), vim.wo.winbar)
+  vim.cmd("tabclose")
+  keys.mapped = saved
   session.cached = nil
 end
 

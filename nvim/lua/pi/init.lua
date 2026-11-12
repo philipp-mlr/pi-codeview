@@ -5,6 +5,7 @@ local diagnostics = require("pi.diagnostics")
 local diff = require("pi.diff")
 local discover = require("pi.discover")
 local highlights = require("pi.highlights")
+local keys_state = require("pi.keys")
 local live = require("pi.live")
 local panel = require("pi.panel")
 local session = require("pi.session")
@@ -33,17 +34,14 @@ local function relpath(buf, root)
   return real and discover.relpath(root, real) or nil
 end
 
--- Keys setup actually mapped, by name; a key that is unmapped or skipped is named by its command.
-local mapped_keys = {}
-
 -- One notice when a run ends; reads the open chunk from a fresh status.
 function M.notify_run_end(data)
   local aborted = type(data) == "table" and data.aborted
   local files = type(data) == "table" and data.files or 0
   local function report(chunk)
     if chunk then
-      local look = mapped_keys.chunks or ":PiChunks"
-      local go = mapped_keys.send or ":PiSendAnnotations"
+      local look = keys_state.label("chunks", ":PiChunks")
+      local go = keys_state.label("send", ":PiSendAnnotations")
       local waiting = ("chunk %s waiting for your review"):format(chunk.n)
       if aborted then
         vim.notify(("pi: cancelled — %s"):format(waiting))
@@ -136,6 +134,12 @@ end
 -- Places the annotation right away, so the note survives even when pi is unreachable; it is saved
 -- as a draft once attached.
 function M.annotate(buf, start_line, end_line, note)
+  -- Without an attached session the root is unknown, so only the buffer itself is checked.
+  local name = vim.api.nvim_buf_get_name(buf)
+  local file_buffer = name ~= "" and not name:match("^pi://") and not name:match("^diffview://") and vim.bo[buf].buftype == ""
+  if not file_buffer or (session.root and not relpath(buf, session.root)) then
+    return vim.notify("pi: annotate your file — in a diff, the right side")
+  end
   annotations.add(buf, start_line, end_line, note)
   session.ensure(function()
     session.schedule_save()
@@ -409,7 +413,7 @@ function M.setup(opts)
   -- Default keys never replace an existing mapping (e.g. another plugin's <leader>p… key); keys passed in
   -- opts.keys always map.
   local skipped = {}
-  mapped_keys = {}
+  keys_state.mapped = {}
   local function map(modes, name, rhs, desc)
     local lhs = keys[name]
     if not lhs then
@@ -423,7 +427,7 @@ function M.setup(opts)
       end
     end
     vim.keymap.set(modes, lhs, rhs, { desc = desc })
-    mapped_keys[name] = lhs
+    keys_state.mapped[name] = lhs
   end
   map("n", "ask", "<cmd>PiAsk<CR>", "pi: ask with file context")
   map("x", "ask", ":PiAsk<CR>", "pi: ask with selection context")

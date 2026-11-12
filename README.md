@@ -186,11 +186,17 @@ Review flow:
 1. Turn checkpoint mode on and give the agent a task with `<leader>pa`.
 2. The agent stops at a checkpoint. The chunk panel (`<leader>pv`) opens with
    the new chunk; `<CR>` opens a chunk, `r` refreshes, `q` closes.
-3. The chunk opens as a diff view. Above the diff you see the checkpoint
-   note and the agent's one-line reason for the current file. `]f` and `[f`
-   move to the next and previous file. For the open chunk the right side is
-   the real file, so LSP and editing work; past chunks are read-only.
-4. Annotate lines with `<leader>pn`.
+3. The chunk opens in its own tab as a diff view: on the left the file
+   before the chunk, on the right your file. Above the diff you see the
+   checkpoint note and the agent's one-line reason for the current file.
+   `<Tab>` and `<S-Tab>` move to the next and previous file (they stop at the
+   ends), `q` closes the tab and takes you back to where you came from. Vim's
+   own diff keys work: `]c` and `[c` jump between changes, `do` and `dp`
+   take or put a change. For the open chunk the right side is the real file,
+   so LSP and editing work; past chunks are read-only. A help line in the
+   window bar lists the keys.
+4. Annotate lines with `<leader>pn` on the right side, your file. The left
+   side is only a copy of the old state and cannot be annotated.
 5. `<leader>pr` sends the review: your annotations, your own edits and an
    optional note. The chunk closes and the agent continues. There is no
    accept button. Prompts sent meanwhile are queued behind the review.

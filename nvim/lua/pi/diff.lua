@@ -1,5 +1,6 @@
 -- Chunk diff view: one tabpage per chunk, one file at a time, `fromSha` against the live file
 -- (open chunk) or against `toSha` (past chunks).
+local keys = require("pi.keys")
 local session = require("pi.session")
 
 local M = {}
@@ -83,13 +84,31 @@ local function step(delta)
   if not view then
     return
   end
-  local index = (view.index - 1 + delta) % #view.files + 1
+  local index = view.index + delta
+  if index < 1 or index > #view.files then
+    return
+  end
   M.show(view, index)
 end
 
-local mapped = {} -- buf -> { ["]f"] = user map dict or false, ["[f"] = ... } while it carries the pi file keys
+-- Closes the chunk tab and returns to the tab it was opened from; the last tab is never closed.
+local function back()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local view = current_view()
+  if view and #vim.api.nvim_list_tabpages() > 1 then
+    views[tab] = nil
+    local origin = view.origin
+    pcall(vim.cmd, "tabclose " .. vim.api.nvim_tabpage_get_number(tab))
+    if origin and vim.api.nvim_tabpage_is_valid(origin) then
+      vim.api.nvim_set_current_tabpage(origin)
+    end
+  end
+  M.cleanup()
+end
 
--- Removes the file keys from every buffer no live diff window shows any more, so they do not
+local mapped = {} -- buf -> { ["<Tab>"] = user map dict or false, ... } while it carries the pi view keys
+
+-- Removes the view keys from every buffer no live diff window shows any more, so they do not
 -- linger on the user's real file buffers.
 function M.cleanup()
   local shown = {}
@@ -121,7 +140,7 @@ end
 
 local function map_file_keys(buf)
   mapped[buf] = mapped[buf] or {}
-  for _, lhs in ipairs({ "]f", "[f" }) do
+  for _, lhs in ipairs({ "<Tab>", "<S-Tab>", "q" }) do
     if mapped[buf][lhs] == nil then
       local existing = vim.api.nvim_buf_call(buf, function()
         return vim.fn.maparg(lhs, "n", false, true)
@@ -130,12 +149,13 @@ local function map_file_keys(buf)
       mapped[buf][lhs] = user_owned and existing or false
     end
   end
-  vim.keymap.set("n", "]f", function()
+  vim.keymap.set("n", "<Tab>", function()
     step(1)
   end, { buffer = buf, desc = "pi: next file in chunk" })
-  vim.keymap.set("n", "[f", function()
+  vim.keymap.set("n", "<S-Tab>", function()
     step(-1)
   end, { buffer = buf, desc = "pi: previous file in chunk" })
+  vim.keymap.set("n", "q", back, { buffer = buf, desc = "pi: back from chunk view" })
 end
 
 function M.show(view, index)
@@ -181,7 +201,10 @@ function M.show(view, index)
     vim.api.nvim_buf_set_extmark(left, ns, 0, 0, { virt_lines = virt, virt_lines_above = true })
   end
 
-  local winbar = ("chunk %d · %d/%d · %s · %s"):format(chunk.n, index, #view.files, file.path, file.label)
+  local winbar = ("chunk %d · %d/%d · %s · %s   <Tab> next · %s annotate · %s send · q back"):format(
+    chunk.n, index, #view.files, file.path, file.label,
+    keys.label("annotate", ":PiAnnotate"), keys.label("send", ":PiSendAnnotations")
+  )
   for _, win in ipairs({ view.left, view.right }) do
     vim.wo[win].winbar = winbar:gsub("%%", "%%%%")
     map_file_keys(vim.api.nvim_win_get_buf(win))
@@ -217,12 +240,13 @@ function M.open(n)
     if #files == 0 then
       return vim.notify(("pi: chunk %d changes no files"):format(n), vim.log.levels.WARN)
     end
+    local origin = vim.api.nvim_get_current_tabpage()
     vim.cmd("tabnew")
     vim.bo.bufhidden = "wipe"
     local left = vim.api.nvim_get_current_win()
     vim.cmd("rightbelow vsplit")
     local right = vim.api.nvim_get_current_win()
-    local view = { key = chunk_key(n), n = n, chunk = chunk, root = session.root, files = files, index = 1, left = left, right = right }
+    local view = { key = chunk_key(n), n = n, chunk = chunk, root = session.root, files = files, index = 1, origin = origin, left = left, right = right }
     views[vim.api.nvim_get_current_tabpage()] = view
     M.show(view, 1)
     vim.api.nvim_set_current_win(right)

@@ -152,9 +152,9 @@ vim.notify("PANEL " .. tostring(panel_line))
 cv.open_chunk(1)
 vim.wait(5000, function() return #vim.api.nvim_list_tabpages() == 2 end)
 vim.notify("WINBAR " .. vim.wo.winbar)
-vim.cmd("normal ]f")
+vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
 vim.notify("WINBAR " .. vim.wo.winbar)
-vim.cmd("normal [f")
+vim.api.nvim_feedkeys(vim.keycode("<S-Tab>"), "x", false)
 local buf = vim.fn.bufnr(vim.uv.fs_realpath("a.txt"))
 cv.annotate(buf, 1, 1, "why one?")
 cv.send({ note = "" })
@@ -171,8 +171,8 @@ cv.send({ note = "" })
     expect(notes.filter((n) => n.level === ERROR)).toEqual([]);
     expect(notes.map((n) => n.msg)).toContain("PANEL #1 [open] add a — a.txt, b.txt (0 comments)");
     expect(notes.map((n) => n.msg).filter((m) => m.startsWith("WINBAR"))).toEqual([
-      "WINBAR chunk 1 · 1/2 · a.txt · agent",
-      "WINBAR chunk 1 · 2/2 · b.txt · agent",
+      "WINBAR chunk 1 · 1/2 · a.txt · agent   <Tab> next · <leader>pn annotate · <leader>pr send · q back",
+      "WINBAR chunk 1 · 2/2 · b.txt · agent   <Tab> next · <leader>pn annotate · <leader>pr send · q back",
     ]);
   }, TIMEOUT_MS);
 
@@ -363,7 +363,7 @@ end)
     expect(drafts.msg).toContain("draft survives quit");
   }, TIMEOUT_MS);
 
-  it("]f and [f are not left mapped on the real buffer after the diff tab closes", async () => {
+  it("<Tab>, <S-Tab> and q are not left mapped on the real buffer after the diff tab closes", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\n");
@@ -379,10 +379,10 @@ vim.cmd("edit a.txt")
 local buf = vim.api.nvim_get_current_buf()
 cv.toggle_panel()
 cv.open_chunk(1)
-vim.wait(5000, function() return vim.fn.maparg("]f", "n", false, true).desc ~= nil end)
-vim.notify("OPEN " .. tostring(vim.fn.maparg("]f", "n", false, true).desc))
+vim.wait(5000, function() return vim.fn.maparg("<Tab>", "n", false, true).desc ~= nil end)
+vim.notify("OPEN " .. tostring(vim.fn.maparg("<Tab>", "n", false, true).desc))
 vim.cmd("tabclose")
-vim.notify("CLOSED " .. vim.inspect(vim.api.nvim_buf_call(buf, function() return vim.fn.maparg("]f", "n", false, true) end)))
+vim.notify("CLOSED " .. vim.inspect(vim.api.nvim_buf_call(buf, function() return vim.fn.maparg("<Tab>", "n", false, true) end)))
 `,
     );
     const notes = await until(() => nvim.notifications().some((n) => n.msg.startsWith("CLOSED") || n.msg.startsWith("SCRIPT")) && nvim.notifications(), "mapping check");
