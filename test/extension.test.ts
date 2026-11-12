@@ -613,7 +613,7 @@ describe("pi-nvim extension", () => {
     await agentWrite(fake, repo, "a.txt", "a\n");
     fs.rmSync(path.join(repo.root, "a.txt"));
     await fake.fire("tool_result", { toolName: "bash", input: {}, content: [], isError: false });
-    await fake.fire("agent_settled", { aborted: false });
+    await fake.fire("agent_before_settle", { entries: [], continue: false });
     expect((await client.request("list_chunks")).result).toEqual([]);
     expect((await client.request("status")).result.openChunk).toBeNull();
   });
