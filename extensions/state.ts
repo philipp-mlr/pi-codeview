@@ -4,6 +4,7 @@ import type { Mode } from "./git.ts";
 export type { Mode } from "./git.ts";
 
 const WHY_MAX_CHARS = 200;
+const TITLE_MAX_CHARS = 60;
 
 export type Author = "agent" | "human";
 /**
@@ -25,6 +26,8 @@ export type ChunkStatus = "open" | "reviewed" | "discarded" | "recorded";
 export type Chunk = {
   n: number;
   note: string;
+  /** Short title the agent gave the step, at most 60 characters; absent when it gave none. */
+  title?: string;
   status: ChunkStatus;
   fromSha: string;
   toSha: string;
@@ -125,6 +128,7 @@ export class PiNvimState {
     toSha: string,
     status: "open" | "recorded" = "open",
     files: Array<{ path: string; why: string }> = [],
+    title?: string,
   ): Chunk {
     if (status === "open" && this.openChunk()) throw new Error("chunk already open");
     const chunk: Chunk = {
@@ -138,6 +142,8 @@ export class PiNvimState {
       humanSteps: this.humanSteps(),
       annotations: [],
     };
+    const cleanTitle = [...(title ?? "").replace(/\s+/g, " ").trim()].slice(0, TITLE_MAX_CHARS).join("").trim();
+    if (cleanTitle) chunk.title = cleanTitle;
     const known = new Set([...chunk.agentFiles, ...chunk.humanFiles]);
     const why: Record<string, string> = {};
     for (const f of files) {

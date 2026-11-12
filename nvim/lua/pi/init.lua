@@ -392,6 +392,15 @@ end
 function M.setup(opts)
   opts = opts or {}
   local keys = vim.tbl_extend("force", M.default_keys, opts.keys or {})
+  for _, legacy in ipairs({ "send", "cancel", "chunks" }) do
+    if (opts.keys or {})[legacy] ~= nil then
+      vim.notify(
+        "pi: setup keys renamed — send/cancel → continue/stop, chunks → checkpoints, checkpoints (mode) → mode",
+        vim.log.levels.INFO
+      )
+      break
+    end
+  end
   session.on_event(on_event)
   diff.mode = opts.diff or "auto"
 

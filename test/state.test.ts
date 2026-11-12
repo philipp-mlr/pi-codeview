@@ -24,6 +24,18 @@ describe("PiNvimState", () => {
     ]);
     expect(c.why).toEqual({ "a.ts": "x".repeat(200) });
   });
+  it("createChunk stores the title with whitespace collapsed, capped at 60 code points, omitted when empty", () => {
+    const s = new PiNvimState();
+    s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts"], lines: 1 });
+    const c = s.createChunk("n", "t", "open", [], "  add\n  parser  ");
+    expect(c.title).toBe("add parser");
+    s.recordStep({ from: "f2", sha: "2", author: "agent", files: ["a.ts"], lines: 1 });
+    s.chunks[0].status = "reviewed";
+    expect(s.createChunk("n", "t2", "open", [], "😀".repeat(70)).title).toBe("😀".repeat(60));
+    s.recordStep({ from: "f3", sha: "3", author: "agent", files: ["a.ts"], lines: 1 });
+    s.chunks[1].status = "reviewed";
+    expect(s.createChunk("n", "t3", "open", [], "  \n ")).not.toHaveProperty("title");
+  });
   it("createChunk collapses whitespace in why and drops blank ones", () => {
     const s = new PiNvimState();
     s.recordStep({ from: "f1", sha: "1", author: "agent", files: ["a.ts", "b.ts"], lines: 1 });

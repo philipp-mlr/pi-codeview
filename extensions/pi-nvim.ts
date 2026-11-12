@@ -23,6 +23,7 @@ export default function piNvim(pi: ExtensionAPI): void {
     promptGuidelines: CHECKPOINT_GUIDELINES,
     parameters: Type.Object({
       note: Type.String({ description: "What was done in this step and why" }),
+      title: Type.Optional(Type.String({ description: "Short title for this step, at most 60 characters" })),
       files: Type.Optional(
         Type.Array(Type.Object({ path: Type.String(), why: Type.String() }), {
           description: "One entry per changed file: repo-relative path and one short line on why it changed.",
@@ -34,7 +35,7 @@ export default function piNvim(pi: ExtensionAPI): void {
     executionMode: "sequential",
     async execute(_id, params, signal) {
       if (!loop) throw new Error(NOT_A_REPO);
-      const text = await loop.checkpoint(params.note, signal, params.files);
+      const text = await loop.checkpoint(params.note, signal, params.files, params.title);
       return { content: [{ type: "text", text }], details: undefined };
     },
   });
@@ -74,7 +75,11 @@ export default function piNvim(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_call", (event) => {
-    loop?.toolCall(event.toolName, event.input);
+    try {
+      loop?.toolCall(event.toolName, event.input);
+    } catch {
+      // The outside-worktree warning must never reject the agent's tool call.
+    }
     const reason = loop?.capBlock(event.toolName);
     return reason ? { block: true, reason } : undefined;
   });

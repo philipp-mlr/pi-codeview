@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ReviewLoop } from "../extensions/loop.ts";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -153,6 +154,38 @@ describe("pi-nvim extension", () => {
     expect((await client.request("status")).result.openChunk.why).toEqual({ "a.txt": "new file" });
     expect((await client.request("list_chunks")).result[0].why).toEqual({ "a.txt": "new file" });
     expect((await client.request("get_chunk", { n: 1 })).result.chunk.why).toEqual({ "a.txt": "new file" });
+  });
+
+  it("checkpoint stores the title and get_chunk reports per-file line counts", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    await agentWrite(fake, repo, "a.txt", "a\nb\nc\n");
+    await agentWrite(fake, repo, "bin.dat", "x\0y\0");
+    void fake.callTool("checkpoint", { note: "add a", title: "  Add   a  " });
+    await until(() => client.events.find((e) => e.event === "chunk_ready"));
+    const got = (await client.request("get_chunk", { n: 1 })).result;
+    expect(got.chunk.title).toBe("Add a");
+    expect(got.stats).toEqual(
+      expect.arrayContaining([
+        { path: "a.txt", added: 3, removed: 0 },
+        { path: "bin.dat", added: 0, removed: 0 },
+      ]),
+    );
+    expect(got.stats).toHaveLength(2);
+  });
+
+  it("an exception in toolCall never rejects the agent's tool call", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const spy = vi.spyOn(ReviewLoop.prototype, "toolCall").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    try {
+      await expect(fake.fire("tool_call", { toolName: "write", input: { path: "a.txt" } })).resolves.not.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("checkpoint blocks until send, returns the rendered review", async () => {

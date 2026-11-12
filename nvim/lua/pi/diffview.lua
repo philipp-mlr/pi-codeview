@@ -62,6 +62,9 @@ function M.open(spec, on)
   ensure_autocmds()
   local args = { spec.range }
   args[#args + 1] = vim.fn.fnameescape("-C" .. spec.root)
+  if spec.selected then
+    args[#args + 1] = vim.fn.fnameescape("--selected-file=" .. spec.root .. "/" .. spec.selected)
+  end
   args[#args + 1] = "--"
   for _, path in ipairs(spec.files) do
     args[#args + 1] = vim.fn.fnameescape(path)

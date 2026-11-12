@@ -142,11 +142,11 @@ cv.toggle_panel()
 local panel_line
 vim.wait(5000, function()
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.bo[buf].filetype == "pi-chunks" then
-      panel_line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
+    if vim.bo[buf].filetype == "pi-checkpoints" then
+      panel_line = vim.api.nvim_buf_get_lines(buf, 1, 2, false)[1]
     end
   end
-  return panel_line ~= nil and panel_line:match("^#1") ~= nil
+  return panel_line ~= nil and panel_line:match("^● 1") ~= nil
 end)
 vim.notify("PANEL " .. tostring(panel_line))
 cv.open_chunk(1)
@@ -169,7 +169,7 @@ cv.continue()
       "continue notification",
     );
     expect(notes.filter((n) => n.level === ERROR)).toEqual([]);
-    expect(notes.map((n) => n.msg)).toContain("PANEL #1 [open] add a — a.txt, b.txt (0 comments)");
+    expect(notes.map((n) => n.msg)).toContain("PANEL ● 1  waiting   add a   2 files");
     expect(notes.map((n) => n.msg).filter((m) => m.startsWith("WINBAR"))).toEqual([
       "WINBAR checkpoint 1 · 1/2 · a.txt · agent   <Tab> next · <leader>pn annotate · <leader>pc continue · q back",
       "WINBAR checkpoint 1 · 2/2 · b.txt · agent   <Tab> next · <leader>pn annotate · <leader>pc continue · q back",

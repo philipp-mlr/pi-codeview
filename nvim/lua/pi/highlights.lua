@@ -6,6 +6,7 @@ local LINKS = {
   PiBadge = "PmenuSel",
   PiAnnotation = "DiagnosticInfo",
   PiAnnotationSign = "DiagnosticSignInfo",
+  PiCheckpointWaiting = "DiagnosticWarn",
   PiLive = "CursorLine",
   PiLiveSignAdd = "DiagnosticHint",
   PiLiveSignChange = "DiagnosticInfo",

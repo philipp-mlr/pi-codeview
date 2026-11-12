@@ -202,6 +202,10 @@ describe("CHECKPOINT_GUIDELINES", () => {
     expect(CHECKPOINT_GUIDELINES.join("\n")).toMatch(/files[^\n]*one short line per changed file/);
   });
 
+  it("CHECKPOINT_GUIDELINES asks for a short title", () => {
+    expect(CHECKPOINT_GUIDELINES.join("\n")).toMatch(/short title/);
+  });
+
   it("CHECKPOINT_GUIDELINES says the note states what was done and why", () => {
     expect(CHECKPOINT_GUIDELINES.join("\n")).toMatch(/note[^\n]*what was done[^\n]*why/);
   });

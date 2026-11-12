@@ -1,4 +1,4 @@
--- Small floating badge in the top-right corner while the agent works or a chunk waits for review.
+-- Small floating badge in the top-right corner while the agent works or a checkpoint waits for review.
 -- Never focusable and never entered; one timer animates the spinner and runs only while it shows.
 local keys = require("pi.keys")
 

@@ -678,4 +678,15 @@ M["outside_worktree event shows the warning text via WARN"] = function()
   assert(notes[1].msg == "pi: the agent is editing files outside /work/a — checkpoint mode can't show them; start pi in that worktree", notes[1].msg)
 end
 
+M["setup notices legacy key names once"] = function()
+  reset_maps()
+  local notes = capture_notify(function() pi.setup({ keys = { send = "<leader>pr", cancel = "<leader>px", chunks = "<leader>pl" } }) end)
+  local renamed = vim.tbl_filter(function(n) return n.msg:find("setup keys renamed", 1, true) end, notes)
+  assert(#renamed == 1 and renamed[1].level == vim.log.levels.INFO, vim.inspect(notes))
+  assert(renamed[1].msg == "pi: setup keys renamed — send/cancel → continue/stop, chunks → checkpoints, checkpoints (mode) → mode", renamed[1].msg)
+  notes = capture_notify(function() pi.setup() end)
+  assert(#vim.tbl_filter(function(n) return n.msg:find("renamed", 1, true) end, notes) == 0)
+  reset_maps()
+end
+
 return M

@@ -3,7 +3,7 @@ import * as net from "node:net";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ActivityLog, toolLine } from "./activity.ts";
-import { diffText, numstat, parseMode, pruneRefs, readConfig, repoHash, showFile, snapshot, writeMode } from "./git.ts";
+import { diffText, fileStats, numstat, parseMode, pruneRefs, readConfig, repoHash, showFile, snapshot, writeMode } from "./git.ts";
 import type { Mode } from "./git.ts";
 import { LineDecoder, PROTOCOL_VERSION, encode } from "./protocol.ts";
 import type { EventName, PromptContext, Request } from "./protocol.ts";
@@ -160,13 +160,18 @@ export class ReviewLoop {
 
   // --- agent side ---------------------------------------------------------
 
-  async checkpoint(note: string, signal?: AbortSignal, files?: Array<{ path: string; why: string }>): Promise<string> {
+  async checkpoint(
+    note: string,
+    signal?: AbortSignal,
+    files?: Array<{ path: string; why: string }>,
+    title?: string,
+  ): Promise<string> {
     const chunk = await this.serial(async () => {
       const open = this.state.openChunk();
       if (open) return open;
       const { sha, files: changed } = await this.recordSince("agent");
       if (changed.length === 0 && this.state.steps.length === 0) return null;
-      const created = this.state.createChunk(note, sha, "open", files);
+      const created = this.state.createChunk(note, sha, "open", files, title);
       this.persist();
       this.broadcast("chunk_ready", { chunk: created });
       return created;
@@ -432,7 +437,13 @@ export class ReviewLoop {
       case "get_chunk": {
         const chunk = this.state.chunks.find((c) => c.n === req.n);
         if (!chunk) throw new Error(`no checkpoint ${req.n}`);
-        return { chunk, diff: await diffText(this.root, chunk.fromSha, chunk.toSha) };
+        const [diff, counts] = await Promise.all([
+          diffText(this.root, chunk.fromSha, chunk.toSha),
+          fileStats(this.root, chunk.fromSha, chunk.toSha),
+        ]);
+        const files = [...new Set([...chunk.agentFiles, ...chunk.humanFiles])];
+        const stats = files.map((path) => ({ path, added: counts.get(path)?.added ?? 0, removed: counts.get(path)?.removed ?? 0 }));
+        return { chunk, diff, stats };
       }
       case "prompt":
         return this.prompt(req.text, req.context);

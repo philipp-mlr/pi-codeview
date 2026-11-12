@@ -56,7 +56,8 @@ The extension renders them under the context or the annotation's note as a `Diag
   `baseline` again after a restart).
 - `cancel`: `{"cancelled":true}` after aborting the agent's run (pi's abort, as Escape), `{"cancelled":false}` when pi is idle. A waiting `checkpoint` call returns "Review pending", the chunk stays open.
 - `prompt`: `{"queued":true}` when a chunk is open and the prompt waits for its review, else `{"queued":false}` (sent to the agent).
-- `list_chunks`: array of chunks. `get_chunk`: `{"chunk":<chunk>,"diff":"<unified diff fromSha..toSha>"}`.
+- `list_chunks`: array of chunks. `get_chunk`: `{"chunk":<chunk>,"diff":"<unified diff fromSha..toSha>","stats":[{"path":"a.ts","added":3,"removed":1}]}` (`stats` has one entry per file of the chunk; binary files are 0/0).
+- A chunk may carry `title` (the agent's short title, at most 60 characters, whitespace collapsed); clients show the first sentence of `note` when it is absent.
 - A chunk may carry `why`: `{"<repo-relative path>":"<one short line, max 200 chars>"}`, set from the `files` argument of the agent's `checkpoint` call. Only paths changed in the chunk are kept; the field is absent when empty. Clients must tolerate its absence.
 - `send`: `{"chunk":<closed chunk>}` for a review, `{"chunk":null}` when sent as a prompt (no open chunk).
 - `save_drafts`: `{"saved":<count>}`. `human_write`: `{"files":[<paths changed since the last snapshot>]}`. `set_mode`: `{"mode":"checkpoints"}`.

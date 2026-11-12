@@ -1,4 +1,4 @@
--- Chunk diff view: one tabpage per chunk, one file at a time, `fromSha` against the live file
+-- Checkpoint diff view: one tabpage per checkpoint, one file at a time, `fromSha` against the live file
 -- (open chunk) or against `toSha` (past chunks).
 local keys = require("pi.keys")
 local session = require("pi.session")
@@ -374,7 +374,7 @@ local diffview_handlers = {
 }
 
 -- Opens the chunk in diffview and registers its tab; false (nothing left open) on any failure.
-local function open_in_diffview(n, chunk, files)
+local function open_in_diffview(n, chunk, files, selected)
   local paths = vim.tbl_map(function(file)
     return file.path
   end, files)
@@ -382,7 +382,7 @@ local function open_in_diffview(n, chunk, files)
   local root = session.root
   local key = chunk_key(n)
   pending = { key = key, chunk = chunk, files = files, origin = vim.api.nvim_get_current_tabpage() }
-  local ok, tab = pcall(diffview.open, { range = range, root = root, files = paths }, diffview_handlers)
+  local ok, tab = pcall(diffview.open, { range = range, root = root, files = paths, selected = selected }, diffview_handlers)
   pending = nil
   if not ok then
     error(tab, 0)
@@ -398,12 +398,25 @@ local function open_in_diffview(n, chunk, files)
   return true
 end
 
--- Opens chunk n in its own tabpage (or switches to the existing one).
-function M.open(n)
+local function index_of(files, path)
+  for i, file in ipairs(files) do
+    if file.path == path then
+      return i
+    end
+  end
+  return 1
+end
+
+-- Opens chunk n in its own tabpage (or switches to the existing one). With `path`, the view starts
+-- at that file; an already open built-in view moves to it, an open diffview is only switched to.
+function M.open(n, path)
   current_view()
   for tab, view in pairs(views) do
     if view.key == chunk_key(n) then
       vim.api.nvim_set_current_tabpage(tab)
+      if path and view.kind ~= "diffview" and view.index then
+        M.show(view, index_of(view.files, path))
+      end
       return
     end
   end
@@ -417,7 +430,7 @@ function M.open(n)
       return vim.notify(("pi: checkpoint %d changes no files"):format(n), vim.log.levels.WARN)
     end
     local origin = vim.api.nvim_get_current_tabpage()
-    if use_diffview() and open_in_diffview(n, chunk, files) then
+    if use_diffview() and open_in_diffview(n, chunk, files, path) then
       return
     end
     vim.cmd("tabnew")
@@ -425,9 +438,9 @@ function M.open(n)
     local left = vim.api.nvim_get_current_win()
     vim.cmd("rightbelow vsplit")
     local right = vim.api.nvim_get_current_win()
-    local view = { key = chunk_key(n), n = n, chunk = chunk, root = session.root, files = files, index = 1, origin = origin, left = left, right = right }
+    local view = { key = chunk_key(n), n = n, chunk = chunk, root = session.root, files = files, index = index_of(files, path), origin = origin, left = left, right = right }
     views[vim.api.nvim_get_current_tabpage()] = view
-    M.show(view, 1)
+    M.show(view, view.index)
     vim.api.nvim_set_current_win(right)
   end)
 end

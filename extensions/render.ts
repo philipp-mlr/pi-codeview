@@ -4,6 +4,7 @@ import type { Annotation, Chunk, Diagnostic } from "./state.ts";
 export const CHECKPOINT_GUIDELINES: string[] = [
   "Call checkpoint after each logical step, before starting the next one.",
   "The checkpoint note states what was done and why; pass checkpoint files with one short line per changed file.",
+  "Give each checkpoint a short title (at most 60 characters) naming the step, for the checkpoint list.",
 ];
 
 /** A backtick fence longer than any backtick run in `text`, at least three. */

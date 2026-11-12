@@ -189,8 +189,17 @@ Review flow:
 
 1. Turn checkpoint mode on and give the agent a task with `<leader>pa`.
 2. The agent stops at a checkpoint. The checkpoint list (`<leader>pv`) opens
-   with the new checkpoint; `<CR>` opens a checkpoint, `r` refreshes, `q`
-   closes.
+   with the new checkpoint. It is 60 columns wide with one line per
+   checkpoint: `● 4  waiting   <title>   3 files`. The waiting checkpoint is
+   first and highlighted (`PiCheckpointWaiting`), the others follow newest
+   first (`✓` reviewed, `✗` discarded). The title is the one the agent gave
+   the step, or the first sentence of its note. `za` on a line shows the
+   details below it: the full note, each file with its added and removed
+   lines, and your annotations; `za` again hides them. `<CR>` on a checkpoint
+   opens it, on a file line it opens the checkpoint at that file (the built-in
+   view starts there; diffview starts at that file via `--selected-file`).
+   `a` shows or hides the per-turn records vibe mode keeps (hidden by
+   default), `r` refreshes, `q` closes.
 3. The checkpoint opens in its own tab as a diff view: on the left the file
    before the checkpoint, on the right your file. Above the diff you see the
    checkpoint note and the agent's one-line reason for the current file.

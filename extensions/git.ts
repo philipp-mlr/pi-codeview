@@ -93,6 +93,23 @@ export async function numstat(
   return result;
 }
 
+/** Added and removed lines per path between two snapshots; binary files count 0/0. */
+export async function fileStats(
+  root: string,
+  from: string,
+  to: string,
+): Promise<Map<string, { added: number; removed: number }>> {
+  const out = await git(root, ["diff", "--numstat", "-z", "--no-renames", from, to]);
+  const result = new Map<string, { added: number; removed: number }>();
+  for (const entry of out.split("\0")) {
+    if (!entry) continue;
+    const [added, removed, ...rest] = entry.split("\t");
+    const binary = added === "-" || removed === "-";
+    result.set(rest.join("\t"), { added: binary ? 0 : Number(added), removed: binary ? 0 : Number(removed) });
+  }
+  return result;
+}
+
 export async function diffText(
   root: string,
   from: string,
