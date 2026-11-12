@@ -190,8 +190,8 @@ M["q with unsaved edits keeps the chunk tab, its keys and says so; works after :
   vim.notify = original
   assert(#vim.api.nvim_list_tabpages() == count + 1, "chunk tab was closed")
   assert(#notes == 1 and notes[1].msg == "pi: save your changes first (:w), then q" and notes[1].level == vim.log.levels.WARN, vim.inspect(notes))
-  assert(buffer_map(buf, "q").desc == "pi: back from chunk view", "q unmapped")
-  assert(buffer_map(buf, "<Tab>").desc == "pi: next file in chunk", "<Tab> unmapped")
+  assert(buffer_map(buf, "q").desc == "pi: back from checkpoint view", "q unmapped")
+  assert(buffer_map(buf, "<Tab>").desc == "pi: next file in checkpoint", "<Tab> unmapped")
   vim.cmd("write")
   press("q")
   vim.o.hidden = saved_hidden
@@ -298,13 +298,13 @@ M["winbar shows the help line with keys or commands"] = function()
   local saved = keys.mapped
   vim.cmd("tabnew")
   vim.cmd("tabnew")
-  keys.mapped = { annotate = "<leader>pn", send = "<leader>pr" }
+  keys.mapped = { annotate = "<leader>pn", continue = "<leader>pc" }
   open_two_files("winbar")
-  assert(vim.wo.winbar:find("chunk 1 · 1/2 · a.txt · agent   <Tab> next · <leader>pn annotate · <leader>pr send · q back", 1, true), vim.wo.winbar)
+  assert(vim.wo.winbar:find("checkpoint 1 · 1/2 · a.txt · agent   <Tab> next · <leader>pn annotate · <leader>pc continue · q back", 1, true), vim.wo.winbar)
   vim.cmd("tabclose")
   keys.mapped = {}
   open_two_files("winbar2")
-  assert(vim.wo.winbar:find("<Tab> next · :PiAnnotate annotate · :PiSendAnnotations send · q back", 1, true), vim.wo.winbar)
+  assert(vim.wo.winbar:find("<Tab> next · :PiAnnotate annotate · :PiContinue continue · q back", 1, true), vim.wo.winbar)
   vim.cmd("tabclose")
   keys.mapped = saved
   session.cached = nil
@@ -503,7 +503,7 @@ M["auto with diffview opens an open chunk with the exact DiffviewOpen args"] = w
   local expected = ("%s -C%s -- a.txt b\\ c.txt"):format(sha, vim.fn.fnameescape(root))
   assert(fake.calls[1] == expected, vim.inspect(fake.calls))
   assert(diff.viewed(1), "diffview chunk not viewed")
-  assert(seen[1].msg == "pi: chunk 1 — <Tab> next file · :PiAnnotate annotate · :PiSendAnnotations send · :DiffviewClose to go back", seen[1].msg)
+  assert(seen[1].msg == "pi: checkpoint 1 — <Tab> next file · :PiAnnotate annotate · :PiContinue continue · :DiffviewClose to go back", seen[1].msg)
 end)
 
 M["auto with diffview opens a past chunk as a revision range"] = with_fake(function()

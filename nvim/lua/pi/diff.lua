@@ -200,13 +200,13 @@ local function map_file_keys(buf)
   end
   vim.keymap.set("n", "<Tab>", function()
     step(buf, "<Tab>", 1)
-  end, { buffer = buf, desc = "pi: next file in chunk" })
+  end, { buffer = buf, desc = "pi: next file in checkpoint" })
   vim.keymap.set("n", "<S-Tab>", function()
     step(buf, "<S-Tab>", -1)
-  end, { buffer = buf, desc = "pi: previous file in chunk" })
+  end, { buffer = buf, desc = "pi: previous file in checkpoint" })
   vim.keymap.set("n", "q", function()
     back(buf)
-  end, { buffer = buf, desc = "pi: back from chunk view" })
+  end, { buffer = buf, desc = "pi: back from checkpoint view" })
 end
 
 -- Puts the chunk note and the file's why as virt_lines above line 1 of `buf`; returns them.
@@ -259,9 +259,9 @@ function M.show(view, index)
 
   local virt = M.place_why(left, chunk, file.path)
 
-  local winbar = ("chunk %d · %d/%d · %s · %s   <Tab> next · %s annotate · %s send · q back"):format(
+  local winbar = ("checkpoint %d · %d/%d · %s · %s   <Tab> next · %s annotate · %s continue · q back"):format(
     chunk.n, index, #view.files, file.path, file.label,
-    keys.label("annotate", ":PiAnnotate"), keys.label("send", ":PiSendAnnotations")
+    keys.label("annotate", ":PiAnnotate"), keys.label("continue", ":PiContinue")
   )
   for _, win in ipairs({ view.left, view.right }) do
     vim.wo[win].winbar = winbar:gsub("%%", "%%%%")
@@ -392,8 +392,8 @@ local function open_in_diffview(n, chunk, files)
   end
   views[tab] = { key = key, n = n, chunk = chunk, root = root, files = files, kind = "diffview" }
   viewed[key] = true
-  vim.notify(("pi: chunk %d — <Tab> next file · %s annotate · %s send · :DiffviewClose to go back"):format(
-    n, keys.label("annotate", ":PiAnnotate"), keys.label("send", ":PiSendAnnotations")
+  vim.notify(("pi: checkpoint %d — <Tab> next file · %s annotate · %s continue · :DiffviewClose to go back"):format(
+    n, keys.label("annotate", ":PiAnnotate"), keys.label("continue", ":PiContinue")
   ))
   return true
 end
@@ -414,7 +414,7 @@ function M.open(n)
     local chunk = result.chunk
     local files = files_of(chunk)
     if #files == 0 then
-      return vim.notify(("pi: chunk %d changes no files"):format(n), vim.log.levels.WARN)
+      return vim.notify(("pi: checkpoint %d changes no files"):format(n), vim.log.levels.WARN)
     end
     local origin = vim.api.nvim_get_current_tabpage()
     if use_diffview() and open_in_diffview(n, chunk, files) then

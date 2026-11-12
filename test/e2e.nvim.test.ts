@@ -124,7 +124,7 @@ function text(result: any): string {
 const ERROR = 4;
 
 describe("pi.nvim end to end", () => {
-  it("panel, chunk diff, annotation and PiSendAnnotations resolve the waiting checkpoint", async () => {
+  it("panel, checkpoint diff, annotation and PiContinue resolve the waiting checkpoint", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\ntwo\n");
@@ -157,7 +157,7 @@ vim.notify("WINBAR " .. vim.wo.winbar)
 vim.api.nvim_feedkeys(vim.keycode("<S-Tab>"), "x", false)
 local buf = vim.fn.bufnr(vim.uv.fs_realpath("a.txt"))
 cv.annotate(buf, 1, 1, "why one?")
-cv.send({ note = "" })
+cv.continue()
 `,
     );
 
@@ -165,14 +165,14 @@ cv.send({ note = "" })
     expect(out).toContain("why one?");
     expect(out).toContain("a.txt:1-1\n```\none\n```");
     const notes = await until(
-      () => nvim.notifications().some((n) => n.msg.includes("review of chunk 1 sent")) && nvim.notifications(),
-      "send notification",
+      () => nvim.notifications().some((n) => n.msg === "pi: continuing — checkpoint 1 reviewed with 1 annotation") && nvim.notifications(),
+      "continue notification",
     );
     expect(notes.filter((n) => n.level === ERROR)).toEqual([]);
     expect(notes.map((n) => n.msg)).toContain("PANEL #1 [open] add a — a.txt, b.txt (0 comments)");
     expect(notes.map((n) => n.msg).filter((m) => m.startsWith("WINBAR"))).toEqual([
-      "WINBAR chunk 1 · 1/2 · a.txt · agent   <Tab> next · <leader>pn annotate · <leader>pr send · q back",
-      "WINBAR chunk 1 · 2/2 · b.txt · agent   <Tab> next · <leader>pn annotate · <leader>pr send · q back",
+      "WINBAR checkpoint 1 · 1/2 · a.txt · agent   <Tab> next · <leader>pn annotate · <leader>pc continue · q back",
+      "WINBAR checkpoint 1 · 2/2 · b.txt · agent   <Tab> next · <leader>pn annotate · <leader>pc continue · q back",
     ]);
   }, TIMEOUT_MS);
 
@@ -206,30 +206,7 @@ vim.cmd("write")
     expect(nvim.notifications().map((n) => n.msg)).toContain("STATUS idle");
   }, TIMEOUT_MS);
 
-  it("an empty review asks to continue without remarks; yes sends it", async () => {
-    const repo = await makeRepo();
-    const fake = await start(repo);
-    await agentWrite(fake, repo, "a.txt", "one\n");
-    const pending = fake.callTool("checkpoint", { note: "add a" });
-    await chunkOpen(fake);
-
-    const nvim = runNvim(
-      repo,
-      `
-local cv = require("pi")
-cv.setup({ diff = "builtin" })
-vim.cmd("edit a.txt")
-vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 1 end
-cv.send({ note = "" })
-`,
-    );
-
-    expect(text(await pending)).toContain("has no remarks");
-    const notes = await until(() => nvim.notifications().some((n) => n.msg.includes("review of chunk 1 sent")) && nvim.notifications(), "send notification");
-    expect(notes.map((n) => n.msg)).toContain("CONFIRM pi: continue without remarks? (y/n)");
-  }, TIMEOUT_MS);
-
-  it("an empty review asks to continue without remarks; no sends nothing", async () => {
+  it("continue with an empty review needs no confirmation and resumes the agent", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\n");
@@ -243,18 +220,17 @@ local cv = require("pi")
 cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 2 end
-cv.send({ note = "" })
+vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
+cv.continue()
 `,
     );
 
-    await until(() => nvim.notifications().some((n) => n.msg.startsWith("CONFIRM")), "confirm");
-    await new Promise((r) => setTimeout(r, 500));
-    expect(nvim.notifications().map((n) => n.msg)).toContain("CONFIRM pi: continue without remarks? (y/n)");
-    expect(nvim.notifications().some((n) => n.msg.includes("sent"))).toBe(false);
-    expect(await settled(pending)).toBe(false);
+    expect(text(await pending)).toContain("has no remarks");
+    const notes = await until(() => nvim.notifications().some((n) => n.msg === "pi: continuing — checkpoint 1 reviewed") && nvim.notifications(), "continue notification");
+    expect(notes.some((n) => n.msg.startsWith("CONFIRM") || n.msg.startsWith("PROMPT"))).toBe(false);
   }, TIMEOUT_MS);
 
-  it("sending outside checkpoint mode names the annotations in the prompt and the result", async () => {
+  it("continue outside checkpoint mode sends the annotations as a prompt without asking", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "off" });
     const nvim = runNvim(
@@ -267,25 +243,21 @@ local buf = vim.api.nvim_get_current_buf()
 vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
 cv.annotate(buf, 1, 1, "first")
 cv.annotate(buf, 2, 2, "second")
-cv.send()
+cv.continue()
 vim.wait(5000, function() return #require("pi.annotations").list(vim.fn.getcwd()) == 0 end, 20)
 cv.annotate(buf, 1, 1, "again")
-cv.send()
+cv.continue()
 `,
     );
     repo.write("a.txt", "one\ntwo\n");
-    await until(
-      () => nvim.notifications().some((n) => n.msg === "pi: 1 annotation sent"),
-      "both sends",
-    );
+    await until(() => nvim.notifications().some((n) => n.msg === "pi: 1 annotation sent"), "both sends");
     const msgs = nvim.notifications().map((n) => n.msg);
-    expect(msgs).toContain("PROMPT pi: send 2 annotations — optional message: ");
     expect(msgs).toContain("pi: 2 annotations sent");
-    expect(msgs).toContain("PROMPT pi: send 1 annotation — optional message: ");
+    expect(msgs.some((m) => m.startsWith("PROMPT"))).toBe(false);
     expect(fake.sent.length).toBe(2);
   }, TIMEOUT_MS);
 
-  it("sending with zero annotations outside checkpoint mode does not ask and does not send", async () => {
+  it("continue with zero annotations and no checkpoint says nothing to send and sends nothing", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "off" });
     const nvim = runNvim(
@@ -293,16 +265,14 @@ cv.send()
       `
 local cv = require("pi")
 cv.setup({ diff = "builtin" })
-vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
-cv.send()
+cv.continue()
 `,
     );
-    await until(() => nvim.notifications().some((n) => n.msg === "pi: no annotations to send"), "notice");
-    expect(nvim.notifications().some((n) => n.msg.startsWith("PROMPT"))).toBe(false);
+    await until(() => nvim.notifications().some((n) => n.msg === "pi: nothing to send"), "notice");
     expect(fake.sent).toEqual([]);
   }, TIMEOUT_MS);
 
-  it("sending in checkpoint mode with an open chunk says review of chunk N with M annotations", async () => {
+  it("continue with an open checkpoint and an annotation says continuing with 1 annotation", async () => {
     const repo = await makeRepo();
     const fake = await start(repo);
     await agentWrite(fake, repo, "a.txt", "one\ntwo\n");
@@ -314,19 +284,15 @@ cv.send()
 local cv = require("pi")
 cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
-vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
 cv.open_chunk(1)
 vim.wait(5000, function() return #vim.api.nvim_list_tabpages() == 2 end)
 local buf = vim.fn.bufnr(vim.uv.fs_realpath("a.txt"))
 cv.annotate(buf, 1, 1, "why one?")
-cv.send()
+cv.continue()
 `,
     );
     await settled(pending, 100);
-    await until(() => nvim.notifications().some((n) => n.msg.includes("sent with")), "sent");
-    const msgs = nvim.notifications().map((n) => n.msg);
-    expect(msgs).toContain("PROMPT pi: review of chunk 1 with 1 annotation — optional message: ");
-    expect(msgs).toContain("pi: review of chunk 1 sent with 1 annotation");
+    await until(() => nvim.notifications().some((n) => n.msg === "pi: continuing — checkpoint 1 reviewed with 1 annotation"), "continued");
     expect(text(await pending)).toContain("why one?");
   }, TIMEOUT_MS);
 
@@ -387,8 +353,8 @@ vim.notify("CLOSED " .. vim.inspect(vim.api.nvim_buf_call(buf, function() return
     );
     const notes = await until(() => nvim.notifications().some((n) => n.msg.startsWith("CLOSED") || n.msg.startsWith("SCRIPT")) && nvim.notifications(), "mapping check");
     const msgs = notes.map((n) => n.msg);
-    expect(msgs).toContain("OPEN pi: next file in chunk");
-    // Only the mapping checks matter here; a "chunk N ready" notice can race in on slow machines.
+    expect(msgs).toContain("OPEN pi: next file in checkpoint");
+    // Only the mapping checks matter here; a "checkpoint N waiting" notice can race in on slow machines.
     expect(msgs.filter((m) => m.startsWith("CLOSED") || m.startsWith("SCRIPT"))).toEqual(["CLOSED vim.empty_dict()"]);
   }, TIMEOUT_MS);
 
@@ -553,7 +519,7 @@ end, 5)
     await until(() => nvim.notifications().some((n) => n.msg === "S pi: work · idle"), "idle");
   }, TIMEOUT_MS);
 
-  it("run_settled gives one notice: files changed, cancelled, or the waiting chunk", async () => {
+  it("run_settled gives one notice: files changed, stopped, or the waiting checkpoint", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "off" });
     const nvim = runNvim(
@@ -575,7 +541,7 @@ vim.wait(15000, function() return false end, 20)
     await fake.fire("agent_settled", { aborted: false });
     await until(() => has("pi: done — 2 files changed"), "done notice");
     await fake.fire("agent_settled", { aborted: true });
-    await until(() => has("pi: cancelled"), "cancelled notice");
+    await until(() => has("pi: stopped"), "stopped notice");
   }, TIMEOUT_MS);
 
   it("run_settled with a chunk open names the chunk and the keys", async () => {
@@ -607,7 +573,7 @@ end, 20)
     await until(() => nvim.notifications().some((n) => n.msg === "CHUNK_OPEN"), "chunk open");
     await fake.fire("agent_settled", { aborted: false });
     await until(
-      () => nvim.notifications().some((n) => n.msg === "pi: chunk 1 waiting for your review — <leader>pv to look, <leader>pr to continue"),
+      () => nvim.notifications().some((n) => n.msg === "pi: checkpoint 1 waiting — <leader>pv to look, <leader>pc to continue"),
       "waiting notice",
     );
   }, TIMEOUT_MS);
@@ -626,7 +592,7 @@ vim.notify("KEY " .. vim.fn.maparg("<leader>pm", "n", false, true).desc)
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<leader>pm", true, false, true), "mx", false)
 vim.wait(5000, function() return cv.statusline():find("%[checkpoints%]") ~= nil end)
 vim.notify("S1 " .. cv.statusline())
-vim.cmd("PiCheckpoints off")
+vim.cmd("PiCheckpointMode off")
 vim.wait(5000, function() return cv.statusline() ~= "" and cv.statusline():find("%[checkpoints%]") == nil end)
 vim.notify("S2 " .. cv.statusline())
 `,
@@ -672,7 +638,7 @@ end, 20)
     expect(note.msg).toBe("LIVE one|two 2");
   }, TIMEOUT_MS);
 
-  it("marks stay when the chunk opens for review and clear after send", async () => {
+  it("marks stay when the checkpoint opens for review and clear after send", async () => {
     const repo = await makeRepo();
     repo.write("a.txt", "one\n");
     await repo.git("add", ".");
@@ -695,7 +661,7 @@ vim.notify("WRITTEN " .. count())
 vim.wait(15000, function() return require("pi.panel").visible() end, 20)
 vim.wait(1500, function() return count() ~= 1 end, 20)
 vim.notify("OPEN " .. count())
-cv.send({ note = "ok" })
+cv.continue()
 vim.wait(5000, function() return count() == 0 end, 20)
 vim.notify("SENT " .. count())
 `,

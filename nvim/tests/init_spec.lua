@@ -3,7 +3,7 @@ local annotations = require("pi.annotations")
 
 local M = {}
 
-local KEYS = { "<leader>pa", "<leader>ps", "<leader>pn", "<leader>px", "<leader>pe", "<leader>pr", "<leader>pv", "<leader>pm", "<leader>pc" }
+local KEYS = { "<leader>pa", "<leader>ps", "<leader>pn", "<leader>px", "<leader>pe", "<leader>pi", "<leader>pv", "<leader>pm", "<leader>pc" }
 
 local function reset_maps()
   for _, lhs in ipairs(KEYS) do
@@ -28,45 +28,48 @@ M["default keys live under <leader>p with pi: descriptions"] = function()
   reset_maps()
   assert(vim.deep_equal(pi.default_keys, {
     ask = "<leader>pa",
-    session = "<leader>ps",
+    continue = "<leader>pc",
+    stop = "<leader>ps",
     annotate = "<leader>pn",
-    remove = "<leader>px",
     edit = "<leader>pe",
-    send = "<leader>pr",
-    chunks = "<leader>pv",
-    checkpoints = "<leader>pm",
-    cancel = "<leader>pc",
+    remove = "<leader>px",
+    checkpoints = "<leader>pv",
+    mode = "<leader>pm",
+    session = "<leader>pi",
   }), vim.inspect(pi.default_keys))
   local notes = capture_notify(function() pi.setup() end)
   local want = {
     { "n", "<leader>pa", "pi: ask with file context" },
     { "x", "<leader>pa", "pi: ask with selection context" },
-    { "n", "<leader>ps", "pi: choose pi session" },
+    { "n", "<leader>pc", "pi: continue — review the waiting checkpoint or send annotations" },
+    { "n", "<leader>ps", "pi: stop the agent's current run" },
     { "n", "<leader>pn", "pi: annotate line" },
     { "x", "<leader>pn", "pi: annotate selection" },
-    { "n", "<leader>px", "pi: remove annotation" },
     { "n", "<leader>pe", "pi: edit annotation" },
-    { "n", "<leader>pr", "pi: send annotations" },
-    { "n", "<leader>pv", "pi: toggle chunk panel" },
+    { "n", "<leader>px", "pi: remove annotation" },
+    { "n", "<leader>pv", "pi: toggle checkpoint list" },
     { "n", "<leader>pm", "pi: toggle checkpoint mode" },
-    { "n", "<leader>pc", "pi: cancel the agent's current run" },
+    { "n", "<leader>pi", "pi: choose pi session" },
   }
   for _, w in ipairs(want) do
     local desc = vim.fn.maparg(w[2], w[1], false, true).desc
     assert(desc == w[3], ("%s (%s): %s"):format(w[2], w[1], tostring(desc)))
   end
-  for _, name in ipairs({ "PiAsk", "PiSession", "PiAnnotate", "PiAnnotationRemove", "PiAnnotationEdit", "PiSendAnnotations", "PiChunks", "PiCheckpoints", "PiCancel" }) do
+  for _, name in ipairs({ "PiAsk", "PiContinue", "PiStop", "PiAnnotate", "PiAnnotationEdit", "PiAnnotationRemove", "PiCheckpoints", "PiCheckpointMode", "PiSession" }) do
     assert(vim.fn.exists(":" .. name) == 2, "missing command " .. name)
+  end
+  for _, name in ipairs({ "PiSendAnnotations", "PiCancel", "PiChunks" }) do
+    assert(vim.fn.exists(":" .. name) == 0, "removed command still exists: " .. name)
   end
   assert(#notes == 0, vim.inspect(notes))
   reset_maps()
 end
 
-M["<leader>pm toggles checkpoint mode and :PiCheckpoints completes on/off"] = function()
+M["<leader>pm toggles checkpoint mode and :PiCheckpointMode completes on/off"] = function()
   reset_maps()
   capture_notify(function() pi.setup() end)
   assert(vim.fn.maparg("<leader>pm", "n", false, true).desc == "pi: toggle checkpoint mode", "mode key not mapped")
-  local complete = vim.fn.getcompletion("PiCheckpoints ", "cmdline")
+  local complete = vim.fn.getcompletion("PiCheckpointMode ", "cmdline")
   assert(vim.deep_equal(complete, { "on", "off" }), vim.inspect(complete))
   reset_maps()
 end
@@ -74,11 +77,11 @@ end
 M["setup keeps existing mappings for default keys and lists them in one INFO notify"] = function()
   reset_maps()
   vim.keymap.set("n", "<leader>pn", "<cmd>echo 'mine'<CR>", { desc = "mine" })
-  vim.keymap.set("x", "<leader>pr", "<Nop>")
+  vim.keymap.set("x", "<leader>pc", "<Nop>")
   local notes = capture_notify(function() pi.setup() end)
   assert(vim.fn.maparg("<leader>pn", "n", false, true).desc == "mine", "default key replaced a user mapping")
   assert(vim.fn.maparg("<leader>pn", "x", false, true).desc == "pi: annotate selection", "x mode not mapped")
-  assert(vim.fn.maparg("<leader>pr", "n", false, true).desc == "pi: send annotations", "n mode send not mapped")
+  assert(vim.fn.maparg("<leader>pc", "n", false, true).desc ~= nil and vim.fn.maparg("<leader>pc", "n", false, true).desc:find("pi: continue", 1, true), "n mode continue not mapped")
   assert(#notes == 1 and notes[1].level == vim.log.levels.INFO, vim.inspect(notes))
   assert(notes[1].msg:find("<leader>pn (n)", 1, true), notes[1].msg)
   -- setup() twice does not count its own mappings as foreign.
@@ -548,28 +551,28 @@ local function run_end_notes(data, open_chunk, keys)
   return notes
 end
 
-M["run end: aborted with an open chunk names the chunk; aborted without says cancelled"] = function()
+M["run end: aborted with an open checkpoint names it; aborted without says stopped"] = function()
   local notes = run_end_notes({ aborted = true }, { n = 3 })
-  assert(#notes == 1 and notes[1].msg == "pi: cancelled — chunk 3 waiting for your review", vim.inspect(notes))
+  assert(#notes == 1 and notes[1].msg == "pi: stopped — checkpoint 3 waiting", vim.inspect(notes))
   notes = run_end_notes({ aborted = true }, nil)
-  assert(#notes == 1 and notes[1].msg == "pi: cancelled", vim.inspect(notes))
+  assert(#notes == 1 and notes[1].msg == "pi: stopped", vim.inspect(notes))
 end
 
-M["run end: the waiting-chunk notice names the keys setup mapped, else the commands"] = function()
-  local notes = run_end_notes({}, { n = 2 }, { chunks = "<leader>zz" })
-  assert(notes[1].msg == "pi: chunk 2 waiting for your review — <leader>zz to look, <leader>pr to continue", notes[1].msg)
-  notes = run_end_notes({}, { n = 2 }, { chunks = false, send = false })
-  assert(notes[1].msg == "pi: chunk 2 waiting for your review — :PiChunks to look, :PiSendAnnotations to continue", notes[1].msg)
+M["run end: the waiting-checkpoint notice names the keys setup mapped, else the commands"] = function()
+  local notes = run_end_notes({}, { n = 2 }, { checkpoints = "<leader>zz", continue = "<leader>cc" })
+  assert(notes[1].msg == "pi: checkpoint 2 waiting — <leader>zz to look, <leader>cc to continue", notes[1].msg)
+  notes = run_end_notes({}, { n = 2 }, { checkpoints = false, continue = false })
+  assert(notes[1].msg == "pi: checkpoint 2 waiting — :PiCheckpoints to look, :PiContinue to continue", notes[1].msg)
   reset_maps()
 end
 
-M["cancel: a cancel that took effect shows no notice itself; nothing to cancel is reported"] = function()
+M["stop: a stop that took effect shows no notice itself; nothing to stop is reported"] = function()
   local session = require("pi.session")
   local real_request, real_refresh = session.request, session.refresh_status
   session.refresh_status = function() end
   local function cancel_with(result)
     session.request = function(_, _, cb) cb(nil, result) end
-    local ok, notes = pcall(capture_notify, function() pi.cancel() end)
+    local ok, notes = pcall(capture_notify, function() pi.stop() end)
     session.request, session.refresh_status = real_request, real_refresh
     assert(ok, notes)
     session.refresh_status = function() end
@@ -578,8 +581,86 @@ M["cancel: a cancel that took effect shows no notice itself; nothing to cancel i
   local notes = cancel_with({ cancelled = true })
   assert(#notes == 0, vim.inspect(notes))
   notes = cancel_with({ cancelled = false })
-  assert(#notes == 1 and notes[1].msg == "pi: nothing to cancel", vim.inspect(notes))
+  assert(#notes == 1 and notes[1].msg == "pi: nothing to stop", vim.inspect(notes))
   session.request, session.refresh_status = real_request, real_refresh
+end
+
+-- Runs pi.continue() against a fake attached session; returns the notices and the "send" payloads.
+local function continue_with(open_chunk, count)
+  local session = require("pi.session")
+  local real = { ensure = session.ensure, refresh_status = session.refresh_status }
+  local requests = {}
+  local conn = { request = function(_, method, payload, cb) requests[#requests + 1] = { method = method, payload = payload }; cb(nil, {}) end }
+  local root = vim.uv.fs_realpath(vim.fn.tempname() .. "_d") or (function() local d = vim.fn.tempname(); vim.fn.mkdir(d, "p"); return vim.uv.fs_realpath(d) end)()
+  session.ensure = function(cb) cb(conn, root) end
+  session.refresh_status = function(cb)
+    if cb then cb(nil, { openChunk = open_chunk }) end
+  end
+  local buf = vim.api.nvim_create_buf(true, false)
+  vim.fn.writefile({ "a", "b", "c" }, root .. "/probe.txt")
+  vim.api.nvim_buf_set_name(buf, root .. "/probe.txt")
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "a", "b", "c" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.cmd("silent! write!")
+  for i = 1, count do
+    annotations.add(buf, i, i, "note " .. i)
+  end
+  local ok, notes = pcall(capture_notify, function() pi.continue() end)
+  session.ensure, session.refresh_status = real.ensure, real.refresh_status
+  local remaining = #annotations.list(root)
+  annotations.clear()
+  vim.fn.delete(root, "rf")
+  vim.api.nvim_buf_delete(buf, { force = true })
+  assert(ok, notes)
+  return notes, requests, remaining
+end
+
+M["continue with a checkpoint open sends the review without note or confirm"] = function()
+  local real_confirm = vim.fn.confirm
+  vim.fn.confirm = function() error("continue must not ask") end
+  local ok, notes, requests = pcall(continue_with, { n = 4 }, 0)
+  vim.fn.confirm = real_confirm
+  assert(ok, notes)
+  assert(#requests == 1 and requests[1].method == "send" and requests[1].payload.note == "", vim.inspect(requests))
+  assert(#notes == 1 and notes[1].msg == "pi: continuing — checkpoint 4 reviewed", vim.inspect(notes))
+end
+
+M["continue with a checkpoint open and annotations counts them and clears them"] = function()
+  local notes, requests, remaining = continue_with({ n = 4 }, 1)
+  assert(#requests[1].payload.annotations == 1 and requests[1].payload.note == "", vim.inspect(requests))
+  assert(notes[1].msg == "pi: continuing — checkpoint 4 reviewed with 1 annotation", vim.inspect(notes))
+  assert(remaining == 0, "annotations not cleared")
+  notes = continue_with({ n = 5 }, 2)
+  assert(notes[1].msg == "pi: continuing — checkpoint 5 reviewed with 2 annotations", vim.inspect(notes))
+end
+
+M["continue without a checkpoint sends annotations as a prompt, or says nothing to send"] = function()
+  local notes, requests = continue_with(nil, 2)
+  assert(#requests == 1 and #requests[1].payload.annotations == 2, vim.inspect(requests))
+  assert(#notes == 1 and notes[1].msg == "pi: 2 annotations sent", vim.inspect(notes))
+  notes = continue_with(nil, 1)
+  assert(notes[1].msg == "pi: 1 annotation sent", vim.inspect(notes))
+  notes, requests = continue_with(nil, 0)
+  assert(#requests == 0 and #notes == 1 and notes[1].msg == "pi: nothing to send", vim.inspect(notes))
+end
+
+M["waiting notice and checkpoint-ready notice name the keys or the commands"] = function()
+  reset_maps()
+  capture_notify(function() pi.setup() end)
+  local notes = capture_notify(function() pi.notify_waiting(4) end)
+  assert(notes[1].msg == "pi: checkpoint 4 waiting — <leader>pv to look, <leader>pc to continue", notes[1].msg)
+  reset_maps()
+end
+
+M["statusline says checkpoint N while a checkpoint waits"] = function()
+  local session = require("pi.session")
+  local real = { connected = session.connected, cached = session.cached }
+  session.connected = function() return true end
+  session.cached = { name = "x", openChunk = { n = 3 }, mode = "checkpoints" }
+  local line, short = session.statusline(), session.status_line()
+  session.connected, session.cached = real.connected, real.cached
+  assert(line == "pi: x [checkpoints] · checkpoint 3", line)
+  assert(short == "checkpoint 3", short)
 end
 
 return M

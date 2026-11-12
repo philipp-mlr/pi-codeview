@@ -1,5 +1,7 @@
 -- Small floating badge in the top-right corner while the agent works or a chunk waits for review.
 -- Never focusable and never entered; one timer animates the spinner and runs only while it shows.
+local keys = require("pi.keys")
+
 local M = {}
 
 local FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
@@ -123,7 +125,7 @@ function M.update(state)
   end
   if state.chunk then
     spinning = false
-    label = ("pi · chunk %s waiting for your review"):format(state.chunk)
+    label = ("pi · checkpoint %s waiting — %s continue"):format(state.chunk, keys.label("continue", ":PiContinue"))
     stop_timer()
   elseif state.busy then
     spinning = true

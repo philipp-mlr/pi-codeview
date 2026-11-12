@@ -134,7 +134,7 @@ end
 local function describe(status)
   local state = status.busy and "working" or "idle"
   if type(status.openChunk) == "table" then
-    state = "review " .. status.openChunk.n
+    state = "checkpoint " .. status.openChunk.n
   end
   if status.mode == "checkpoints" then
     state = "checkpoints, " .. state
@@ -341,7 +341,7 @@ function M.status_line()
   end
   local open_chunk = M.cached.openChunk
   if type(open_chunk) == "table" then
-    return "review " .. open_chunk.n
+    return "checkpoint " .. open_chunk.n
   end
   if M.cached.busy then
     return "working"
@@ -358,7 +358,7 @@ function M.statusline()
   local open_chunk = M.cached.openChunk
   local current = M.cached.activity
   if type(open_chunk) == "table" then
-    state = "review " .. open_chunk.n
+    state = "checkpoint " .. open_chunk.n
   elseif type(current) == "table" and current.tool then
     local target = current.target
     state = "working · " .. current.tool

@@ -14,14 +14,14 @@ local M = {}
 
 M.default_keys = {
   ask = "<leader>pa",
-  session = "<leader>ps",
+  continue = "<leader>pc",
+  stop = "<leader>ps",
   annotate = "<leader>pn",
-  remove = "<leader>px",
   edit = "<leader>pe",
-  send = "<leader>pr",
-  chunks = "<leader>pv",
-  checkpoints = "<leader>pm",
-  cancel = "<leader>pc",
+  remove = "<leader>px",
+  checkpoints = "<leader>pv",
+  mode = "<leader>pm",
+  session = "<leader>pi",
 }
 
 -- Repo-relative path of buf, or nil when it is not a file inside root.
@@ -39,22 +39,26 @@ local function relpath(buf, root)
   return real and discover.relpath(root, real) or nil
 end
 
--- One notice when a run ends; reads the open chunk from a fresh status.
+-- Tells that checkpoint n waits and which keys (or commands) look at it and continue.
+function M.notify_waiting(n)
+  local look = keys_state.label("checkpoints", ":PiCheckpoints")
+  local go = keys_state.label("continue", ":PiContinue")
+  vim.notify(("pi: checkpoint %s waiting — %s to look, %s to continue"):format(n, look, go))
+end
+
+-- One notice when a run ends; reads the open checkpoint from a fresh status.
 function M.notify_run_end(data)
   local aborted = type(data) == "table" and data.aborted
   local files = type(data) == "table" and data.files or 0
   local function report(chunk)
     if chunk then
-      local look = keys_state.label("chunks", ":PiChunks")
-      local go = keys_state.label("send", ":PiSendAnnotations")
-      local waiting = ("chunk %s waiting for your review"):format(chunk.n)
       if aborted then
-        vim.notify(("pi: cancelled — %s"):format(waiting))
+        vim.notify(("pi: stopped — checkpoint %s waiting"):format(chunk.n))
       else
-        vim.notify(("pi: %s — %s to look, %s to continue"):format(waiting, look, go))
+        M.notify_waiting(chunk.n)
       end
     elseif aborted then
-      vim.notify("pi: cancelled")
+      vim.notify("pi: stopped")
     elseif files == 0 then
       vim.notify("pi: done")
     else
@@ -82,7 +86,7 @@ local function on_event(name, data)
     -- The server sends { chunk = {...} }.
     local n = data and (data.chunk and data.chunk.n) or "?"
     if panel.visible() or diff.is_diff_window(vim.api.nvim_get_current_win()) then
-      vim.notify(("pi: chunk %s ready"):format(n))
+      M.notify_waiting(n)
     else
       panel.open()
     end
@@ -129,7 +133,7 @@ function M.prompt(text, context)
       return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
     if result and result.queued then
-      vim.notify("pi: prompt queued until the open chunk is reviewed")
+      vim.notify("pi: prompt queued until the open checkpoint is reviewed")
     else
       session.mark_busy()
     end
@@ -167,52 +171,25 @@ function M.diagnostics(buf, line1, line2)
 end
 
 -- Asks pi to abort the agent's current run.
-function M.cancel()
+function M.stop()
   session.request("cancel", nil, function(err, result)
     if err then
       return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
-    -- A cancel that took effect is announced once, by the run-end notice.
+    -- A stop that took effect is announced once, by the run-end notice.
     if not result.cancelled then
-      vim.notify("pi: nothing to cancel")
+      vim.notify("pi: nothing to stop")
     end
     session.refresh_status()
   end)
 end
 
--- Sends the annotations and opts.note (asked via vim.ui.input when nil) as review or prompt.
-function M.send(opts)
-  opts = opts or {}
+-- Moves on: with a checkpoint waiting, sends the annotations as its review (no message, no
+-- confirmation) and the agent continues; without one, sends the annotations as a new prompt.
+function M.continue()
   session.ensure(function(conn, root)
     -- Saved inside ensure, so the saves are reported as Philipp's edits to the attached session.
     vim.cmd("silent! wall")
-    local function plural(n)
-      return ("%d annotation%s"):format(n, n == 1 and "" or "s")
-    end
-    local function deliver(note, count, open_chunk)
-      if note == nil then
-        return
-      end
-      if open_chunk and count == 0 and note == "" and vim.fn.confirm("pi: continue without remarks? (y/n)", "&yes\n&no", 2) ~= 1 then
-        return
-      end
-      local payload = {
-        annotations = annotations.list(root, { diagnostics = true }),
-        note = note,
-        viewed = open_chunk ~= nil and diff.viewed(open_chunk.n), -- ignored by the extension, kept for older ones
-      }
-      conn:request("send", payload, function(err)
-        if err then
-          return vim.notify("pi: " .. err, vim.log.levels.ERROR)
-        end
-        annotations.clear_root(root)
-        vim.notify(
-          open_chunk and ("pi: review of chunk %d sent with %s"):format(open_chunk.n, plural(count))
-            or ("pi: %s sent"):format(plural(count))
-        )
-        session.refresh_status()
-      end)
-    end
     session.refresh_status(function(status_err, status)
       if status_err then
         return vim.notify("pi: " .. status_err, vim.log.levels.ERROR)
@@ -220,15 +197,25 @@ function M.send(opts)
       local open_chunk = type(status.openChunk) == "table" and status.openChunk or nil
       local count = #annotations.list(root)
       if not open_chunk and count == 0 then
-        return vim.notify("pi: no annotations to send")
+        return vim.notify("pi: nothing to send")
       end
-      if opts.note ~= nil then
-        return deliver(opts.note, count, open_chunk)
-      end
-      local prompt = open_chunk and ("pi: review of chunk %d with %s — optional message: "):format(open_chunk.n, plural(count))
-        or ("pi: send %s — optional message: "):format(plural(count))
-      vim.ui.input({ prompt = prompt }, function(note)
-        deliver(note, count, open_chunk)
+      local payload = {
+        annotations = annotations.list(root, { diagnostics = true }),
+        note = "",
+        viewed = open_chunk ~= nil and diff.viewed(open_chunk.n), -- ignored by the extension, kept for older ones
+      }
+      conn:request("send", payload, function(err)
+        if err then
+          return vim.notify("pi: " .. err, vim.log.levels.ERROR)
+        end
+        annotations.clear_root(root)
+        local counted = ("%d annotation%s"):format(count, count == 1 and "" or "s")
+        if open_chunk then
+          vim.notify(("pi: continuing — checkpoint %d reviewed%s"):format(open_chunk.n, count > 0 and " with " .. counted or ""))
+        else
+          vim.notify(("pi: %s sent"):format(counted))
+        end
+        session.refresh_status()
       end)
     end)
   end)
@@ -407,17 +394,14 @@ function M.setup(opts)
   end
 
   local command = vim.api.nvim_create_user_command
-  command("PiChunks", M.toggle_panel, { desc = "pi: toggle the chunk panel" })
   command("PiAsk", prompt_command, { range = true, desc = "pi: ask pi" })
+  command("PiContinue", M.continue, { desc = "pi: continue — review the waiting checkpoint or send annotations" })
+  command("PiStop", M.stop, { desc = "pi: stop the agent's current run" })
   command("PiAnnotate", annotate_command, { range = true, desc = "pi: annotate lines" })
-  command("PiAnnotationRemove", remove_command, { desc = "pi: remove the annotation at the cursor" })
   command("PiAnnotationEdit", edit_command, { desc = "pi: edit the annotation at the cursor" })
-  command("PiSendAnnotations", function()
-    M.send()
-  end, { desc = "pi: send annotations" })
-  command("PiCancel", M.cancel, { desc = "pi: cancel the agent's current run" })
-  command("PiSession", M.attach, { desc = "pi: choose the pi session to work with" })
-  command("PiCheckpoints", function(cmd)
+  command("PiAnnotationRemove", remove_command, { desc = "pi: remove the annotation at the cursor" })
+  command("PiCheckpoints", M.toggle_panel, { desc = "pi: toggle the checkpoint list" })
+  command("PiCheckpointMode", function(cmd)
     if cmd.args == "" then
       return M.toggle_mode()
     end
@@ -429,6 +413,7 @@ function M.setup(opts)
     end,
     desc = "pi: checkpoint mode on|off, toggle without argument",
   })
+  command("PiSession", M.attach, { desc = "pi: choose the pi session to work with" })
 
   -- Default keys never replace an existing mapping (e.g. another plugin's <leader>p… key); keys passed in
   -- opts.keys always map.
@@ -451,15 +436,15 @@ function M.setup(opts)
   end
   map("n", "ask", "<cmd>PiAsk<CR>", "pi: ask with file context")
   map("x", "ask", ":PiAsk<CR>", "pi: ask with selection context")
-  map("n", "cancel", "<cmd>PiCancel<CR>", "pi: cancel the agent's current run")
-  map("n", "session", "<cmd>PiSession<CR>", "pi: choose pi session")
+  map("n", "continue", "<cmd>PiContinue<CR>", "pi: continue — review the waiting checkpoint or send annotations")
+  map("n", "stop", "<cmd>PiStop<CR>", "pi: stop the agent's current run")
   map("n", "annotate", "<cmd>PiAnnotate<CR>", "pi: annotate line")
   map("x", "annotate", ":PiAnnotate<CR>", "pi: annotate selection")
-  map("n", "remove", "<cmd>PiAnnotationRemove<CR>", "pi: remove annotation")
   map("n", "edit", "<cmd>PiAnnotationEdit<CR>", "pi: edit annotation")
-  map("n", "send", "<cmd>PiSendAnnotations<CR>", "pi: send annotations")
-  map("n", "chunks", "<cmd>PiChunks<CR>", "pi: toggle chunk panel")
-  map("n", "checkpoints", "<cmd>PiCheckpoints<CR>", "pi: toggle checkpoint mode")
+  map("n", "remove", "<cmd>PiAnnotationRemove<CR>", "pi: remove annotation")
+  map("n", "checkpoints", "<cmd>PiCheckpoints<CR>", "pi: toggle checkpoint list")
+  map("n", "mode", "<cmd>PiCheckpointMode<CR>", "pi: toggle checkpoint mode")
+  map("n", "session", "<cmd>PiSession<CR>", "pi: choose pi session")
   if #skipped > 0 then
     vim.notify("pi: kept existing mappings, not mapped: " .. table.concat(skipped, ", "), vim.log.levels.INFO)
   end

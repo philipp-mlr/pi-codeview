@@ -1,4 +1,4 @@
--- Chunk list in a left vertical split.
+-- Checkpoint list in a left vertical split.
 local diff = require("pi.diff")
 local session = require("pi.session")
 
@@ -60,7 +60,7 @@ local function render(list)
     chunks[#lines] = chunk.n
   end
   if #lines == 0 then
-    lines = { "no chunks yet" }
+    lines = { "no checkpoints yet" }
   end
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -96,7 +96,7 @@ local function ensure_buf()
     if n then
       diff.open(n)
     end
-  end, vim.tbl_extend("force", opts, { desc = "pi: open chunk diff" }))
+  end, vim.tbl_extend("force", opts, { desc = "pi: open checkpoint diff" }))
   vim.keymap.set("n", "r", M.refresh, vim.tbl_extend("force", opts, { desc = "pi: refresh panel" }))
   vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "pi: close panel" }))
   return buf

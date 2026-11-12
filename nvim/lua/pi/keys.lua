@@ -1,4 +1,4 @@
--- Keys setup actually mapped, by name; shared by the run-end notice and the chunk view help line.
+-- Keys setup actually mapped, by name; shared by the run-end notice and the checkpoint view help line.
 local M = {}
 
 M.mapped = {}

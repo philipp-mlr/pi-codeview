@@ -1,11 +1,11 @@
 # pi.nvim
 
 Ask [pi](https://pi.dev) from Neovim with real context, watch the agent work
-in your buffers, annotate lines and send the annotations back.
+in your buffers, annotate lines and send the annotations back with one key.
 
 pi.nvim is a pi extension plus a Neovim plugin. pi keeps running in its own
 window; Neovim talks to that session over a local socket. An optional
-checkpoint mode makes the agent stop after each chunk of work so you can
+checkpoint mode makes the agent stop after each step so you can
 review it before it continues.
 
 ## Install
@@ -66,25 +66,25 @@ its path to pi's `packages` setting:
 settings.packages = [ "${inputs.pi-nvim}" ];
 ```
 
-`setup({ keys = { send = "<leader>rs" } })` overrides single keys; set a key
+`setup({ keys = { continue = "<leader>rc" } })` overrides single keys; set a key
 to `false` to leave it unmapped. A default key that is already mapped by
 another plugin is left alone, and `setup()` lists the skipped keys in one
 message. Keys you pass in `keys` are always mapped. The key names are `ask`,
-`cancel`, `session`, `annotate`, `remove`, `edit`, `send`, `chunks`, `checkpoints`.
+`continue`, `stop`, `annotate`, `edit`, `remove`, `checkpoints`, `mode`, `session`.
 
 ## Keys and commands
 
 | Key | Command | What it does |
 |---|---|---|
 | `<leader>pa` | `:PiAsk` | Ask pi. Normal mode sends the file and cursor line; visual mode sends the line range and the selected text. |
-| `<leader>pc` | `:PiCancel` | Cancel the agent's current run (like Escape in pi). |
-| `<leader>ps` | `:PiSession` | Choose the pi session to work with. |
+| `<leader>pc` | `:PiContinue` | Continue: save all buffers, then send your annotations and edits as the review of the waiting checkpoint and let the agent go on. Without a waiting checkpoint it sends the annotations as a new prompt. |
+| `<leader>ps` | `:PiStop` | Stop the agent's current run (like Escape in pi). |
 | `<leader>pn` | `:PiAnnotate` | Annotate the current line or the visual range. |
-| `<leader>px` | `:PiAnnotationRemove` | Remove one annotation under the cursor; when several cover the line, pick which. |
 | `<leader>pe` | `:PiAnnotationEdit` | Edit the text of one annotation under the cursor; when several cover the line, pick which. |
-| `<leader>pr` | `:PiSendAnnotations` | Save all buffers, then send the annotations and an optional message. |
-| `<leader>pv` | `:PiChunks` | Toggle the chunk panel (checkpoint mode). |
-| `<leader>pm` | `:PiCheckpoints [on\|off]` | Switch checkpoint mode for this repository; without an argument it toggles. |
+| `<leader>px` | `:PiAnnotationRemove` | Remove one annotation under the cursor; when several cover the line, pick which. |
+| `<leader>pv` | `:PiCheckpoints` | Toggle the checkpoint list. |
+| `<leader>pm` | `:PiCheckpointMode [on\|off]` | Switch checkpoint mode for this repository; without an argument it toggles. |
+| `<leader>pi` | `:PiSession` | Choose the pi session to work with. |
 
 ## Asking
 
@@ -99,8 +99,8 @@ message. Keys you pass in `keys` are always mapped. The key names are `ask`,
   then by line.
 
 If pi is idle the text starts a run; if it is busy the text is delivered as a
-follow-up. In checkpoint mode with a chunk open, the prompt waits until the
-chunk is reviewed.
+follow-up. In checkpoint mode with a checkpoint open, the prompt waits until the
+checkpoint is reviewed.
 
 ## While the agent works
 
@@ -111,28 +111,28 @@ lualine_x = { function() return require("pi").statusline() end }
 ```
 
 It shows `pi: <session> · working · <tool> <target>`, `· working`,
-`· review N` (a chunk is open) or `· idle`. `[checkpoints]` follows the
+`· checkpoint N` (a checkpoint is waiting) or `· idle`. `[checkpoints]` follows the
 session name while checkpoint mode is on. It is empty when Neovim is not
-attached to a session. `require("pi").status()` returns `"review N"`,
+attached to a session. `require("pi").status()` returns `"checkpoint N"`,
 `"working"`, `"idle"` or `""`.
 
 - A small badge in the top-right corner shows that the agent works:
-  `⠋ pi · <tool> <target>` or `⠋ pi · working`, with a spinner. While a chunk
-  waits for your review it reads `pi · chunk N waiting for your review`. It
+  `⠋ pi · <tool> <target>` or `⠋ pi · working`, with a spinner. While a
+  checkpoint waits it reads `pi · checkpoint N waiting — <leader>pc continue`. It
   never takes focus and is hidden when idle or not attached. Turn it off with
   `setup({ badge = false })`; colors come from the `PiBadge` highlight group
   (links to `PmenuSel`).
 - When a run ends you get one notice: `pi: done — N files changed`
   (`1 file changed` for one), `pi: done` when nothing changed,
-  `pi: cancelled`, or, with a chunk waiting,
-  `pi: chunk N waiting for your review — <leader>pv to look, <leader>pr to continue`
-  (`pi: cancelled — chunk N waiting for your review` after a cancel). The
-  notice names your configured keys, or `:PiChunks` / `:PiSendAnnotations`
-  when a key is not mapped.
+  `pi: stopped`, or, with a checkpoint waiting,
+  `pi: checkpoint N waiting — <leader>pv to look, <leader>pc to continue`
+  (`pi: stopped — checkpoint N waiting` after a stop). The notice names your
+  configured keys, or `:PiCheckpoints` / `:PiContinue` when a key is not
+  mapped.
 - Open buffers whose file the agent changed reload by themselves.
 - Changed lines get a sign and a light line highlight: `┃` marks added or
   changed lines (same column as gitsigns), `▁` marks lines deleted below that line. They compare
-  against the start of the open chunk in checkpoint mode, and against the
+  against the start of the open checkpoint in checkpoint mode, and against the
   start of the current (or last) agent run otherwise. Your own unsaved edits
   show as marks too.
 - A buffer with unsaved edits is never reloaded. When the agent changes its
@@ -148,10 +148,12 @@ shows on its own line below the range as `✎ <text>` (highlight
 the range highlighted (`PiAnnotationSign`). `<leader>px` removes the one
 under the cursor.
 
-`<leader>pr` sends all annotations of the worktree and an optional message.
-The prompt says how many it sends (`pi: send 3 annotations — optional
-message:`) and afterwards `pi: 3 annotations sent`. Buffers are saved first.
-With no annotations and no open chunk nothing is sent. Each annotation
+`<leader>pc` sends all annotations of the worktree, without asking for a
+message (use `<leader>pa` for that). With a checkpoint waiting it is the
+review (`pi: continuing — checkpoint 2 reviewed with 3 annotations`);
+otherwise the annotations go as a prompt (`pi: 3 annotations sent`).
+Buffers are saved first. With no annotations and no waiting checkpoint
+nothing is sent (`pi: nothing to send`). Each annotation
 carries the LSP errors and warnings on its lines, under a `Diagnostics:`
 heading in the agent's message.
 
@@ -166,38 +168,39 @@ Name your pi sessions (`/name` in pi) to tell them apart in the picker.
 
 ## Checkpoint mode
 
-In checkpoint mode the agent works in small chunks and stops at the end of
+In checkpoint mode the agent works in small steps and stops at the end of
 each one, using a `checkpoint` tool, or when it passes a size cap
-(`pi-nvim.cap`, default 150 changed lines). You read the chunk, comment on
+(`pi-nvim.cap`, default 150 changed lines). You read the checkpoint, comment on
 it, edit it, or ask about it, and your feedback goes back before the next
 step. Use it when you want to be forced to look at every step, for example
 at the start of a new codebase. It is off by default and set per repository
 (git config `pi-nvim.checkpoints`).
 
-Switch it with `<leader>pm` / `:PiCheckpoints on|off` in Neovim, or in pi:
+Switch it with `<leader>pm` / `:PiCheckpointMode on|off` in Neovim, or in pi:
 
 - `/checkpoints` shows the state.
 - `/checkpoints on|off` switches the mode.
 - `/checkpoints continue <note>` sends a review without Neovim.
-- `/checkpoints discard <note>` throws the open chunk away.
+- `/checkpoints discard <note>` throws the open checkpoint away.
 
 Review flow:
 
 1. Turn checkpoint mode on and give the agent a task with `<leader>pa`.
-2. The agent stops at a checkpoint. The chunk panel (`<leader>pv`) opens with
-   the new chunk; `<CR>` opens a chunk, `r` refreshes, `q` closes.
-3. The chunk opens in its own tab as a diff view: on the left the file
-   before the chunk, on the right your file. Above the diff you see the
+2. The agent stops at a checkpoint. The checkpoint list (`<leader>pv`) opens
+   with the new checkpoint; `<CR>` opens a checkpoint, `r` refreshes, `q`
+   closes.
+3. The checkpoint opens in its own tab as a diff view: on the left the file
+   before the checkpoint, on the right your file. Above the diff you see the
    checkpoint note and the agent's one-line reason for the current file.
    `<Tab>` and `<S-Tab>` move to the next and previous file (they stop at the
    ends), `q` closes the tab and takes you back to where you came from. Vim's
    own diff keys work: `]c` and `[c` jump between changes, `do` and `dp`
-   take or put a change. For the open chunk the right side is the real file,
-   so LSP and editing work; past chunks are read-only. A help line in the
+   take or put a change. For the open checkpoint the right side is the real file,
+   so LSP and editing work; past checkpoints are read-only. A help line in the
    window bar lists the keys.
 
    With [diffview.nvim](https://github.com/sindrets/diffview.nvim) installed
-   the chunk opens there instead (`:DiffviewOpen <from> -- <files>`): its keys
+   the checkpoint opens there instead (`:DiffviewOpen <from> -- <files>`): its keys
    apply (`<Tab>` / `<S-Tab>` for files, `:DiffviewClose` to go back) and the
    note and reason show above the left side. diffview is optional; without it
    the built-in view above is used. `setup({ diff = "builtin" })` always uses
@@ -205,20 +208,20 @@ Review flow:
    missing), the default `"auto"` uses it when present.
 4. Annotate lines with `<leader>pn` on the right side, your file. The left
    side is only a copy of the old state and cannot be annotated.
-5. `<leader>pr` sends the review: your annotations, your own edits and an
-   optional note. The chunk closes and the agent continues. There is no
-   accept button. Prompts sent meanwhile are queued behind the review.
-   With nothing to add (no annotations, empty message) Neovim asks
-   `pi: continue without remarks? (y/n)`; `y` sends an empty review and the
-   agent continues, `n` sends nothing.
+5. `<leader>pc` continues: it sends the review (your annotations and your
+   own edits) and the agent goes on. There is no message prompt and no
+   confirmation; with nothing to add it sends an empty review. The
+   checkpoint closes. There is no accept button. To tell the agent
+   something, send it first with `<leader>pa`: prompts sent meanwhile are
+   queued behind the review.
 
-`<leader>pc` cancels the run; a waiting chunk stays open.
+`<leader>ps` stops the run; a waiting checkpoint stays open.
 
 ## Upgrading from pi-codeview
 
 The project was called pi-codeview. Settings and saved sessions migrate
 automatically: the git config `pi-codeview.mode`, `.cap` and `.retentionDays`
-are read while the `pi-nvim.*` ones are unset, saved chunk state is restored
+are read while the `pi-nvim.*` ones are unset, saved checkpoint state is restored
 from the old session entry, and old snapshot refs are pruned as before.
 Update your config to `require("pi")`, `:Pi*` commands and the `<leader>p`
 keys, and to `/checkpoints` in pi.
@@ -251,7 +254,7 @@ The problems this plugin works against:
 4. **Feedback has nowhere to go.** When you do read the code and have
    something to say about line 42, there is no direct way to put it in
    front of the agent.
-5. **Design drifts early.** In a new codebase the first few chunks set the
+5. **Design drifts early.** In a new codebase the first few checkpoints set the
    invariants. If nobody holds them, the agent defends locally against
    every failure and complexity piles up.
 
@@ -332,8 +335,8 @@ The problems this plugin works against:
 - Feedback has nowhere to go: annotations on any number of lines and files,
   with the diagnostics on them, go straight to the agent.
 - Volume and passive acceptance: checkpoint mode stops the agent at each
-  logical step and after a size cap, and a chunk closes only when you send
-  a review. There is no accept button. It is off by default and switched per
+  logical step and after a size cap, and a checkpoint closes only when you
+  continue it with a review. There is no accept button. It is off by default and switched per
   repository, because not every project needs it.
 
 ## Related tools
