@@ -136,14 +136,24 @@ function M.prompt(text, context)
   end)
 end
 
+-- The notice explaining why buf cannot be annotated, or nil for a real file buffer. Real files of
+-- any worktree pass: session.ensure switches to the worktree's session.
+local function annotate_refusal(buf)
+  local name = vim.api.nvim_buf_get_name(buf)
+  if name:match("^diffview://") or name:match("^pi://.*@to$") then
+    return "pi: past checkpoints are read-only — annotate the file itself"
+  end
+  if name == "" or name:match("^pi://") or vim.bo[buf].buftype ~= "" then
+    return "pi: annotate your file — in a diff, the right side"
+  end
+end
+
 -- Places the annotation right away, so the note survives even when pi is unreachable; it is saved
 -- as a draft once attached.
 function M.annotate(buf, start_line, end_line, note)
-  -- Without an attached session the root is unknown, so only the buffer itself is checked.
-  local name = vim.api.nvim_buf_get_name(buf)
-  local file_buffer = name ~= "" and not name:match("^pi://") and not name:match("^diffview://") and vim.bo[buf].buftype == ""
-  if not file_buffer or (session.root and not relpath(buf, session.root)) then
-    return vim.notify("pi: annotate your file — in a diff, the right side")
+  local refusal = annotate_refusal(buf)
+  if refusal then
+    return vim.notify(refusal)
   end
   annotations.add(buf, start_line, end_line, note)
   session.ensure(function()
@@ -314,6 +324,10 @@ end
 local function annotate_command(cmd)
   local buf = vim.api.nvim_get_current_buf()
   local start_line, end_line = range_of(cmd)
+  local refusal = annotate_refusal(buf)
+  if refusal then
+    return vim.notify(refusal)
+  end
   vim.ui.input({ prompt = "pi annotation: " }, function(note)
     if note and note ~= "" then
       M.annotate(buf, start_line, end_line, note)

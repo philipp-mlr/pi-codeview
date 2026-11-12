@@ -247,6 +247,52 @@ M["<Tab> and q on the real file outside the chunk tab keep the user's keys"] = f
   session.cached = nil
 end
 
+M["<Tab> and q outside the chunk tab run global maps; buffer-local wins"] = function()
+  vim.cmd("tabnew")
+  local root = open_two_files("globals")
+  local chunk_tab = vim.api.nvim_get_current_tabpage()
+  local buf = vim.api.nvim_get_current_buf()
+  vim.cmd("tabnew")
+  local other = vim.api.nvim_get_current_tabpage()
+  vim.api.nvim_win_set_buf(0, buf)
+  local tab_calls, global_q = 0, 0
+  vim.keymap.set("n", "<Tab>", function() tab_calls = tab_calls + 1 end, { desc = "global tab" })
+  vim.keymap.set("n", "q", "<Cmd>lua _G.pi_global_q = (_G.pi_global_q or 0) + 1<CR>", { desc = "global q" })
+  press("<Tab>")
+  press("q")
+  assert(tab_calls == 1, "global <Tab> not run: " .. tab_calls)
+  assert(_G.pi_global_q == 1, "global q not run: " .. tostring(_G.pi_global_q))
+  assert(vim.api.nvim_get_current_tabpage() == other)
+  vim.keymap.del("n", "<Tab>")
+  vim.keymap.del("n", "q")
+  _G.pi_global_q = nil
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_tabpage(chunk_tab)
+  vim.cmd("tabclose")
+  diff.cleanup()
+  vim.cmd("tabclose")
+
+  -- buffer-local wins over global
+  vim.cmd("tabnew")
+  local buf2 = vim.fn.bufadd(root .. "/a.txt")
+  vim.fn.bufload(buf2)
+  local local_calls, global_calls = 0, 0
+  vim.keymap.set("n", "<Tab>", function() global_calls = global_calls + 1 end, { desc = "global tab" })
+  vim.keymap.set("n", "<Tab>", function() local_calls = local_calls + 1 end, { buffer = buf2, desc = "user" })
+  open_chunk(root, vim.trim(vim.fn.system({ "git", "-C", root, "rev-parse", "HEAD" })))
+  local chunk2 = vim.api.nvim_get_current_tabpage()
+  vim.cmd("tabnew")
+  vim.api.nvim_win_set_buf(0, buf2)
+  press("<Tab>")
+  assert(local_calls == 1 and global_calls == 0, local_calls .. "/" .. global_calls)
+  vim.keymap.del("n", "<Tab>")
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_tabpage(chunk2)
+  vim.cmd("tabclose")
+  vim.cmd("tabclose")
+  session.cached = nil
+end
+
 M["winbar shows the help line with keys or commands"] = function()
   local keys = require("pi.keys")
   local saved = keys.mapped

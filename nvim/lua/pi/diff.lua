@@ -94,16 +94,29 @@ end
 
 -- Outside the chunk tab the pi key must act as if it were not mapped: run the user's own
 -- buffer-local map for lhs if there was one, otherwise the plain key.
+local function global_map(lhs)
+  local wanted = vim.keycode(lhs)
+  for _, map in ipairs(vim.api.nvim_get_keymap("n")) do
+    if vim.keycode(map.lhs) == wanted then
+      return map
+    end
+  end
+end
+
 local function passthrough(buf, lhs)
   local count = vim.v.count > 0 and tostring(vim.v.count1) or ""
-  local saved = mapped[buf] and mapped[buf][lhs]
+  local saved = mapped[buf] and mapped[buf][lhs] or global_map(lhs)
   if saved then
     if saved.callback then
       return saved.callback()
     end
     local rhs = saved.rhs or ""
     if saved.expr == 1 then
-      rhs = vim.api.nvim_eval(rhs)
+      local ok, value = pcall(vim.api.nvim_eval, rhs)
+      if not ok then
+        return feed(count .. lhs, false)
+      end
+      rhs = value
     end
     return feed(count .. rhs, saved.noremap ~= 1)
   end

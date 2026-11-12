@@ -140,7 +140,7 @@ M["annotate keeps the note when no pi session is reachable"] = function()
   annotations.clear()
 end
 
-M["annotate refuses buffers that are not files in the attached root"] = function()
+M["annotate refuses buffers that are not real files"] = function()
   annotations.clear()
   local dir = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()
   vim.fn.mkdir(dir, "p")
@@ -150,9 +150,9 @@ M["annotate refuses buffers that are not files in the attached root"] = function
   local old_root = session.root
   session.root = dir
   local notice = "pi: annotate your file — in a diff, the right side"
-  local function refused(buf)
+  local function refused(buf, expected)
     local notes = capture_notify(function() pi.annotate(buf, 1, 1, "x") end)
-    assert(#notes == 1 and notes[1].msg == notice, vim.inspect(notes))
+    assert(#notes == 1 and notes[1].msg == (expected or notice), vim.inspect(notes))
     assert(#annotations.list(dir) == 0, "annotation was added")
   end
   local scratch = vim.api.nvim_create_buf(false, true)
@@ -161,12 +161,18 @@ M["annotate refuses buffers that are not files in the attached root"] = function
   refused(scratch)
   local dv = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_name(dv, "diffview://x/a.txt")
-  refused(dv)
+  refused(dv, "pi: past checkpoints are read-only — annotate the file itself")
   local outside = vim.fn.tempname()
   vim.fn.writefile({ "o" }, outside)
   local out = vim.fn.bufadd(outside)
   vim.fn.bufload(out)
-  refused(out)
+  local old_runtime = vim.env.XDG_RUNTIME_DIR
+  vim.env.XDG_RUNTIME_DIR = dir .. "/run"
+  local notes_out = capture_notify(function() pi.annotate(out, 1, 1, "elsewhere") end)
+  vim.env.XDG_RUNTIME_DIR = old_runtime
+  assert(not vim.tbl_contains(vim.tbl_map(function(n) return n.msg end, notes_out), notice), vim.inspect(notes_out))
+  assert(#vim.api.nvim_buf_call(out, function() return annotations.at_cursor() end) == 1, "other-worktree annotation missing")
+  annotations.clear()
   local old_env = vim.env.XDG_RUNTIME_DIR
   vim.env.XDG_RUNTIME_DIR = dir .. "/run"
   local buf = vim.fn.bufadd(dir .. "/a.txt")
@@ -185,6 +191,41 @@ M["annotate refuses buffers that are not files in the attached root"] = function
   local placed = vim.api.nvim_buf_call(fresh, function() return annotations.at_cursor() end)
   assert(#placed == 1, "unsaved new file annotation missing")
   session.root = old_root
+  annotations.clear()
+end
+
+M["annotate command refuses before asking for the note, with the right message"] = function()
+  annotations.clear()
+  local read_only = "pi: past checkpoints are read-only — annotate the file itself"
+  local own = "pi: annotate your file — in a diff, the right side"
+  local function name_buf(name)
+    local b = vim.api.nvim_create_buf(false, true)
+    if name then vim.api.nvim_buf_set_name(b, name) end
+    return b
+  end
+  local cases = {
+    { name_buf(), own },
+    { name_buf("pi://2/c.txt@from"), own },
+    { name_buf("pi://2/c.txt@to"), read_only },
+    { name_buf("diffview://y/c.txt"), read_only },
+  }
+  local original_input = vim.ui.input
+  local asked = 0
+  vim.ui.input = function() asked = asked + 1 end
+  for _, case in ipairs(cases) do
+    vim.api.nvim_set_current_buf(case[1])
+    local notes = capture_notify(function() vim.cmd("PiAnnotate") end)
+    assert(#notes == 1 and notes[1].msg == case[2], vim.inspect(notes))
+  end
+  assert(asked == 0, "asked for a note before refusing")
+  -- A real file is asked.
+  local dir = vim.uv.fs_realpath(vim.fn.tempname() .. "") or vim.fn.tempname()
+  local file = vim.fn.tempname()
+  vim.fn.writefile({ "x" }, file)
+  vim.cmd("edit " .. vim.fn.fnameescape(file))
+  vim.cmd("PiAnnotate")
+  vim.ui.input = original_input
+  assert(asked == 1, "real file was not asked")
   annotations.clear()
 end
 
