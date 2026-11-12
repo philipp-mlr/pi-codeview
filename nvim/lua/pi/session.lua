@@ -409,29 +409,43 @@ function M.status_line()
   return "idle"
 end
 
--- Statusline text: "pi: <label>[ [checkpoints]] · <state>"; "" when not attached. Reads the cache only.
-function M.statusline()
+-- Statusline pieces { text, hl } ({} when not attached); hl is nil for plain text. The waiting
+-- checkpoint carries PiCheckpointWaiting. Reads the cache only.
+function M.statusline_parts()
   if not M.connected() or not M.cached then
-    return ""
+    return {}
   end
-  local state
   local open_chunk = M.cached.openChunk
   local current = M.cached.activity
-  if type(open_chunk) == "table" then
-    state = "checkpoint " .. open_chunk.n
-  elseif type(current) == "table" and current.tool then
+  -- The checkpoint number already says checkpoint mode is on, so "[checkpoints]" is left out then.
+  local waiting = type(open_chunk) == "table"
+  local mode = (M.cached.mode == "checkpoints" and not waiting) and " [checkpoints]" or ""
+  local head = ("pi: %s%s · "):format(M.label(M.cached), mode)
+  if waiting then
+    return { { text = head }, { text = "checkpoint " .. open_chunk.n, hl = "PiCheckpointWaiting" } }
+  end
+  local state
+  if type(current) == "table" and current.tool then
     local target = current.target
     state = "working · " .. current.tool
     if type(target) == "string" and target ~= "" then
-      state = state .. " " .. (vim.fn.strchars(target) > 40 and vim.fn.strcharpart(target, 0, 40) or target)
+      state = state .. " " .. (vim.fn.strchars(target) > 40 and vim.fn.strcharpart(target, 0, 40) .. "…" or target)
     end
   elseif M.cached.busy then
     state = "working"
   else
     state = "idle"
   end
-  local mode = M.cached.mode == "checkpoints" and " [checkpoints]" or ""
-  return ("pi: %s%s · %s"):format(M.label(M.cached), mode, state)
+  return { { text = head .. state } }
+end
+
+-- Statusline text: "pi: <label>[ [checkpoints]] · <state>"; "" when not attached. Reads the cache only.
+function M.statusline()
+  local text = {}
+  for _, part in ipairs(M.statusline_parts()) do
+    text[#text + 1] = part.text
+  end
+  return table.concat(text)
 end
 
 -- Label of the attached session for the statusline; "" when not attached.

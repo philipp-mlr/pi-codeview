@@ -54,9 +54,33 @@ M["a changed file is reloaded and marked on exactly the changed lines"] = functi
   assert(vim.deep_equal(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "one", "TWO", "three", "four", "five" }))
   local got = marks(buf)
   assert(#got == 2, vim.inspect(got))
-  assert(got[1].line == 2 and got[1].sign == "┃" and got[1].hl == "PiLiveSignChange", vim.inspect(got))
-  assert(got[2].line == 5 and got[2].sign == "┃" and got[2].hl == "PiLiveSignAdd", vim.inspect(got))
+  assert(got[1].line == 2 and got[1].sign == "▎" and got[1].hl == "PiLiveSignChange", vim.inspect(got))
+  assert(got[2].line == 5 and got[2].sign == "▎" and got[2].hl == "PiLiveSignAdd", vim.inspect(got))
   live.clear()
+end
+
+M["line_hl places PiLive on changed lines only when enabled"] = function()
+  local root, base = repo()
+  local buf = open(root, "a.txt")
+  write_later(root .. "/a.txt", { "one", "TWO", "three", "four" })
+  local function line_hls()
+    local out = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
+      out[#out + 1] = m[4].line_hl_group or false
+    end
+    return out
+  end
+  live.refresh(root, base)
+  wait_for(function() return #marks(buf) == 1 end)
+  assert(vim.deep_equal(line_hls(), { false }), vim.inspect(line_hls()))
+  live.clear()
+  live.line_hl = true
+  live.refresh(root, base)
+  wait_for(function() return #marks(buf) == 1 end)
+  local got = line_hls()
+  live.line_hl = false
+  live.clear()
+  assert(vim.deep_equal(got, { "PiLive" }), vim.inspect(got))
 end
 
 M["a deleted-only hunk is marked on the line above"] = function()

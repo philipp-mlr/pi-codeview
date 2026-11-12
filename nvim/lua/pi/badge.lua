@@ -131,7 +131,7 @@ function M.update(state)
   end
   if state.chunk then
     spinning = false
-    label = ("pi · checkpoint %s waiting — %s continue"):format(state.chunk, keys.label("continue", ":PiContinue"))
+    label = ("pi · ⏸ %s · %s continue"):format(state.chunk, keys.label("continue", ":PiContinue"))
     stop_timer()
   elseif state.busy then
     spinning = true
@@ -139,7 +139,7 @@ function M.update(state)
       local target = state.target
       if type(target) == "string" and target ~= "" then
         if vim.fn.strchars(target) > TARGET_MAX_CHARS then
-          target = vim.fn.strcharpart(target, 0, TARGET_MAX_CHARS)
+          target = vim.fn.strcharpart(target, 0, TARGET_MAX_CHARS) .. "…"
         end
         label = ("pi · %s %s"):format(state.tool, target)
       else

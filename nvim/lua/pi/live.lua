@@ -4,6 +4,9 @@ local discover = require("pi.discover")
 
 local M = {}
 
+M.sign = "▎" -- setup({ live = { sign = ... } })
+M.line_hl = false -- setup({ live = { line_hl = true } }) also highlights changed lines
+
 local DEBOUNCE_MS = 150
 local ns = vim.api.nvim_create_namespace("pi_live")
 
@@ -75,7 +78,7 @@ local function place(buf, hunks)
     else
       local group = count_a == 0 and "PiLiveSignAdd" or "PiLiveSignChange"
       for line = start_b, start_b + count_b - 1 do
-        mark(buf, line, "┃", group, "PiLive")
+        mark(buf, line, M.sign, group, M.line_hl and "PiLive" or nil)
       end
     end
   end

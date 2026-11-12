@@ -123,6 +123,11 @@ function M.status()
   return session.status_line()
 end
 
+-- The statusline as { { text, hl } ... } (hl nil for plain text); {} when not attached.
+function M.statusline_parts()
+  return session.statusline_parts()
+end
+
 -- "pi: <label>[ [checkpoints]] · <state>" for the statusline; "" when not attached. Reads cached state only.
 function M.statusline()
   return session.statusline()
@@ -485,6 +490,9 @@ function M.setup(opts)
   diff.mode = opts.diff or "auto"
   M.auto_open_panel = (opts.panel or {}).auto_open ~= false
 
+  local live_opts = opts.live or {}
+  live.sign = live_opts.sign or "▎"
+  live.line_hl = live_opts.line_hl == true
   highlights.define()
   badge.enabled = opts.badge ~= false
   if not badge.enabled then

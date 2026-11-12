@@ -163,12 +163,13 @@ local function detail_lines(chunk, width)
   local counts = stats[chunk.n]
   for _, path in ipairs(files_of(chunk)) do
     local info = "…"
+    local by_agent = vim.tbl_contains(chunk.agentFiles or {}, path)
     if counts == "failed" then
       info = "?"
     elseif type(counts) == "table" then
-      info = "+0 −0"
+      info = by_agent and "+0 −0" or "(you)"
       for _, entry in ipairs(counts) do
-        if entry.path == path then
+        if entry.path == path and by_agent then
           info = ("+%d −%d"):format(entry.added, entry.removed)
         end
       end
@@ -213,7 +214,7 @@ local function render()
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, { line_hl_group = "Comment" })
   for lnum in pairs(waiting_lines) do
-    vim.api.nvim_buf_set_extmark(buf, ns, lnum - 1, 0, { line_hl_group = "PiCheckpointWaiting" })
+    vim.api.nvim_buf_set_extmark(buf, ns, lnum - 1, 0, { line_hl_group = "PiCheckpointWaitingRow" })
   end
 end
 

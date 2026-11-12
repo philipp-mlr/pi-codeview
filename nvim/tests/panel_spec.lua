@@ -177,7 +177,7 @@ M["panel: open checkpoint first, then newest first, title falls back to the note
   local marks = vim.api.nvim_buf_get_extmarks(buf, -1, 0, -1, { details = true })
   local groups = {}
   for _, m in ipairs(marks) do groups[m[2]] = m[4].line_hl_group end
-  assert(groups[0] == "Comment" and groups[1] == "PiCheckpointWaiting" and groups[2] == nil, vim.inspect(groups))
+  assert(groups[0] == "Comment" and groups[1] == "PiCheckpointWaitingRow" and groups[2] == nil, vim.inspect(groups))
   local long = open_panel({ chunk(1, "reviewed", { title = ("x"):rep(60) }) })
   local row = lines(long)[2]
   assert(vim.fn.strdisplaywidth(row) <= 60 and row:find("…", 1, true), row)
@@ -219,6 +219,19 @@ M["panel: za expands note, files with counts and annotations, and collapses agai
   vim.api.nvim_win_set_cursor(0, { 2, 0 })
   press("za")
   assert(#lines(buf) == 2, vim.inspect(lines(buf)))
+end
+
+M["panel: files only you changed show (you), agent files keep counts"] = function()
+  local list = { chunk(1, "reviewed", { agentFiles = { "a.txt", "b.txt" }, humanFiles = { "b.txt", "c.txt" } }) }
+  local buf = open_panel(list, function()
+    return { chunk = list[1], stats = { { path = "a.txt", added = 0, removed = 0 }, { path = "b.txt", added = 2, removed = 1 }, { path = "c.txt", added = 4, removed = 4 } } }
+  end)
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  press("za")
+  local l = lines(buf)
+  assert(l[4] == "    a.txt  +0 −0", vim.inspect(l))
+  assert(l[5] == "    b.txt  +2 −1", vim.inspect(l))
+  assert(l[6] == "    c.txt  (you)", vim.inspect(l))
 end
 
 M["panel: za shows … while the counts load"] = function()

@@ -38,7 +38,7 @@ M["busy without a tool says working; long targets are trimmed to 40 characters"]
   badge.update({ busy = true })
   assert(vim.fn.strcharpart(text(), 1) == " pi · working", text())
   badge.update({ busy = true, tool = "read", target = string.rep("é", 60) })
-  assert(vim.fn.strcharpart(text(), 1) == " pi · read " .. string.rep("é", 40), text())
+  assert(vim.fn.strcharpart(text(), 1) == " pi · read " .. string.rep("é", 40) .. "…", text())
   badge.close()
 end
 
@@ -55,10 +55,10 @@ M["an open checkpoint shows the waiting text without a spinner or timer"] = func
   local mapped = require("pi.keys").mapped
   require("pi.keys").mapped = { continue = "<leader>pc" }
   badge.update({ busy = true, tool = "edit", chunk = 3 })
-  assert(text() == "pi · checkpoint 3 waiting — <leader>pc continue", text())
+  assert(text() == "pi · ⏸ 3 · <leader>pc continue", text())
   require("pi.keys").mapped = {}
   badge.update({ busy = true, tool = "edit", chunk = 3 })
-  assert(text() == "pi · checkpoint 3 waiting — :PiContinue continue", text())
+  assert(text() == "pi · ⏸ 3 · :PiContinue continue", text())
   require("pi.keys").mapped = mapped
   assert(not badge.timer_active())
   badge.update(nil)

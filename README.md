@@ -148,15 +148,27 @@ Statusline, with lualine:
 lualine_x = { function() return require("pi").statusline() end }
 ```
 
+To colour the waiting checkpoint, render the parts (`{ text, hl }`, `hl` is nil for plain text):
+
+```lua
+lualine_x = { function()
+  local out = {}
+  for _, part in ipairs(require("pi").statusline_parts()) do
+    out[#out + 1] = part.hl and ("%#" .. part.hl .. "#" .. part.text .. "%*") or part.text
+  end
+  return table.concat(out)
+end }
+```
+
 It shows `pi: <session> · working · <tool> <target>`, `· working`,
 `· checkpoint N` (a checkpoint is waiting) or `· idle`. `[checkpoints]` follows the
-session name while checkpoint mode is on. It is empty when Neovim is not
+session name while checkpoint mode is on and no checkpoint waits. Long targets end in `…`. It is empty when Neovim is not
 attached to a session. `require("pi").status()` returns `"checkpoint N"`,
 `"working"`, `"idle"` or `""`.
 
 - A small badge in the top-right corner shows that the agent works:
   `⠋ pi · <tool> <target>` or `⠋ pi · working`, with a spinner. While a
-  checkpoint waits it reads `pi · checkpoint N waiting — <leader>pc continue`.
+  checkpoint waits it reads `pi · ⏸ N · <leader>pc continue`.
   With a tabline showing it sits just below it. It never takes focus and is hidden when idle or not attached. Turn it off with
   `setup({ badge = false })`; colors come from the `PiBadge` highlight group
   (links to `PmenuSel`).
@@ -168,13 +180,15 @@ attached to a session. `require("pi").status()` returns `"checkpoint N"`,
   configured keys, or `:PiCheckpoints` / `:PiContinue` when a key is not
   mapped.
 - Open buffers whose file the agent changed reload by themselves.
-- Changed lines get a sign and a light line highlight: `┃` marks added or
-  changed lines (same column as gitsigns), `▁` marks lines deleted below that line. They compare
+- Changed lines get a sign: `▎` marks added or
+  changed lines (a thin bar, unlike gitsigns' `┃`; coloured `Added`/`Changed`/`Removed`), `▁` marks lines deleted below that line. They compare
   against the start of the open checkpoint in checkpoint mode, and against the
   start of the current (or last) agent run otherwise. Your own unsaved edits
   show as marks too.
 - A buffer with unsaved edits is never reloaded. When the agent changes its
   file you get one warning naming it, and your edits stay.
+- `setup({ live = { sign = "▎", line_hl = false } })` changes the glyph; `line_hl = true` also
+  highlights changed lines with `PiLive` (links to `DiffChange`).
 - The highlight groups `PiLive` (line), `PiLiveSignAdd`, `PiLiveSignChange`
   and `PiLiveSignDelete` (signs) can be overridden.
 
@@ -182,7 +196,7 @@ attached to a session. `require("pi").status()` returns `"checkpoint N"`,
 
 `<leader>pn` on a line, or on a visual range, opens the editor for a note.
 The note shows below the range as `✎ <text>`, at most 2 wrapped lines
-(highlight `PiAnnotation`; `<leader>pk` shows it in full), with a `✎` sign on the first line and the line numbers of
+(italic, in the `Comment` colour: highlight `PiAnnotation`; `<leader>pk` shows it in full), with a `✎` sign on the first line and the line numbers of
 the range highlighted (`PiAnnotationSign`). `<leader>px` removes the one
 under the cursor.
 

@@ -420,11 +420,42 @@ M["highlight links are restored after a colorscheme change"] = function()
   pi.setup({})
   vim.cmd("hi clear")
   vim.cmd("doautocmd ColorScheme")
-  assert(vim.api.nvim_get_hl(0, { name = "PiAnnotation" }).link == "DiagnosticInfo")
-  assert(vim.api.nvim_get_hl(0, { name = "PiLive" }).link == "CursorLine")
-  assert(vim.api.nvim_get_hl(0, { name = "PiLiveSignAdd" }).link == "DiagnosticHint")
-  assert(vim.api.nvim_get_hl(0, { name = "PiLiveSignChange" }).link == "DiagnosticInfo")
-  assert(vim.api.nvim_get_hl(0, { name = "PiLiveSignDelete" }).link == "DiagnosticWarn")
+  assert(vim.api.nvim_get_hl(0, { name = "PiLive" }).link == "DiffChange")
+  assert(vim.api.nvim_get_hl(0, { name = "PiLiveSignAdd" }).link == "Added")
+  assert(vim.api.nvim_get_hl(0, { name = "PiLiveSignChange" }).link == "Changed")
+  assert(vim.api.nvim_get_hl(0, { name = "PiLiveSignDelete" }).link == "Removed")
+  assert(vim.api.nvim_get_hl(0, { name = "PiAnnotationSign" }).link == "Special")
+  assert(vim.api.nvim_get_hl(0, { name = "PiCheckpointWaiting" }).link == "DiagnosticWarn")
+end
+
+M["PiAnnotation is italic in Comment's colour, recomputed on ColorScheme, linked without a Comment fg"] = function()
+  pi.setup({})
+  vim.api.nvim_set_hl(0, "Comment", { fg = 0x123456 })
+  vim.cmd("hi clear PiAnnotation")
+  vim.cmd("doautocmd ColorScheme")
+  local hl = vim.api.nvim_get_hl(0, { name = "PiAnnotation" })
+  assert(hl.italic and hl.fg == 0x123456, vim.inspect(hl))
+  vim.api.nvim_set_hl(0, "Comment", { fg = 0x654321 })
+  vim.cmd("hi clear PiAnnotation")
+  vim.cmd("doautocmd ColorScheme")
+  assert(vim.api.nvim_get_hl(0, { name = "PiAnnotation" }).fg == 0x654321)
+  vim.api.nvim_set_hl(0, "Comment", { italic = true })
+  vim.cmd("hi clear PiAnnotation")
+  vim.cmd("doautocmd ColorScheme")
+  assert(vim.api.nvim_get_hl(0, { name = "PiAnnotation" }).link == "Comment")
+  vim.api.nvim_set_hl(0, "PiAnnotation", { fg = 0xabcdef })
+  vim.cmd("doautocmd ColorScheme")
+  assert(vim.api.nvim_get_hl(0, { name = "PiAnnotation" }).fg == 0xabcdef, "user definition must survive")
+  vim.api.nvim_set_hl(0, "Comment", { fg = 0x808080, italic = true })
+end
+
+M["setup live options set the sign and line highlight"] = function()
+  local live = require("pi.live")
+  pi.setup({})
+  assert(live.sign == "▎" and live.line_hl == false)
+  pi.setup({ live = { sign = "┆", line_hl = true } })
+  assert(live.sign == "┆" and live.line_hl == true)
+  pi.setup({})
 end
 
 
@@ -798,8 +829,26 @@ M["statusline says checkpoint N while a checkpoint waits"] = function()
   session.cached = { name = "x", openChunk = { n = 3 }, mode = "checkpoints" }
   local line, short = session.statusline(), session.status_line()
   session.connected, session.cached = real.connected, real.cached
-  assert(line == "pi: x [checkpoints] · checkpoint 3", line)
+  assert(line == "pi: x · checkpoint 3", line)
   assert(short == "checkpoint 3", short)
+end
+
+M["statusline_parts colours checkpoint N and leaves other states plain"] = function()
+  local session = require("pi.session")
+  local real = { connected = session.connected, cached = session.cached }
+  session.connected = function() return true end
+  session.cached = { name = "x", openChunk = { n = 3 }, mode = "checkpoints" }
+  local waiting = pi.statusline_parts()
+  session.cached = { name = "x", activity = { tool = "read", target = string.rep("é", 50) }, mode = "checkpoints" }
+  local working = pi.statusline_parts()
+  local working_line = pi.statusline()
+  session.cached = nil
+  local detached = pi.statusline_parts()
+  session.connected, session.cached = real.connected, real.cached
+  assert(vim.deep_equal(waiting, { { text = "pi: x · " }, { text = "checkpoint 3", hl = "PiCheckpointWaiting" } }), vim.inspect(waiting))
+  assert(#working == 1 and working[1].hl == nil, vim.inspect(working))
+  assert(working_line == "pi: x [checkpoints] · working · read " .. string.rep("é", 40) .. "…", working_line)
+  assert(vim.deep_equal(detached, {}))
 end
 
 M["outside_worktree event shows the warning text via WARN"] = function()
