@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ActivityLog, toolLine } from "./activity.ts";
-import { diffText, fileStats, numstat, parseMode, pruneRefs, readConfig, repoHash, showFile, snapshot, writeMode } from "./git.ts";
+import { diffText, fileStats, numstat, parseMode, pruneRefs, readConfig, readOpenCommand, repoHash, showFile, snapshot, writeMode } from "./git.ts";
 import type { Mode } from "./git.ts";
 import { LineDecoder, PROTOCOL_VERSION, encode } from "./protocol.ts";
 import type { EventName, PromptContext, Request } from "./protocol.ts";
@@ -696,11 +696,20 @@ export class ReviewLoop {
     if (!yes) {
       return this.notify(`pi: checkpoint ${n} waits — review it in Neovim or run /checkpoints continue <note>`, "info");
     }
-    const opened = await openInNeovim({ root: this.root, sessionId: this.sessionId, runtimeDir: process.env.XDG_RUNTIME_DIR });
+    const opened = await openInNeovim({
+      root: this.root,
+      sessionId: this.sessionId,
+      runtimeDir: process.env.XDG_RUNTIME_DIR,
+      openCommand: await readOpenCommand(this.root),
+    });
     if (this.stopped) return;
-    if (opened === "nvim") this.notify(`pi: checkpoint ${n} opened in Neovim`, "info");
-    else if (opened === "herdr") this.notify(`pi: checkpoint ${n} opens in a new Neovim pane`, "info");
-    else this.notify(`pi: open Neovim in ${this.root} and run :PiCheckpoints (default <leader>pv)`, "info");
+    if (opened.opened === "nvim") this.notify(`pi: checkpoint ${n} opened in Neovim`, "info");
+    else if (opened.opened === "pane") this.notify(`pi: checkpoint ${n} opens in a new Neovim pane (${opened.tool})`, "info");
+    else if (opened.opened === "command") this.notify(`pi: checkpoint ${n} opens via pi-nvim.openCommand`, "info");
+    else {
+      if (opened.commandExit !== undefined) this.notify(`pi: pi-nvim.openCommand failed (exit ${opened.commandExit})`, "info");
+      this.notify(`pi: open Neovim in ${this.root} and run :PiCheckpoints (default <leader>pv)`, "info");
+    }
   }
 
   private persist(): void {

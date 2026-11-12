@@ -23,13 +23,16 @@ let runtimeDir: string;
 const cleanups: Array<() => Promise<void> | void> = [];
 
 // pi runs inside herdr and Neovim terminals; the open-in-Neovim paths must only see what a test sets.
-const savedEnv = { NVIM: process.env.NVIM, HERDR_PANE_ID: process.env.HERDR_PANE_ID };
+const savedEnv = { NVIM: process.env.NVIM, HERDR_PANE_ID: process.env.HERDR_PANE_ID, TMUX: process.env.TMUX, TMUX_PANE: process.env.TMUX_PANE, ZELLIJ: process.env.ZELLIJ };
 
 beforeEach(() => {
   runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "cv-"));
   process.env.XDG_RUNTIME_DIR = runtimeDir;
   delete process.env.NVIM;
   delete process.env.HERDR_PANE_ID;
+  delete process.env.TMUX;
+  delete process.env.TMUX_PANE;
+  delete process.env.ZELLIJ;
 });
 
 afterEach(async () => {
@@ -1188,13 +1191,13 @@ describe("pi-nvim tools restored by /tree", () => {
 });
 
 describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
-  type Run = { cmd: string; args: string[] };
+  type Run = { cmd: string; args: string[]; options?: { cwd?: string; env?: Record<string, string> } };
 
   /** Replaces the process runner; `answer` gives the stdout per call, null for a failed command. */
   function stubRunner(answer: (cmd: string, args: string[]) => string | null): Run[] {
     const runs: Run[] = [];
-    vi.spyOn(processRunner, "run").mockImplementation(async (cmd: string, args: string[]) => {
-      runs.push({ cmd, args });
+    vi.spyOn(processRunner, "run").mockImplementation(async (cmd: string, args: string[], _timeoutMs, options) => {
+      runs.push(options?.cwd || options?.env ? { cmd, args, options: { cwd: options.cwd, env: options.env } } : { cmd, args });
       const out = answer(cmd, args);
       return out === null ? { code: 1, stdout: "" } : { code: 0, stdout: out };
     });
@@ -1294,7 +1297,7 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     await new Promise<void>((res) => server.listen(sock, res));
     cleanups.push(() => new Promise<void>((res) => server.close(() => res())));
     const runs = stubRunner((cmd, args) => (cmd === "nvim" && args[1] === sock ? "ok" : null));
-    expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {} })).toBe("nvim");
+    expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {} })).toMatchObject({ opened: "nvim" });
     expect(runs.map((r) => r.args[1])).toEqual([sock]);
   });
 
@@ -1320,11 +1323,11 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     cleanups.push(() => new Promise<void>((res) => server.close(() => res())));
     const runs = stubRunner((cmd, args) => (cmd === "nvim" && args[1] === sock ? "ok" : null));
     process.env.USER = "fallbackuser";
-    expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {} })).toBe("nvim");
+    expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {} })).toMatchObject({ opened: "nvim" });
     expect(runs.map((r) => r.args[1])).toEqual([sock]);
     delete process.env.USER;
     runs.length = 0;
-    expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {} })).not.toBe("nvim");
+    expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {} })).not.toMatchObject({ opened: "nvim" });
     expect(runs.some((r) => r.cmd === "nvim")).toBe(false);
   });
 
@@ -1350,7 +1353,102 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
       },
       { cmd: "herdr", args: ["pane", "run", "w1:p9", `nvim -c "lua require('pi').review(vim.env.PI_NVIM_ROOT, vim.env.PI_NVIM_SESSION)"`] },
     ]);
-    await until(() => fake.notifications.some((n) => n.message === "pi: checkpoint 1 opens in a new Neovim pane"));
+    await until(() => fake.notifications.some((n) => n.message === "pi: checkpoint 1 opens in a new Neovim pane (herdr)"));
+  });
+
+  const LUA = "lua require('pi').review(vim.env.PI_NVIM_ROOT, vim.env.PI_NVIM_SESSION)";
+
+  it("openCommand: splits on whitespace, fills {root}/{session}, expands {nvim}, runs in root with the review env", async () => {
+    const runs = stubRunner(() => "");
+    const result = await openInNeovim({
+      root: "/repo", sessionId: "s1", runtimeDir: undefined, env: { HERDR_PANE_ID: "p", TMUX: "x" },
+      openCommand: "wezterm cli split-pane --right --cwd {root} -- {nvim}  --id={session}",
+    });
+    expect(result).toEqual({ opened: "command" });
+    expect(runs).toEqual([
+      {
+        cmd: "wezterm",
+        args: ["cli", "split-pane", "--right", "--cwd", "/repo", "--", "nvim", "-c", LUA, "--id=s1"],
+        options: { cwd: "/repo", env: { PI_NVIM_ROOT: "/repo", PI_NVIM_SESSION: "s1" } },
+      },
+    ]);
+  });
+
+  it("openCommand failing → reports the exit code, tries no built-in", async () => {
+    const runs = stubRunner(() => null);
+    const result = await openInNeovim({
+      root: "/repo", sessionId: "s", runtimeDir: undefined, env: { HERDR_PANE_ID: "p", TMUX: "x", ZELLIJ: "0" }, openCommand: "kitty @ launch {nvim}",
+    });
+    expect(result).toEqual({ opened: "hint", commandExit: 1 });
+    expect(runs.map((r) => r.cmd)).toEqual(["kitty"]);
+  });
+
+  it("herdr wins over tmux and zellij when all are set", async () => {
+    const runs = stubRunner((cmd, args) => (cmd === "herdr" && args[1] === "split" ? JSON.stringify({ result: { pane: { pane_id: "p9" } } }) : ""));
+    const result = await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: { HERDR_PANE_ID: "p1", TMUX: "x", ZELLIJ: "0" } });
+    expect(result).toEqual({ opened: "pane", tool: "herdr" });
+    expect(runs.every((r) => r.cmd === "herdr")).toBe(true);
+  });
+
+  it("tmux: one split-window call with the nvim command as separate argv entries, next to pi's pane", async () => {
+    const runs = stubRunner(() => "");
+    const result = await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: { TMUX: "/tmp/tmux-1/default,1,0", TMUX_PANE: "%3", ZELLIJ: "0" } });
+    expect(result).toEqual({ opened: "pane", tool: "tmux" });
+    expect(runs).toEqual([
+      { cmd: "tmux", args: ["split-window", "-h", "-c", "/repo", "-e", "PI_NVIM_ROOT=/repo", "-e", "PI_NVIM_SESSION=s", "-t", "%3", "nvim", "-c", LUA] },
+    ]);
+  });
+
+  it("tmux without $TMUX_PANE omits -t", async () => {
+    const runs = stubRunner(() => "");
+    await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: { TMUX: "x" } });
+    expect(runs[0].args).not.toContain("-t");
+  });
+
+  it("zellij: run to the right in root, env through env(1)", async () => {
+    const runs = stubRunner(() => "");
+    const result = await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: { ZELLIJ: "0" } });
+    expect(result).toEqual({ opened: "pane", tool: "zellij" });
+    expect(runs).toEqual([
+      { cmd: "zellij", args: ["run", "--direction", "right", "--cwd", "/repo", "--", "env", "PI_NVIM_ROOT=/repo", "PI_NVIM_SESSION=s", "nvim", "-c", LUA] },
+    ]);
+  });
+
+  it("a failing tmux split → hint", async () => {
+    stubRunner(() => null);
+    expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: { TMUX: "x" } })).toEqual({ opened: "hint" });
+  });
+
+  it("loop: pi-nvim.openCommand from git config, and the notices per opener", async () => {
+    const repo = await makeRepo();
+    await repo.git("config", "pi-nvim.openCommand", "myterm --dir {root} {nvim}");
+    const fake = await start(repo, { mode: "checkpoints" });
+    const runs = stubRunner((cmd) => (cmd === "myterm" ? "" : null));
+    fake.setConfirmAnswer(true);
+    await openCheckpoint(fake, repo);
+    await until(() => fake.notifications.some((n) => n.message === "pi: checkpoint 1 opens via pi-nvim.openCommand"));
+    expect(runs.at(-1)?.cmd).toBe("myterm");
+  });
+
+  it("loop: failing openCommand → exit notice, then the hint", async () => {
+    const repo = await makeRepo();
+    await repo.git("config", "pi-nvim.openCommand", "myterm {nvim}");
+    const fake = await start(repo, { mode: "checkpoints" });
+    stubRunner(() => null);
+    fake.setConfirmAnswer(true);
+    await openCheckpoint(fake, repo);
+    await until(() => fake.notifications.some((n) => n.message === "pi: pi-nvim.openCommand failed (exit 1)"));
+    await until(() => fake.notifications.at(-1)?.message === `pi: open Neovim in ${repo.root} and run :PiCheckpoints (default <leader>pv)`);
+  });
+
+  it("loop: inside tmux the notice names the tool", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    process.env.TMUX = "x";
+    stubRunner((cmd) => (cmd === "tmux" ? "" : null));
+    fake.setConfirmAnswer(true);
+    await openCheckpoint(fake, repo);
+    await until(() => fake.notifications.some((n) => n.message === "pi: checkpoint 1 opens in a new Neovim pane (tmux)"));
   });
 
   it("yes, no nvim and no herdr → tells Philipp where to open Neovim and which key to press", async () => {

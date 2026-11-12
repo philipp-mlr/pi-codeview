@@ -278,10 +278,22 @@ mode off. Its prompts are never queued, even when it inherited an open checkpoin
 When a checkpoint opens and no Neovim is attached to the session, pi says
 `pi: checkpoint N waiting — no Neovim attached` and asks once "Open checkpoint N
 in Neovim?". Yes opens the checkpoint list in a Neovim already running in that
-worktree (its working directory or current file is inside it); else, inside
-[herdr](https://herdr.dev), it starts Neovim in a new pane to the right of pi's;
-else it tells you to open Neovim in the worktree and run `:PiCheckpoints`
-(default `<leader>pv`). No leaves it waiting: review it in Neovim or run
+worktree (its working directory or current file is inside it); else, in this
+order:
+
+1. `git config pi-nvim.openCommand '<command>'` (repo or global): your own
+   command, e.g. `wezterm cli split-pane --right --cwd {root} -- {nvim}` or
+   `kitty @ launch --location=vsplit --cwd {root} {nvim}`. It is split on
+   whitespace (no quoting, no shell); `{root}` and `{session}` are replaced inside
+   arguments and `{nvim}` becomes `nvim -c "lua require('pi').review(...)"`. It runs
+   in the worktree with `PI_NVIM_ROOT` and `PI_NVIM_SESSION` set; exit 0 means
+   opened. If it fails, pi says `pi-nvim.openCommand failed (exit N)` and shows
+   the hint below without trying the built-ins.
+2. Inside [herdr](https://herdr.dev): a new pane to the right of pi's.
+3. Inside tmux: `tmux split-window -h` next to pi's pane.
+4. Inside zellij: `zellij run --direction right`.
+5. Otherwise it tells you to open Neovim in the worktree and run `:PiCheckpoints`
+   (default `<leader>pv`). No leaves it waiting: review it in Neovim or run
 `/checkpoints continue <note>`.
 `require("pi").review(root, session_id)` is the call pi makes in Neovim.
 

@@ -8,14 +8,19 @@ import * as path from "node:path";
 const REMOTE_EXPR_TIMEOUT_MS = 2000;
 const LIVE_PROBE_TIMEOUT_MS = 300;
 const HERDR_TIMEOUT_MS = 5000;
+const PANE_TIMEOUT_MS = 5000;
+
+/** Working directory and extra environment variables for one command. */
+export type RunOptions = { cwd?: string; env?: Record<string, string> };
 
 export type RunResult = { code: number; stdout: string };
 
 /** Runs external commands; tests replace `run` so no real nvim or herdr pane is started. */
 export const processRunner = {
-  run(cmd: string, args: string[], timeoutMs = REMOTE_EXPR_TIMEOUT_MS): Promise<RunResult> {
+  run(cmd: string, args: string[], timeoutMs = REMOTE_EXPR_TIMEOUT_MS, options: RunOptions = {}): Promise<RunResult> {
     return new Promise((resolve) => {
-      execFile(cmd, args, { timeout: timeoutMs, encoding: "utf8" }, (err, stdout) => {
+      const env = options.env ? { ...process.env, ...options.env } : undefined;
+      execFile(cmd, args, { timeout: timeoutMs, encoding: "utf8", cwd: options.cwd, env }, (err, stdout) => {
         const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
         resolve({ code, stdout: stdout ?? "" });
       });
@@ -23,8 +28,15 @@ export const processRunner = {
   },
 };
 
-/** Where the checkpoint was opened: a running nvim, a new herdr pane, or nowhere (Philipp gets a hint). */
-export type OpenedIn = "nvim" | "herdr" | "hint";
+/**
+ * Where the checkpoint was opened: a running nvim, a new pane of a terminal multiplexer, the user's own
+ * `pi-nvim.openCommand`, or nowhere (Philipp gets a hint; `commandExit` is set when openCommand failed).
+ */
+export type OpenedIn =
+  | { opened: "nvim" }
+  | { opened: "pane"; tool: "herdr" | "tmux" | "zellij" }
+  | { opened: "command" }
+  | { opened: "hint"; commandExit?: number };
 
 function isLiveSocket(sockPath: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -94,11 +106,15 @@ function nvimSockets(runtimeDir: string | undefined, env: NodeJS.ProcessEnv): st
   return env.NVIM ? [env.NVIM, ...sockets.filter((s) => s !== env.NVIM)] : sockets;
 }
 
+const NVIM_REVIEW_LUA = "lua require('pi').review(vim.env.PI_NVIM_ROOT, vim.env.PI_NVIM_SESSION)";
+/** The nvim command line as argv; root and session come from PI_NVIM_ROOT / PI_NVIM_SESSION. */
+const NVIM_ARGV = ["nvim", "-c", NVIM_REVIEW_LUA];
+
 /**
  * The command typed into the new pane's shell. Root and session come from the pane's environment, so
  * nothing in it depends on their characters or on the shell's quoting rules (fish, bash, zsh).
  */
-const HERDR_NVIM_COMMAND = `nvim -c "lua require('pi').review(vim.env.PI_NVIM_ROOT, vim.env.PI_NVIM_SESSION)"`;
+const HERDR_NVIM_COMMAND = `nvim -c "${NVIM_REVIEW_LUA}"`;
 
 /** Asks each running nvim in turn to open the checkpoint list; the first that answers "ok" (its cwd or buffer is in root) wins. */
 async function askRunningNvim(root: string, sessionId: string, runtimeDir: string | undefined, env: NodeJS.ProcessEnv): Promise<boolean> {
@@ -130,15 +146,64 @@ async function openHerdrPane(root: string, sessionId: string, paneId: string): P
   return run.code === 0;
 }
 
-/** Opens the checkpoint list for this session in Neovim: a running nvim in root, else a new herdr pane, else nowhere. */
+/** Splits a tmux pane next to pi's (the `-t` target, when known), in root; tmux runs the argv directly, without a shell. */
+async function openTmuxPane(root: string, sessionId: string, paneId: string | undefined): Promise<boolean> {
+  const target = paneId ? ["-t", paneId] : [];
+  const split = await processRunner.run(
+    "tmux",
+    ["split-window", "-h", "-c", root, "-e", `PI_NVIM_ROOT=${root}`, "-e", `PI_NVIM_SESSION=${sessionId}`, ...target, ...NVIM_ARGV],
+    PANE_TIMEOUT_MS,
+  );
+  return split.code === 0;
+}
+
+/** `zellij run` has no environment flag, so the variables go through env(1). */
+async function openZellijPane(root: string, sessionId: string): Promise<boolean> {
+  const run = await processRunner.run(
+    "zellij",
+    ["run", "--direction", "right", "--cwd", root, "--", "env", `PI_NVIM_ROOT=${root}`, `PI_NVIM_SESSION=${sessionId}`, ...NVIM_ARGV],
+    PANE_TIMEOUT_MS,
+  );
+  return run.code === 0;
+}
+
+/**
+ * Runs `pi-nvim.openCommand`: split on whitespace (no quoting, no shell), `{root}` and `{session}`
+ * substituted inside arguments, `{nvim}` expanded to the separate arguments of the nvim command.
+ * Returns the exit code.
+ */
+async function runOpenCommand(command: string, root: string, sessionId: string): Promise<number> {
+  const argv = command
+    .split(/\s+/)
+    .filter(Boolean)
+    .flatMap((arg) => (arg === "{nvim}" ? NVIM_ARGV : [arg.replaceAll("{root}", root).replaceAll("{session}", sessionId)]));
+  if (argv.length === 0) return 1;
+  const { code } = await processRunner.run(argv[0], argv.slice(1), PANE_TIMEOUT_MS, {
+    cwd: root,
+    env: { PI_NVIM_ROOT: root, PI_NVIM_SESSION: sessionId },
+  });
+  return code;
+}
+
+/**
+ * Opens the checkpoint list for this session in Neovim: a running nvim in root, else `openCommand`
+ * (alone: when it fails the built-ins are not tried), else a new herdr, tmux or zellij pane, else nowhere.
+ */
 export async function openInNeovim(opts: {
   root: string;
   sessionId: string;
   runtimeDir: string | undefined;
+  openCommand?: string | null;
   env?: NodeJS.ProcessEnv;
 }): Promise<OpenedIn> {
   const env = opts.env ?? process.env;
-  if (await askRunningNvim(opts.root, opts.sessionId, opts.runtimeDir, env)) return "nvim";
-  if (env.HERDR_PANE_ID && (await openHerdrPane(opts.root, opts.sessionId, env.HERDR_PANE_ID))) return "herdr";
-  return "hint";
+  if (await askRunningNvim(opts.root, opts.sessionId, opts.runtimeDir, env)) return { opened: "nvim" };
+  if (opts.openCommand) {
+    const code = await runOpenCommand(opts.openCommand, opts.root, opts.sessionId);
+    return code === 0 ? { opened: "command" } : { opened: "hint", commandExit: code };
+  }
+  if (env.HERDR_PANE_ID && (await openHerdrPane(opts.root, opts.sessionId, env.HERDR_PANE_ID))) return { opened: "pane", tool: "herdr" };
+  if (env.TMUX && (await openTmuxPane(opts.root, opts.sessionId, env.TMUX_PANE))) return { opened: "pane", tool: "tmux" };
+  if (env.ZELLIJ !== undefined && (await openZellijPane(opts.root, opts.sessionId))) return { opened: "pane", tool: "zellij" };
+  return { opened: "hint" };
 }

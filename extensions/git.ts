@@ -198,6 +198,12 @@ export async function readConfig(root: string): Promise<PiNvimConfig> {
   };
 }
 
+/** `pi-nvim.openCommand` (repo or global git config); null when unset or blank. */
+export async function readOpenCommand(root: string): Promise<string | null> {
+  const value = await configValue(root, "pi-nvim.openCommand");
+  return value ? value : null;
+}
+
 /** Always writes `pi-nvim.checkpoints` explicitly, so the old `pi-codeview.mode` never overrides a later choice. */
 export async function writeMode(root: string, mode: Mode): Promise<void> {
   await git(root, ["config", "--local", "pi-nvim.checkpoints", mode === "checkpoints" ? "true" : "false"]);
