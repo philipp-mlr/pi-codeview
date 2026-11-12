@@ -1473,6 +1473,61 @@ M["review: \"not here\" when neither the cwd nor the current file is in root"] =
   assert(ok, err)
 end
 
+M["review: a nested worktree inside root is not root"] = function()
+  local root = git_root("rv-n")
+  local nested = root .. "/nested"
+  vim.fn.mkdir(nested, "p")
+  vim.system({ "git", "init", "-q", nested }):wait()
+  vim.fn.writefile({ "x" }, nested .. "/g.txt")
+  nested = vim.uv.fs_realpath(nested)
+  local cwd = vim.uv.cwd()
+  vim.cmd("enew")
+  vim.cmd("cd " .. vim.fn.fnameescape(nested))
+  local restore, requests = fake_sessions(root)
+  local ok, err = pcall(function()
+    assert(pi.review(root, "two") == "not here", "cwd in a nested worktree matched the main repo")
+    vim.cmd("edit " .. vim.fn.fnameescape(nested .. "/g.txt"))
+    vim.cmd("cd " .. vim.fn.fnameescape(git_root("rv-m")))
+    assert(pi.review(root, "two") == "not here", "a file of a nested worktree matched the main repo")
+    vim.wait(50)
+    assert(#requests == 0, vim.inspect(requests))
+  end)
+  restore()
+  vim.cmd("cd " .. vim.fn.fnameescape(cwd))
+  vim.cmd("enew")
+  assert(ok, err)
+end
+
+M["toggle_mode: turns the repo mode off when this session can't be reviewed"] = function()
+  local session = require("pi.session")
+  local real = session.request
+  local sent = {}
+  session.request = function(type, payload, cb)
+    sent[#sent + 1] = type .. (payload and payload.mode and (" " .. payload.mode) or "")
+    if type == "status" then
+      cb(nil, { mode = "off", modeNote = "checkpoint mode is on for this repo, but this session can't stop for review" })
+    else
+      cb(nil, { mode = "off" })
+    end
+  end
+  local ok, err = pcall(function()
+    capture_notify(function() pi.toggle_mode() end)
+  end)
+  session.request = real
+  assert(ok, err)
+  assert(vim.deep_equal(sent, { "status", "set_mode off", "status" }) or vim.deep_equal(sent, { "status", "set_mode off" }), vim.inspect(sent))
+end
+
+M["statusline says checkpoints are unavailable when the session can't be reviewed"] = function()
+  local session = require("pi.session")
+  local real = { connected = session.connected, cached = session.cached }
+  session.connected = function() return true end
+  session.cached = { name = "x", mode = "off", modeNote = "checkpoint mode is on for this repo, but this session can't stop for review" }
+  local line = pi.statusline()
+  session.connected, session.cached = real.connected, real.cached
+  assert(line == "pi: x [checkpoints unavailable here] · idle", line)
+end
+
 M["review: in root it attaches to exactly that session and opens the checkpoint list"] = function()
   local session, panel = require("pi.session"), require("pi.panel")
   local root = git_root("rv-c")

@@ -69,6 +69,11 @@ export default function piNvim(pi: ExtensionAPI): void {
     loop = await ReviewLoop.start(pi, ctx, root);
   });
 
+  // /tree restores the active tools from the transcript, which can drop `checkpoint`.
+  pi.on("session_tree", () => {
+    loop?.refreshTools();
+  });
+
   pi.on("session_shutdown", async () => {
     await loop?.stop();
     loop = null;

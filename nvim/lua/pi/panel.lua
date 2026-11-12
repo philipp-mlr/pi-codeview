@@ -169,7 +169,11 @@ local function render()
   end
   if #lines == 1 then
     local off = session.cached and session.cached.mode == "off"
-    lines[2] = fit(off and ("checkpoint mode is off — %s to turn it on"):format(keys.label("mode", ":PiCheckpointMode")) or "no checkpoints yet", width)
+    if session.cached and session.cached.modeNote then
+      lines[2] = fit("checkpoints unavailable here", width)
+    else
+      lines[2] = fit(off and ("checkpoint mode is off — %s to turn it on"):format(keys.label("mode", ":PiCheckpointMode")) or "no checkpoints yet", width)
+    end
   end
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)

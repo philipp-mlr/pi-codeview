@@ -39,6 +39,7 @@ export function makeFakePi(
   const notifications: { message: string; level?: string }[] = [];
   const confirms: { title: string; message: string; signal?: AbortSignal }[] = [];
   let confirmAnswer = false;
+  let confirmHeld = false;
   const allowed = (n: string) => !opts.allowedTools || opts.allowedTools.includes(n);
 
   const pi = {
@@ -76,7 +77,12 @@ export function makeFakePi(
       notify: (message: string, level?: string) => void notifications.push({ message, level }),
       confirm: async (title: string, message: string, dialog?: { signal?: AbortSignal }) => {
         confirms.push({ title, message, signal: dialog?.signal });
-        return confirmAnswer;
+        if (!confirmHeld) return confirmAnswer;
+        // Like pi's dialog: stays open until answered elsewhere, and closes (as "no") when its signal aborts.
+        return new Promise<boolean>((resolve) => {
+          if (dialog?.signal?.aborted) return resolve(false);
+          dialog?.signal?.addEventListener("abort", () => resolve(false), { once: true });
+        });
       },
     },
     sessionManager: {
@@ -105,6 +111,10 @@ export function makeFakePi(
     /** What the next `ctx.ui.confirm` answers (default: no). */
     setConfirmAnswer(value: boolean) {
       confirmAnswer = value;
+    },
+    /** Makes `ctx.ui.confirm` stay open until its abort signal fires. */
+    holdConfirm() {
+      confirmHeld = true;
     },
     setIdle(value: boolean) {
       idle = value;

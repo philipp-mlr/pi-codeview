@@ -270,6 +270,8 @@ a UI whose tools include `checkpoint`. Subagents and other sessions started with
 a tool list without `checkpoint`, or without a UI (`pi -p`), work as with
 checkpoint mode off: no size cap, no end-of-run checkpoint. `/checkpoints` there
 says `checkpoint mode is on for this repo, but this session can't stop for review`.
+Attached to such a session, Neovim shows `checkpoints unavailable here` and `<leader>pm` turns the repo
+mode off. Its prompts are never queued, even when it inherited an open checkpoint.
 
 When a checkpoint opens and no Neovim is attached to the session, pi says
 `pi: checkpoint N waiting — no Neovim attached` and asks once "Open checkpoint N

@@ -446,6 +446,9 @@ function M.statusline_parts()
   -- The checkpoint number already says checkpoint mode is on, so "[checkpoints]" is left out then.
   local waiting = type(open_chunk) == "table"
   local mode = (M.cached.mode == "checkpoints" and not waiting) and " [checkpoints]" or ""
+  if M.cached.modeNote and not waiting then
+    mode = " [checkpoints unavailable here]"
+  end
   local head = ("pi: %s%s · "):format(M.label(M.cached), mode)
   if waiting then
     return { { text = head }, { text = "checkpoint " .. open_chunk.n, hl = "PiCheckpointWaiting" } }

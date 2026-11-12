@@ -151,9 +151,9 @@ function M.attach()
   session.choose()
 end
 
--- Whether path (a real path) is root or inside it.
-local function inside(root, path)
-  return path ~= nil and (path == root or discover.relpath(root, path) ~= nil)
+-- Whether the git worktree of dir (a directory, or nil) is exactly root; a worktree nested in root is not root.
+local function in_worktree(root, dir)
+  return dir ~= nil and dir ~= "" and discover.root(dir) == root
 end
 
 -- Called by pi (`nvim --server … --remote-expr`) when a checkpoint waits and no Neovim is attached.
@@ -163,7 +163,8 @@ function M.review(root, session_id)
   root = vim.uv.fs_realpath(root) or root
   local name = vim.api.nvim_buf_get_name(0)
   local file = name ~= "" and vim.uv.fs_realpath(name) or nil
-  if not inside(root, vim.uv.fs_realpath(vim.uv.cwd() or "")) and not inside(root, file) then
+  local file_dir = file and vim.fs.dirname(file) or nil
+  if not in_worktree(root, vim.uv.cwd()) and not in_worktree(root, file_dir) then
     return "not here"
   end
   -- Deferred: the remote-expr caller waits for the answer, attaching may take a moment.
@@ -336,7 +337,8 @@ function M.toggle_mode()
     if err then
       return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
-    M.set_mode(status.mode == "checkpoints" and "off" or "checkpoints")
+    -- modeNote: the repo's mode is on but this session can't stop for review; "on" again would change nothing.
+    M.set_mode((status.mode == "checkpoints" or status.modeNote) and "off" or "checkpoints")
   end)
 end
 

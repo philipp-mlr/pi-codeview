@@ -358,6 +358,15 @@ M["panel: <CR> on a file line opens the built-in view at that file"] = function(
   diff.cleanup()
 end
 
+M["panel: empty text says checkpoints are unavailable when the session can't be reviewed"] = function()
+  keys_state.mapped = { mode = "<leader>pm" }
+  session.cached = { mode = "off", modeNote = "checkpoint mode is on for this repo, but this session can't stop for review" }
+  local buf = open_panel({})
+  assert(lines(buf)[2] == "checkpoints unavailable here", lines(buf)[2])
+  session.cached = nil
+  keys_state.mapped = {}
+end
+
 M["panel: empty text names the mode key when checkpoint mode is off"] = function()
   keys_state.mapped = { mode = "<leader>pm" }
   session.cached = { mode = "off" }

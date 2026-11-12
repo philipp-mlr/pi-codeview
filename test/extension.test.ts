@@ -1108,6 +1108,60 @@ describe("pi-nvim checkpoint mode in a session nobody can review", () => {
   });
 });
 
+describe("pi-nvim open checkpoint in a session nobody can review", () => {
+  /** Opens a checkpoint in a main session, then shuts it down; returns the transcript a fork would inherit. */
+  async function openCheckpointEntries(repo: TestRepo): Promise<FakeEntry[]> {
+    const main = await start(repo, { mode: "checkpoints", sessionId: "main" });
+    await agentWrite(main, repo, "a.txt", "a\n");
+    void main.callTool("checkpoint", { note: "add a" });
+    await until(() => main.entries.length > 1 && JSON.stringify(main.entries.at(-1)).includes('"status":"open"'));
+    await main.fire("session_shutdown", { reason: "quit" });
+    return main.entries;
+  }
+
+  it("a forked child restored with an open checkpoint lets its task prompt through (no UI)", async () => {
+    const repo = await makeRepo();
+    const entries = await openCheckpointEntries(repo);
+    const child = await start(repo, { entries, hasUI: false, sessionId: "child" });
+    expect(await child.fire("input", { source: "interactive", text: "do the task" })).toEqual([undefined]);
+  });
+
+  it("a forked child restored with an open checkpoint lets its task prompt through (checkpoint tool not allowed)", async () => {
+    const repo = await makeRepo();
+    const entries = await openCheckpointEntries(repo);
+    const child = await start(repo, { entries, allowedTools: ["read", "bash", "edit", "write"], sessionId: "child2" });
+    expect(await child.fire("input", { source: "interactive", text: "do the task" })).toEqual([undefined]);
+  });
+
+  it("a reviewable session still queues the prompt", async () => {
+    const repo = await makeRepo();
+    const entries = await openCheckpointEntries(repo);
+    const again = await start(repo, { entries, sessionId: "again" });
+    expect(await again.fire("input", { source: "interactive", text: "later" })).toEqual([{ action: "handled" }]);
+  });
+});
+
+describe("pi-nvim tools restored by /tree", () => {
+  it("session_tree re-applies checkpoint mode and tells clients when the mode changed", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    fake.pi.setActiveTools(["read", "bash", "edit", "write"]);
+    await fake.fire("session_tree", {});
+    expect(fake.pi.getActiveTools()).toContain("checkpoint");
+    expect(client.events.filter((e) => e.event === "mode_changed")).toEqual([]);
+  });
+
+  it("session_tree broadcasts mode_changed when the session can no longer be reviewed", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints", allowedTools: ["read", "bash", "edit", "write"] });
+    const client = await connect(repo);
+    // Start was already off (effective), so nothing changes.
+    await fake.fire("session_tree", {});
+    expect(client.events.filter((e) => e.event === "mode_changed")).toEqual([]);
+  });
+});
+
 describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
   type Run = { cmd: string; args: string[] };
 
@@ -1226,5 +1280,71 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     await until(() => fake.notifications.length >= 2);
     expect(fake.notifications.at(-1)?.message).toBe(`pi: open Neovim in ${repo.root} and press <leader>pv (:PiCheckpoints)`);
     expect(runs).toEqual([]);
+  });
+
+  it("a failing notify (stale ctx) does not escape as an unhandled rejection", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    stubRunner(() => null);
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => void rejections.push(e);
+    process.on("unhandledRejection", onRejection);
+    cleanups.push(() => void process.off("unhandledRejection", onRejection));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    fake.ctx.ui.notify = () => {
+      throw new Error("stale ctx");
+    };
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    void fake.callTool("checkpoint", { note: "add a" });
+    await until(() => errors.mock.calls.length > 0);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(String(errors.mock.calls[0][0])).toContain("pi-nvim: offer to open checkpoint 1 failed: stale ctx");
+    expect(rejections).toEqual([]);
+  });
+
+  it("stop() during an in-flight open attempt: no notice afterwards", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let asked = false;
+    vi.spyOn(processRunner, "run").mockImplementation(async () => {
+      asked = true;
+      await gate;
+      return { code: 1, stdout: "" };
+    });
+    fake.setConfirmAnswer(true);
+    await fakeNvimSocket("nvim.9.0");
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    void fake.callTool("checkpoint", { note: "add a" });
+    await until(() => asked);
+    const before = fake.notifications.length;
+    await fake.fire("session_shutdown", { reason: "quit" });
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fake.notifications).toHaveLength(before);
+  });
+
+  it("the open dialog closes when the checkpoint is reviewed", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    fake.holdConfirm();
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    void fake.callTool("checkpoint", { note: "add a" });
+    await until(() => fake.confirms.length > 0);
+    expect(fake.confirms[0].signal?.aborted).toBe(false);
+    await fake.runCommand("checkpoints", "continue fine");
+    expect(fake.confirms[0].signal?.aborted).toBe(true);
+  });
+
+  it("the open dialog closes when the checkpoint is discarded", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    fake.holdConfirm();
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    void fake.callTool("checkpoint", { note: "add a" });
+    await until(() => fake.confirms.length > 0);
+    await fake.runCommand("checkpoints", "discard no");
+    expect(fake.confirms[0].signal?.aborted).toBe(true);
   });
 });

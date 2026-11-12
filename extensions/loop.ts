@@ -128,6 +128,10 @@ export class ReviewLoop {
   private readonly offered = new Set<number>();
   /** Dismisses the open "Open checkpoint N in Neovim?" dialog when the checkpoint closes or pi stops. */
   private offerDialog: AbortController | null = null;
+  /** Set by stop(): no notice or dialog may follow, since the ctx may be stale by then. */
+  private stopped = false;
+  /** The effective mode last told to clients, to broadcast only real changes. */
+  private announcedMode: Mode = "off";
 
   private constructor(
     private readonly pi: ExtensionAPI,
@@ -160,10 +164,12 @@ export class ReviewLoop {
     loop.server = await startServer({ path: sockPath, handle: (req) => loop.handle(req) });
     loop.applyTools();
     loop.persist();
+    loop.announcedMode = loop.effectiveMode();
     return loop;
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     this.offerDialog?.abort();
     this.resolveWaiters(REVIEW_PENDING);
     // Let in-flight work (e.g. a human_write) finish and persist before the runtime goes away.
@@ -342,7 +348,8 @@ export class ReviewLoop {
    */
   queueIfOpen(text: string, hasImages = false): boolean {
     const chunk = this.state.openChunk();
-    if (!chunk) return false;
+    // A session that can't be reviewed (e.g. a forked child that inherited an open checkpoint) would never release the queue.
+    if (!chunk || !this.canBeReviewed()) return false;
     if (hasImages) {
       this.notify(`Prompt with images not queued: review checkpoint ${chunk.n} first`, "warning");
       return false;
@@ -450,8 +457,19 @@ export class ReviewLoop {
       this.state.mode = mode;
       this.applyTools();
       this.persist();
-      this.broadcast("mode_changed", { mode: this.effectiveMode() });
+      this.announcedMode = this.effectiveMode();
+      this.broadcast("mode_changed", { mode: this.announcedMode });
     });
+  }
+
+  /** Re-applies the tool set after pi changed the active tools itself (/tree restores them from the transcript). */
+  refreshTools(): void {
+    this.applyTools();
+    this.persist();
+    const mode = this.effectiveMode();
+    if (mode === this.announcedMode) return;
+    this.announcedMode = mode;
+    this.broadcast("mode_changed", { mode });
   }
 
   describe(): string {
@@ -647,7 +665,16 @@ export class ReviewLoop {
    * once per checkpoint; the dialog closes by itself when the checkpoint is reviewed meanwhile.
    */
   private async offerToOpen(n: number): Promise<void> {
-    if (this.offered.has(n) || (this.server?.clientCount() ?? 0) > 0 || !this.ctx.hasUI) return;
+    try {
+      await this.offerToOpenUnguarded(n);
+    } catch (e) {
+      // Runs unawaited: a stale ctx or a failing socket scan must never become an unhandled rejection.
+      console.error(`pi-nvim: offer to open checkpoint ${n} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  private async offerToOpenUnguarded(n: number): Promise<void> {
+    if (this.stopped || this.offered.has(n) || (this.server?.clientCount() ?? 0) > 0 || !this.ctx.hasUI) return;
     this.offered.add(n);
     this.notify(`pi: checkpoint ${n} waiting — no Neovim attached`, "info");
     this.offerDialog?.abort();
@@ -664,11 +691,12 @@ export class ReviewLoop {
       yes = false;
     }
     if (this.offerDialog === dialog) this.offerDialog = null;
-    if (dialog.signal.aborted || this.state.openChunk()?.n !== n) return;
+    if (this.stopped || dialog.signal.aborted || this.state.openChunk()?.n !== n) return;
     if (!yes) {
       return this.notify(`pi: checkpoint ${n} waits — review it in Neovim or run /checkpoints continue <note>`, "info");
     }
     const opened = await openInNeovim({ root: this.root, sessionId: this.sessionId, runtimeDir: process.env.XDG_RUNTIME_DIR });
+    if (this.stopped) return;
     if (opened === "nvim") this.notify(`pi: checkpoint ${n} opened in Neovim`, "info");
     else if (opened === "herdr") this.notify(`pi: checkpoint ${n} opens in a new Neovim pane`, "info");
     else this.notify(`pi: open Neovim in ${this.root} and press <leader>pv (:PiCheckpoints)`, "info");
