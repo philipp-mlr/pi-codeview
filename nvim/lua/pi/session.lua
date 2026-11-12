@@ -131,15 +131,64 @@ function M.label(status)
   return tostring(status.sessionId or "?"):sub(1, 8)
 end
 
-local function describe(status)
+-- "now", "5m ago", "2h ago", "3d ago" for a duration in ms.
+local function age_text(ms)
+  local minutes = math.floor(math.max(ms, 0) / 60000)
+  if minutes < 1 then
+    return "now"
+  elseif minutes < 60 then
+    return minutes .. "m ago"
+  elseif minutes < 60 * 24 then
+    return math.floor(minutes / 60) .. "h ago"
+  end
+  return math.floor(minutes / (60 * 24)) .. "d ago"
+end
+
+-- Picker row: "<label> · <worktree> · <state>[ · checkpoints][ · <age>]". The age is left out when
+-- the extension is too old to send `lastActive`. now_ms is epoch ms (default: the current time).
+function M.describe(status, now_ms)
   local state = status.busy and "working" or "idle"
   if type(status.openChunk) == "table" then
-    state = "checkpoint " .. status.openChunk.n
+    state = "checkpoint " .. status.openChunk.n .. " waiting"
   end
+  local parts = { M.label(status), vim.fs.basename(tostring(status.root or "")), state }
   if status.mode == "checkpoints" then
-    state = "checkpoints, " .. state
+    parts[#parts + 1] = "checkpoints"
   end
-  return ("%s  [%s]  %s"):format(M.label(status), state, status.root)
+  if type(status.lastActive) == "number" then
+    parts[#parts + 1] = age_text((now_ms or os.time() * 1000) - status.lastActive)
+  end
+  return table.concat(parts, " · ")
+end
+
+-- Orders candidates for the picker: named sessions first, then checkpoint mode on, then most recent
+-- activity first (missing last); sessions equal on all of these keep their order.
+function M.sort_candidates(live)
+  local ranked = {}
+  for i, c in ipairs(live) do
+    local st = c.status
+    local named = type(st.name) == "string" and st.name ~= ""
+    ranked[i] = {
+      c = c,
+      i = i,
+      named = named,
+      checkpoints = st.mode == "checkpoints",
+      active = type(st.lastActive) == "number" and st.lastActive or -math.huge,
+    }
+  end
+  table.sort(ranked, function(a, b)
+    if a.named ~= b.named then
+      return a.named
+    elseif a.checkpoints ~= b.checkpoints then
+      return a.checkpoints
+    elseif a.active ~= b.active then
+      return a.active > b.active
+    end
+    return a.i < b.i
+  end)
+  return vim.tbl_map(function(r)
+    return r.c
+  end, ranked)
 end
 
 -- Drops the current attachment without the disconnect warning; pending drafts are saved first.
@@ -244,13 +293,16 @@ local function pick_from(live, choice, root, cb)
 end
 
 local function select_session(live, prompt, on_choice)
-  vim.ui.select(live, { prompt = prompt, format_item = function(c) return describe(c.status) end }, on_choice)
+  live = M.sort_candidates(live)
+  vim.ui.select(live, { prompt = prompt, format_item = function(c) return M.describe(c.status) end }, on_choice)
 end
 
 -- Calls cb(conn, root) once attached to a pi session for the worktree of opts.buf (default: current
 -- buffer). Only sessions running in that worktree count. When already attached to another worktree's
 -- session and the buffer is a file in this one, it switches. With opts.quiet nothing is reported and
--- no picker is shown: the attach happens only when exactly one session matches.
+-- no picker is shown: the attach happens only when exactly one session matches. Leaving an attached
+-- session for another worktree's says `pi: switched to <label> (<worktree>)` once, also when quiet
+-- (Philipp must know where his next send goes); the first attach says nothing.
 function M.ensure(cb, opts)
   opts = opts or {}
   local function fail(msg)
@@ -258,6 +310,7 @@ function M.ensure(cb, opts)
       vim.notify(msg, vim.log.levels.ERROR)
     end
   end
+  local switching = false
   if M.connected() then
     local fdir = file_dir(opts.buf)
     local froot = fdir and discover.root(fdir)
@@ -265,24 +318,31 @@ function M.ensure(cb, opts)
       return cb(M.conn, M.root)
     end
     M.detach()
+    switching = true
   end
   local dir = dir_of_buffer(opts.buf)
   local root = discover.root(dir)
   if not root then
     return fail("pi: not inside a git repository")
   end
+  local function attached(conn, r)
+    if switching then
+      vim.notify(("pi: switched to %s (%s)"):format(M.label(M.cached), vim.fs.basename(r)))
+    end
+    cb(conn, r)
+  end
   collect(dir, root, function(live)
     if #live == 0 then
       return fail("pi: no pi session with pi-nvim for " .. root)
     end
     if #live == 1 then
-      return pick_from(live, live[1], root, cb)
+      return pick_from(live, live[1], root, attached)
     end
     if opts.quiet then
-      return pick_from(live, nil, root, cb)
+      return pick_from(live, nil, root, attached)
     end
     select_session(live, "pi: attach to which pi session?", function(choice)
-      pick_from(live, choice, root, cb)
+      pick_from(live, choice, root, attached)
     end)
   end)
 end

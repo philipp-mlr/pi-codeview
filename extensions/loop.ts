@@ -118,6 +118,8 @@ export class ReviewLoop {
   private runAgentFiles = new Set<string>();
   /** Whether the outside-worktree warning was already shown in the current run. */
   private warnedOutside = false;
+  /** Epoch ms of the last sign of life: agent start/settle, tool call or result, prompt or send from nvim. */
+  private lastActive = Date.now();
 
   private constructor(
     private readonly pi: ExtensionAPI,
@@ -192,6 +194,7 @@ export class ReviewLoop {
   }
 
   async afterTool(toolName: string): Promise<void> {
+    this.touch();
     if (isReadOnlyTool(toolName)) return;
     this.mayHaveChanged = true;
     // With checkpoints off, changes are recorded at turn_end only, so mutating tools stay cheap.
@@ -227,18 +230,21 @@ export class ReviewLoop {
   }
 
   activityToolStart(toolCallId: string, toolName: string, args: unknown): void {
+    this.touch();
     const { tool, target } = toolLine(toolName, args);
     this.activity.startTool(toolCallId, tool, target);
     this.broadcast("activity_current", { current: this.activity.current(), busy: true });
   }
 
   activityToolEnd(toolCallId: string, toolName: string): void {
+    this.touch();
     this.activity.endTool(toolCallId);
     this.broadcast("activity_current", { current: this.activity.current(), mutating: !isReadOnlyTool(toolName), busy: true });
   }
 
   /** Pins the mark base with checkpoints off: turn chunks move the baseline, the marks stay against the run's start. */
   runStarted(): void {
+    this.touch();
     this.runBaseline = this.state.baseline;
     this.runAgentFiles = new Set();
     this.warnedOutside = false;
@@ -247,6 +253,7 @@ export class ReviewLoop {
 
   /** Warns once per run when a mutating tool targets a path outside the session's worktree. Never blocks the tool. */
   toolCall(toolName: string, input: unknown): void {
+    this.touch();
     if (this.warnedOutside || isReadOnlyTool(toolName) || typeof input !== "object" || input === null) return;
     const args = input as Record<string, unknown>;
     for (const key of ["path", "file_path"]) {
@@ -294,6 +301,7 @@ export class ReviewLoop {
   }
 
   settled(aborted: boolean): void {
+    this.touch();
     this.activity.clearTools();
     this.broadcast("activity_current", { current: null, busy: false });
     this.broadcast("run_settled", { aborted, files: this.runAgentFiles.size });
@@ -319,6 +327,7 @@ export class ReviewLoop {
   // --- Philipp's side -----------------------------------------------------
 
   async send(input: SendInput): Promise<{ chunk: Chunk | null }> {
+    this.touch();
     return this.serial(async () => {
       const chunk = this.state.openChunk();
       const { sha } = await this.recordSince(chunk ? "human" : "agent");
@@ -382,6 +391,7 @@ export class ReviewLoop {
   }
 
   prompt(text: string, context?: PromptContext): { queued: boolean } {
+    this.touch();
     if (this.queueIfOpen(text)) return { queued: true };
     this.pi.sendUserMessage(renderPrompt(text, context), this.delivery());
     return { queued: false };
@@ -437,6 +447,7 @@ export class ReviewLoop {
           busy: !this.ctx.isIdle(),
           queued: this.state.queuedPrompts.length,
           activity: this.activity.current(),
+          lastActive: this.lastActive,
         };
       case "list_chunks":
         return this.state.chunks;
@@ -475,6 +486,10 @@ export class ReviewLoop {
   }
 
   // --- internals ----------------------------------------------------------
+
+  private touch(): void {
+    this.lastActive = Date.now();
+  }
 
   /** Runs snapshot-and-record work one at a time so steps stay in order. */
   private serial<T>(fn: () => Promise<T>): Promise<T> {

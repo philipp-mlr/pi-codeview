@@ -165,7 +165,7 @@ cv.continue()
     expect(out).toContain("why one?");
     expect(out).toContain("a.txt:1-1\n```\none\n```");
     const notes = await until(
-      () => nvim.notifications().some((n) => n.msg === "pi: continuing — checkpoint 1 reviewed with 1 annotation") && nvim.notifications(),
+      () => nvim.notifications().some((n) => n.msg === "pi[test-ses]: continuing — checkpoint 1 reviewed with 1 annotation") && nvim.notifications(),
       "continue notification",
     );
     expect(notes.filter((n) => n.level === ERROR)).toEqual([]);
@@ -226,7 +226,7 @@ cv.continue()
     );
 
     expect(text(await pending)).toContain("has no remarks");
-    const notes = await until(() => nvim.notifications().some((n) => n.msg === "pi: continuing — checkpoint 1 reviewed") && nvim.notifications(), "continue notification");
+    const notes = await until(() => nvim.notifications().some((n) => n.msg === "pi[test-ses]: continuing — checkpoint 1 reviewed") && nvim.notifications(), "continue notification");
     expect(notes.some((n) => n.msg.startsWith("CONFIRM") || n.msg.startsWith("PROMPT"))).toBe(false);
   }, TIMEOUT_MS);
 
@@ -250,9 +250,9 @@ cv.continue()
 `,
     );
     repo.write("a.txt", "one\ntwo\n");
-    await until(() => nvim.notifications().some((n) => n.msg === "pi: 1 annotation sent"), "both sends");
+    await until(() => nvim.notifications().some((n) => n.msg === "pi[test-ses]: 1 annotation sent"), "both sends");
     const msgs = nvim.notifications().map((n) => n.msg);
-    expect(msgs).toContain("pi: 2 annotations sent");
+    expect(msgs).toContain("pi[test-ses]: 2 annotations sent");
     expect(msgs.some((m) => m.startsWith("PROMPT"))).toBe(false);
     expect(fake.sent.length).toBe(2);
   }, TIMEOUT_MS);
@@ -292,7 +292,7 @@ cv.continue()
 `,
     );
     await settled(pending, 100);
-    await until(() => nvim.notifications().some((n) => n.msg === "pi: continuing — checkpoint 1 reviewed with 1 annotation"), "continued");
+    await until(() => nvim.notifications().some((n) => n.msg === "pi[test-ses]: continuing — checkpoint 1 reviewed with 1 annotation"), "continued");
     expect(text(await pending)).toContain("why one?");
   }, TIMEOUT_MS);
 
@@ -479,8 +479,8 @@ vim.notify("ATTACHED " .. cv.session_label() .. " " .. session.cached.sessionId)
     );
     const attached = await until(() => nvim.notifications().find((n) => n.msg.startsWith("ATTACHED") || n.level === ERROR), "attach");
     const labels = nvim.notifications().find((n) => n.msg.startsWith("LABELS"))!.msg;
-    expect(labels).toContain("bugfix  [idle]");
-    expect(labels).toContain("refactor  [idle]");
+    expect(labels).toMatch(/bugfix · [^ ]+ · idle · now/);
+    expect(labels).toMatch(/refactor · [^ ]+ · idle · now/);
     expect(labels).not.toContain("aaaa1111-x");
     expect(attached.msg).toBe("ATTACHED bugfix bbbb2222-y");
   }, TIMEOUT_MS);

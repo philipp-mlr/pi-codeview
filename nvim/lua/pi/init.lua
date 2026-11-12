@@ -199,12 +199,34 @@ function M.stop()
   end)
 end
 
+-- Writes the modified, listed, file-backed buffers whose file lies inside the session's root; buffers
+-- of other projects, pi:// views and scratch buffers stay as they are.
+local function save_session_buffers(root)
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local name = vim.api.nvim_buf_get_name(buf)
+    if
+      name ~= ""
+      and vim.api.nvim_buf_is_loaded(buf)
+      and vim.bo[buf].buflisted
+      and vim.bo[buf].modified
+      and vim.bo[buf].buftype == ""
+    then
+      local real = vim.uv.fs_realpath(name) or name
+      if discover.relpath(root, real) then
+        vim.api.nvim_buf_call(buf, function()
+          vim.cmd("silent! update")
+        end)
+      end
+    end
+  end
+end
+
 -- Moves on: with a checkpoint waiting, sends the annotations as its review (no message, no
 -- confirmation) and the agent continues; without one, sends the annotations as a new prompt.
 function M.continue()
   session.ensure(function(conn, root)
     -- Saved inside ensure, so the saves are reported as Philipp's edits to the attached session.
-    vim.cmd("silent! wall")
+    save_session_buffers(root)
     session.refresh_status(function(status_err, status)
       if status_err then
         return vim.notify("pi: " .. status_err, vim.log.levels.ERROR)
@@ -226,9 +248,9 @@ function M.continue()
         annotations.clear_root(root)
         local counted = ("%d annotation%s"):format(count, count == 1 and "" or "s")
         if open_chunk then
-          vim.notify(("pi: continuing — checkpoint %d reviewed%s"):format(open_chunk.n, count > 0 and " with " .. counted or ""))
+          vim.notify(("pi[%s]: continuing — checkpoint %d reviewed%s"):format(session.label(status), open_chunk.n, count > 0 and " with " .. counted or ""))
         else
-          vim.notify(("pi: %s sent"):format(counted))
+          vim.notify(("pi[%s]: %s sent"):format(session.label(status), counted))
         end
         session.refresh_status()
       end)

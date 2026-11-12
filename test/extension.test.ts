@@ -867,6 +867,46 @@ describe("pi-nvim migration from pi-codeview", () => {
   });
 });
 
+describe("pi-nvim lastActive", () => {
+  const lastActive = async (client: Client): Promise<number> => (await client.request("status")).result.lastActive;
+  const pause = () => new Promise((r) => setTimeout(r, 15));
+
+  it("starts at session start and moves on run, tool, prompt and send activity", async () => {
+    const repo = await makeRepo();
+    const before = Date.now();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    let last = await lastActive(client);
+    expect(last).toBeGreaterThanOrEqual(before);
+    expect(last).toBeLessThanOrEqual(Date.now());
+
+    const steps: Array<() => Promise<unknown>> = [
+      () => fake.fire("agent_start", {}),
+      () => fake.fire("tool_call", { toolName: "read", input: { path: "a.txt" } }),
+      () => fake.fire("tool_result", { toolName: "read", input: {}, content: [], isError: false }),
+      () => client.request("prompt", { text: "hi" }),
+      () => client.request("send", { annotations: [], note: "go" }),
+      () => fake.fire("agent_settled", { aborted: false }),
+    ];
+    for (const step of steps) {
+      await pause();
+      await step();
+      const now = await lastActive(client);
+      expect(now).toBeGreaterThan(last);
+      last = now;
+    }
+  });
+
+  it("a status request alone does not count as activity", async () => {
+    const repo = await makeRepo();
+    await start(repo);
+    const client = await connect(repo);
+    const first = await lastActive(client);
+    await pause();
+    expect(await lastActive(client)).toBe(first);
+  });
+});
+
 describe("pi-nvim activity", () => {
   const currents = (client: { events: { event: string; data: any }[] }) => client.events.filter((e) => e.event === "activity_current");
 

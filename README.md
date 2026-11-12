@@ -188,9 +188,9 @@ under the cursor.
 
 `<leader>pc` sends all annotations of the worktree, without asking for a
 message (use `<leader>pa` for that). With a checkpoint waiting it is the
-review (`pi: continuing — checkpoint 2 reviewed with 3 annotations`);
-otherwise the annotations go as a prompt (`pi: 3 annotations sent`).
-Buffers are saved first. With no annotations and no waiting checkpoint
+review (`pi[my-session]: continuing — checkpoint 2 reviewed with 3 annotations`);
+otherwise the annotations go as a prompt (`pi[my-session]: 3 annotations sent`).
+Before sending, only the modified buffers whose files lie inside that session's worktree are saved (other projects' buffers, `pi://` views and scratch buffers are left alone). With no annotations and no waiting checkpoint
 nothing is sent (`pi: nothing to send`). Each annotation
 carries the LSP errors and warnings on its lines, under a `Diagnostics:`
 heading in the agent's message.
@@ -202,6 +202,18 @@ buffer. With one such session it attaches on first use; with several it
 asks. Running a command from a buffer in another worktree switches to that
 worktree's session. `<leader>pi` (`:PiSession`) picks a session on purpose.
 Name your pi sessions (`/name` in pi) to tell them apart in the picker.
+
+Picker rows read `<label> · <worktree> · <state>[ · checkpoints] · <age>`, e.g.
+`api · feature-x · checkpoint 2 waiting · checkpoints · 5m ago`. The label is the
+session name (else the first 8 characters of its id), the state is
+`checkpoint N waiting`, `working` or `idle`, and the age (`now`, `5m ago`, `2h ago`,
+`3d ago`) is the time since the session last did anything; it is left out for an
+older extension that does not report it. Named sessions come first, then those
+with checkpoint mode on, then the most recently active.
+
+When Neovim moves from one worktree's session to another's it says
+`pi: switched to <label> (<worktree>)`, once per switch, also for the automatic
+attach on entering a buffer; the first attach is silent.
 `require("pi").session_label()` gives the attached session's name.
 
 ## Checkpoint mode

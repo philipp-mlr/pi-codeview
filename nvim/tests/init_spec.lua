@@ -601,7 +601,7 @@ local function continue_with(open_chunk, count)
   local root = vim.uv.fs_realpath(vim.fn.tempname() .. "_d") or (function() local d = vim.fn.tempname(); vim.fn.mkdir(d, "p"); return vim.uv.fs_realpath(d) end)()
   session.ensure = function(cb) cb(conn, root) end
   session.refresh_status = function(cb)
-    if cb then cb(nil, { openChunk = open_chunk }) end
+    if cb then cb(nil, { openChunk = open_chunk, name = "wt-a" }) end
   end
   local buf = vim.api.nvim_create_buf(true, false)
   vim.fn.writefile({ "a", "b", "c" }, root .. "/probe.txt")
@@ -629,26 +629,158 @@ M["continue with a checkpoint open sends the review without note or confirm"] = 
   vim.fn.confirm = real_confirm
   assert(ok, notes)
   assert(#requests == 1 and requests[1].method == "send" and requests[1].payload.note == "", vim.inspect(requests))
-  assert(#notes == 1 and notes[1].msg == "pi: continuing — checkpoint 4 reviewed", vim.inspect(notes))
+  assert(#notes == 1 and notes[1].msg == "pi[wt-a]: continuing — checkpoint 4 reviewed", vim.inspect(notes))
 end
 
 M["continue with a checkpoint open and annotations counts them and clears them"] = function()
   local notes, requests, remaining = continue_with({ n = 4 }, 1)
   assert(#requests[1].payload.annotations == 1 and requests[1].payload.note == "", vim.inspect(requests))
-  assert(notes[1].msg == "pi: continuing — checkpoint 4 reviewed with 1 annotation", vim.inspect(notes))
+  assert(notes[1].msg == "pi[wt-a]: continuing — checkpoint 4 reviewed with 1 annotation", vim.inspect(notes))
   assert(remaining == 0, "annotations not cleared")
   notes = continue_with({ n = 5 }, 2)
-  assert(notes[1].msg == "pi: continuing — checkpoint 5 reviewed with 2 annotations", vim.inspect(notes))
+  assert(notes[1].msg == "pi[wt-a]: continuing — checkpoint 5 reviewed with 2 annotations", vim.inspect(notes))
 end
 
 M["continue without a checkpoint sends annotations as a prompt, or says nothing to send"] = function()
   local notes, requests = continue_with(nil, 2)
   assert(#requests == 1 and #requests[1].payload.annotations == 2, vim.inspect(requests))
-  assert(#notes == 1 and notes[1].msg == "pi: 2 annotations sent", vim.inspect(notes))
+  assert(#notes == 1 and notes[1].msg == "pi[wt-a]: 2 annotations sent", vim.inspect(notes))
   notes = continue_with(nil, 1)
-  assert(notes[1].msg == "pi: 1 annotation sent", vim.inspect(notes))
+  assert(notes[1].msg == "pi[wt-a]: 1 annotation sent", vim.inspect(notes))
   notes, requests = continue_with(nil, 0)
   assert(#requests == 0 and #notes == 1 and notes[1].msg == "pi: nothing to send", vim.inspect(notes))
+end
+
+-- Buffers for save-scope tests: a modified file buffer in dir.
+local function modified_buf(path, listed)
+  vim.fn.mkdir(vim.fs.dirname(path), "p")
+  vim.fn.writefile({ "old" }, path)
+  local buf = vim.fn.bufadd(path)
+  vim.fn.bufload(buf)
+  vim.bo[buf].buflisted = listed ~= false
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "new" })
+  return buf
+end
+
+M["continue saves only modified listed file buffers inside the session root"] = function()
+  local session = require("pi.session")
+  local real = { ensure = session.ensure, refresh_status = session.refresh_status }
+  local base = vim.uv.fs_realpath(vim.fn.tempname() .. "x") or (function() local d = vim.fn.tempname(); vim.fn.mkdir(d, "p"); return vim.uv.fs_realpath(d) end)()
+  local root, other = base .. "/proj", base .. "/other"
+  local inside = modified_buf(root .. "/a.txt")
+  local nested = modified_buf(root .. "/sub/b.txt")
+  local outside = modified_buf(other .. "/c.txt")
+  local sibling = modified_buf(base .. "/proj2/d.txt") -- shares the root as a string prefix
+  local unlisted = modified_buf(root .. "/e.txt", false)
+  local virtual = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_buf_set_name(virtual, "pi://diff/" .. root)
+  vim.api.nvim_buf_set_lines(virtual, 0, -1, false, { "x" })
+  vim.bo[virtual].modified = true
+  vim.fn.mkdir(root, "p")
+  local conn = { request = function(_, _, _, cb) cb(nil, {}) end }
+  session.ensure = function(cb) cb(conn, root) end
+  session.refresh_status = function(cb) if cb then cb(nil, { openChunk = { n = 1 } }) end end
+  local ok, err = pcall(capture_notify, function() pi.continue() end)
+  session.ensure, session.refresh_status = real.ensure, real.refresh_status
+  local function disk(path) return vim.fn.readfile(path)[1] end
+  local results = {
+    inside = disk(root .. "/a.txt"), nested = disk(root .. "/sub/b.txt"), outside = disk(other .. "/c.txt"),
+    sibling = disk(base .. "/proj2/d.txt"), unlisted = disk(root .. "/e.txt"),
+    outside_modified = vim.bo[outside].modified, virtual_modified = vim.bo[virtual].modified,
+  }
+  for _, b in ipairs({ inside, nested, outside, sibling, unlisted, virtual }) do
+    vim.api.nvim_buf_delete(b, { force = true })
+  end
+  vim.fn.delete(base, "rf")
+  assert(ok, err)
+  assert(results.inside == "new" and results.nested == "new", vim.inspect(results))
+  assert(results.outside == "old" and results.sibling == "old" and results.unlisted == "old", vim.inspect(results))
+  assert(results.outside_modified, vim.inspect(results))
+end
+
+M["describe renders label, worktree, state, checkpoints and age"] = function()
+  local session = require("pi.session")
+  local now = 10 * 24 * 3600 * 1000
+  local function row(extra)
+    return session.describe(vim.tbl_extend("force", { name = "api", root = "/w/feature-x", busy = false }, extra), now)
+  end
+  assert(row({ lastActive = now - 20000 }) == "api · feature-x · idle · now", row({ lastActive = now - 20000 }))
+  assert(row({ busy = true, lastActive = now - 5 * 60000 }) == "api · feature-x · working · 5m ago")
+  assert(row({ lastActive = now - 2 * 3600000 - 1000 }) == "api · feature-x · idle · 2h ago")
+  assert(row({ lastActive = now - 3 * 86400000 }) == "api · feature-x · idle · 3d ago")
+  assert(row({ mode = "checkpoints", openChunk = { n = 4 }, lastActive = now }) == "api · feature-x · checkpoint 4 waiting · checkpoints · now")
+  assert(row({}) == "api · feature-x · idle", row({}))
+  assert(session.describe({ sessionId = "0123456789ab", root = "/w/r", busy = true }, now) == "01234567 · r · working")
+end
+
+M["picker orders named, then checkpoint mode, then newest activity, stable"] = function()
+  local session = require("pi.session")
+  local function c(id, st) st.sessionId = id; return { id = id, status = st } end
+  local live = {
+    c("u-old", { lastActive = 100 }),
+    c("u-none-1", {}),
+    c("u-new", { lastActive = 900 }),
+    c("u-none-2", {}),
+    c("u-cp", { mode = "checkpoints", lastActive = 50 }),
+    c("n-old", { name = "old", lastActive = 10 }),
+    c("n-cp", { name = "cp", mode = "checkpoints" }),
+    c("n-new", { name = "new", lastActive = 800 }),
+  }
+  local ids = vim.tbl_map(function(x) return x.id end, session.sort_candidates(live))
+  local expected = { "n-cp", "n-new", "n-old", "u-cp", "u-new", "u-old", "u-none-1", "u-none-2" }
+  assert(vim.deep_equal(ids, expected), vim.inspect(ids))
+end
+
+-- Runs ensure against two fake sessions in a real repo pair; returns notices and attached labels.
+M["ensure says switched once per switch, also quiet; silent on first attach"] = function()
+  local session = require("pi.session")
+  local client, discover = require("pi.client"), require("pi.discover")
+  local real = { sockets = discover.sockets, connect = client.connect, root = discover.root }
+  local dirs = { vim.uv.fs_realpath(vim.fn.tempname() .. "a") }
+  local function mk(name)
+    local d = vim.fn.tempname() .. name
+    vim.fn.mkdir(d, "p")
+    d = vim.uv.fs_realpath(d)
+    vim.fn.writefile({ "x" }, d .. "/f.txt")
+    return d
+  end
+  local a, b = mk("wt-a"), mk("wt-b")
+  discover.root = function(dir) return dir:find("wt%-a") and a or b end
+  discover.sockets = function(dir) return { (dir:find("wt%-a") and a or b) .. "/sock" } end
+  client.connect = function(path)
+    local root = vim.fs.dirname(path)
+    return {
+      closed = false,
+      close = function(self) self.closed = true end,
+      request = function(_, _, _, cb) cb(nil, { root = root, name = vim.fs.basename(root), sessionId = "id", drafts = {} }) end,
+    }
+  end
+  local function ensure_in(root, quiet)
+    local buf = vim.fn.bufadd(root .. "/f.txt")
+    vim.fn.bufload(buf)
+    vim.api.nvim_set_current_buf(buf)
+    local attached
+    local notes = capture_notify(function() session.ensure(function(_, r) attached = r end, { quiet = quiet }) end)
+    return notes, attached
+  end
+  session.detach()
+  local ok, err = pcall(function()
+    local notes, attached = ensure_in(a, false)
+    assert(attached == a and #notes == 0, "first attach must be silent: " .. vim.inspect(notes))
+    notes = ensure_in(a, false)
+    assert(#notes == 0, "same worktree: " .. vim.inspect(notes))
+    notes, attached = ensure_in(b, false)
+    assert(attached == b and #notes == 1 and notes[1].msg == ("pi: switched to %s (%s)"):format(vim.fs.basename(b), vim.fs.basename(b)), vim.inspect(notes))
+    notes = ensure_in(b, false)
+    assert(#notes == 0, "no second notice: " .. vim.inspect(notes))
+    notes, attached = ensure_in(a, true)
+    assert(attached == a and #notes == 1 and notes[1].msg == ("pi: switched to %s (%s)"):format(vim.fs.basename(a), vim.fs.basename(a)), "quiet: " .. vim.inspect(notes))
+  end)
+  session.detach()
+  discover.sockets, client.connect, discover.root = real.sockets, real.connect, real.root
+  vim.fn.delete(a, "rf")
+  vim.fn.delete(b, "rf")
+  assert(ok, err)
 end
 
 M["waiting notice and checkpoint-ready notice name the keys or the commands"] = function()

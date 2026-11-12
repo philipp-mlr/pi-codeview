@@ -46,10 +46,11 @@ The extension renders them under the context or the annotation's note as a `Diag
 
 ### Results
 
-- `status`: `{"mode":"checkpoints","root":"/abs/worktree","sessionId":"…","name":"my session"|null,"baseline":"<sha>","markBase":"<sha>","openChunk":<chunk>|null,"drafts":[<annotation>],"busy":false,"queued":0,"activity":{"tool":"edit","target":"a.ts"}|null}`.
+- `status`: `{"mode":"checkpoints","root":"/abs/worktree","sessionId":"…","name":"my session"|null,"baseline":"<sha>","markBase":"<sha>","openChunk":<chunk>|null,"drafts":[<annotation>],"busy":false,"queued":0,"activity":{"tool":"edit","target":"a.ts"}|null,"lastActive":1731400000000}`.
   `mode` is `checkpoints` or `off` (checkpoint mode on or off). `name` is the pi session name or `null`. `baseline` is the sha of the latest recorded snapshot.
   `root` is the worktree the session runs in; clients attach only to sessions whose `root` is their own worktree.
   `busy` is true while the agent is working (`activity_current` events carry it too); `queued` counts prompts waiting behind the open chunk.
+  `lastActive` is the epoch ms of the session's last sign of life (agent start or settle, tool call or result, prompt or send from nvim; session start otherwise). Optional: older extensions omit it.
   `activity` is the tool currently running (`{"tool":"edit","target":"a.ts"}`, the most recently started one when several run) or `null`.
   `markBase` is the snapshot sha clients mark changed lines against: the open chunk's `fromSha`; without one,
   `baseline` in checkpoint mode and with checkpoints off the `baseline` at the start of the current or last agent run (kept in memory, so
