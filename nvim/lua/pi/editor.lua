@@ -1,28 +1,29 @@
 -- Floating editor for text sent to pi (ask, annotation notes): a wrapping markdown float, centred,
 -- that sends with <C-s>. q or <Esc> in normal mode, :q and wiping its buffer cancel; moving focus
 -- elsewhere (a panel opening, another window or tab) leaves it open. Text that is cancelled or fails
--- to send is kept as a draft and comes back in the next editor. One editor at a time.
+-- to send is kept as a draft under the editor's `draft` key and comes back in the next editor with
+-- that key. One editor at a time.
 local M = {}
 
 local MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT = 80, 3, 15
 local FOOTER = " <C-s> send · q cancel "
 
 local current = nil -- { win, buf } of the open editor
-local draft = nil -- unsent text of the last cancelled editor, restored by the next open without opts.text
+local drafts = {} -- key -> unsent text of a cancelled editor, restored by the next open with that key
 
--- Forgets the draft: its text reached pi.
-function M.discard_draft()
-  draft = nil
+-- Forgets the draft of key: its text reached pi.
+function M.discard_draft(key)
+  drafts[key] = nil
 end
 
 local function blank(text)
   return text == nil or text:match("^%s*$") ~= nil
 end
 
--- Keeps text (when not blank) for the next open.
-function M.stash(text)
-  if not blank(text) then
-    draft = text
+-- Keeps text (when not blank) for the next open with key.
+function M.stash(key, text)
+  if key and not blank(text) then
+    drafts[key] = text
   end
 end
 
@@ -39,7 +40,7 @@ local function layout(rows)
   }
 end
 
--- opts = { title, text?, on_submit(text), on_cancel? }. Starts in insert mode at the end of text.
+-- opts = { title, text?, draft?, on_submit(text), on_cancel? }; draft is the key for unsent text. Starts in insert mode at the end of text.
 -- Sending trims trailing whitespace; empty text, q/<Esc> in normal mode, :q, <C-w>c or wiping the
 -- buffer cancel.
 function M.open(opts)
@@ -48,9 +49,11 @@ function M.open(opts)
     vim.notify("pi: finish or cancel the open note first")
     return
   end
-  if opts.text == nil and draft then
-    opts = vim.tbl_extend("force", opts, { text = draft })
-    draft = nil
+  local prefill = opts.text
+  local key = opts.draft
+  if key and drafts[key] then
+    opts = vim.tbl_extend("force", opts, { text = drafts[key] })
+    drafts[key] = nil
     vim.notify("pi: restored your unsent text")
   end
   local origin = vim.api.nvim_get_current_win()
@@ -90,7 +93,13 @@ function M.open(opts)
     done = true
     current = nil
     if not text then
-      M.stash(buffer_text())
+      local text_now = buffer_text()
+      if text_now ~= prefill then
+        M.stash(key, text_now)
+      end
+      if key and (blank(text_now) or text_now == prefill) then
+        M.discard_draft(key)
+      end
     end
     vim.api.nvim_del_augroup_by_id(group)
     local focused = vim.api.nvim_get_current_win() == win

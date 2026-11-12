@@ -100,8 +100,10 @@ in insert mode and is a markdown buffer, so paragraphs and lists work.
 - `q` or `<Esc>` in normal mode cancels, as do `:q` and `<C-w>c`; nothing is
   sent. Moving to another window (say, the checkpoint panel opening) leaves
   the editor open.
-- Text you cancel, or that failed to send, is not lost: the next editor opens
-  with it and says `pi: restored your unsent text`.
+- Text you cancel, or that failed to send, is not lost: the next editor of the
+  same kind (ask, note, or edit of that annotation) opens with it and says
+  `pi: restored your unsent text`. Cancelling an edit you did not change
+  keeps nothing.
 - Sending empty text cancels. Trailing blank lines and spaces are dropped.
 
 Long text is previewed where you review it and read in full with

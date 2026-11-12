@@ -19,6 +19,7 @@ local function open(opts)
   editor.open({
     title = opts.title or " pi test ",
     text = opts.text,
+    draft = opts.draft or "test",
     on_submit = function(text)
       got.submitted[#got.submitted + 1] = text
     end,
@@ -39,6 +40,9 @@ end
 local function drain()
   local got = open()
   type_text("<Esc><C-s>")
+  for _, key in ipairs({ "test", "ask", "note", "edit:1" }) do
+    editor.discard_draft(key)
+  end
 end
 
 local function bufs()
@@ -191,8 +195,44 @@ M["cancelled text comes back on the next open, once, and sending clears it"] = f
   drain()
 end
 
+M["cancelling an edit keeps other drafts; changed edit text returns only to that edit"] = function()
+  editor.stash("ask", "pending ask")
+  editor.stash("note", "pending note")
+  local unchanged = open({ text = "old note", draft = "edit:1" })
+  type_text("<Esc>q")
+  settle()
+  assert(unchanged.cancelled == 1)
+  local changed = open({ text = "old note", draft = "edit:1" })
+  type_text("<Esc>A more<Esc>q")
+  settle()
+  assert(changed.cancelled == 1)
+  local ask = open({ draft = "ask" })
+  assert(vim.deep_equal(vim.api.nvim_buf_get_lines(ask.buf, 0, -1, false), { "pending ask" }))
+  type_text("<Esc>q")
+  local note = open({ draft = "note" })
+  assert(vim.deep_equal(vim.api.nvim_buf_get_lines(note.buf, 0, -1, false), { "pending note" }))
+  type_text("<Esc>q")
+  local again = open({ text = "old note", draft = "edit:1" })
+  assert(vim.deep_equal(vim.api.nvim_buf_get_lines(again.buf, 0, -1, false), { "old note more" }), "edit draft lost")
+  type_text("<Esc>q")
+  local plain = open({ draft = "edit:2" })
+  assert(vim.deep_equal(vim.api.nvim_buf_get_lines(plain.buf, 0, -1, false), { "" }))
+  type_text("<Esc>q")
+  drain()
+end
+
+M["editors without a draft key keep nothing"] = function()
+  local got = editor.open({ title = " x ", on_submit = function() end })
+  type_text("lost<Esc>q")
+  settle()
+  local next_got = open({ draft = "none" })
+  assert(vim.deep_equal(vim.api.nvim_buf_get_lines(next_got.buf, 0, -1, false), { "" }))
+  type_text("<Esc>q")
+  drain()
+end
+
 M["stash keeps text for the next open"] = function()
-  editor.stash("failed send")
+  editor.stash("test", "failed send")
   local got = open()
   assert(vim.deep_equal(vim.api.nvim_buf_get_lines(got.buf, 0, -1, false), { "failed send" }))
   type_text("<Esc>q")

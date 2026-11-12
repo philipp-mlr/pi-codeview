@@ -328,11 +328,14 @@ local function prompt_command(cmd)
     local title = (" pi ask · %s%s "):format(where(buf, sel.line1, sel.line2), label ~= "" and " · " .. label or "")
     editor.open({
       title = title,
+      draft = "ask",
       on_submit = function(text)
         -- Kept as the draft until pi has taken it, so a failed send does not lose it.
-        editor.stash(text)
+        editor.stash("ask", text)
         session.ensure(function(_, send_root)
-          M.prompt(text, M.prompt_context(buf, send_root, sel), editor.discard_draft)
+          M.prompt(text, M.prompt_context(buf, send_root, sel), function()
+            editor.discard_draft("ask")
+          end)
         end, { buf = buf })
       end,
     })
@@ -348,6 +351,7 @@ local function annotate_command(cmd)
   end
   editor.open({
     title = (" pi note · %s "):format(where(buf, start_line, end_line)),
+    draft = "note",
     on_submit = function(note)
       M.annotate(buf, start_line, end_line, note)
     end,
@@ -380,6 +384,7 @@ local function edit_command()
     editor.open({
       title = (" pi edit note · %s "):format(where(item.buf, start_line, end_line)),
       text = item.note,
+      draft = "edit:" .. item.id,
       on_submit = function(text)
         annotations.edit(item, text)
       end,

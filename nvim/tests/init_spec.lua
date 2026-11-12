@@ -733,7 +733,7 @@ M["PiAsk opens the editor titled with file, line or range and session, and sends
   assert(seen.input.title == " pi ask · ask.lua:2 ", vim.inspect(seen.input))
   assert(#sent == 2, vim.inspect(sent))
   session.ensure, pi.prompt, session.root, session.attached_label = saved.ensure, saved.prompt, saved.root, saved.label
-  require("pi.editor").discard_draft() -- pi.prompt was stubbed, so nothing confirmed the send
+  require("pi.editor").discard_draft("ask") -- pi.prompt was stubbed, so nothing confirmed the send
   vim.api.nvim_buf_delete(buf, { force = true })
   reset_maps()
 end
@@ -815,8 +815,33 @@ M["PiAsk resolves the session before opening the editor and keeps the text when 
   assert(vim.deep_equal(text, { "precious text" }), vim.inspect(text))
   assert(notes[1] and notes[1].msg == "pi: restored your unsent text", vim.inspect(notes))
   vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR><Esc>q"), "xt", false)
-  require("pi.editor").discard_draft()
+  require("pi.editor").discard_draft("ask")
   session.ensure = saved.ensure
+  vim.api.nvim_buf_delete(buf, { force = true })
+  reset_maps()
+end
+
+M["a PiAsk send leaves a cancelled PiAnnotate draft alone"] = function()
+  reset_maps()
+  capture_notify(function() pi.setup() end)
+  local session = require("pi.session")
+  local editor = require("pi.editor")
+  local buf, dir = file_in_dir("keep.lua", { "a" })
+  local saved = { ensure = session.ensure, request = session.request, mark_busy = session.mark_busy }
+  editor.stash("note", "half a note")
+  session.ensure = function(cb) cb(nil, dir) end
+  session.request = function(_, _, cb) cb(nil) end
+  session.mark_busy = function() end
+  capture_notify(function()
+    vim.cmd("PiAsk")
+    vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR>question<C-s>"), "xt", false)
+  end)
+  session.ensure, session.request, session.mark_busy = saved.ensure, saved.request, saved.mark_busy
+  capture_notify(function() vim.cmd("PiAnnotate") end)
+  local text = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  assert(vim.deep_equal(text, { "half a note" }), vim.inspect(text))
+  vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR><Esc><C-s>"), "xt", false)
+  editor.discard_draft("note")
   vim.api.nvim_buf_delete(buf, { force = true })
   reset_maps()
 end
