@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
+import * as os from "node:os";
 import * as path from "node:path";
 
 /** How long one running nvim may take to answer `review()`. */
@@ -39,32 +40,54 @@ function isLiveSocket(sockPath: string): Promise<boolean> {
   });
 }
 
-/** `$NVIM` first, then the `nvim.*` server sockets in `runtimeDir`, newest first. */
-function nvimSockets(runtimeDir: string | undefined, env: NodeJS.ProcessEnv): string[] {
+/** The `nvim.*` entries of dir with their mtimes; none when dir does not exist. */
+function socketsIn(dir: string): { path: string; mtime: number }[] {
   const found: { path: string; mtime: number }[] = [];
-  if (runtimeDir && fs.existsSync(runtimeDir)) {
-    for (const name of fs.readdirSync(runtimeDir)) {
-      if (!name.startsWith("nvim.")) continue;
-      const full = path.join(runtimeDir, name);
-      try {
-        found.push({ path: full, mtime: fs.statSync(full).mtimeMs });
-      } catch {
-        // Gone between readdir and stat.
-      }
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return found;
+  }
+  for (const name of names) {
+    if (!name.startsWith("nvim.")) continue;
+    const full = path.join(dir, name);
+    try {
+      found.push({ path: full, mtime: fs.statSync(full).mtimeMs });
+    } catch {
+      // Gone between readdir and stat.
     }
   }
+  return found;
+}
+
+/**
+ * Where nvim puts its server sockets: `runtimeDir` ($XDG_RUNTIME_DIR), else one directory per nvim
+ * under `<tmpdir>/nvim.<user>/`.
+ */
+function socketDirs(runtimeDir: string | undefined): string[] {
+  if (runtimeDir) return [runtimeDir];
+  const base = path.join(os.tmpdir(), `nvim.${os.userInfo().username}`);
+  try {
+    return fs.readdirSync(base).map((name) => path.join(base, name));
+  } catch {
+    return [];
+  }
+}
+
+/** `$NVIM` first, then the `nvim.*` server sockets nvim creates by default, newest first. */
+function nvimSockets(runtimeDir: string | undefined, env: NodeJS.ProcessEnv): string[] {
+  const found = socketDirs(runtimeDir).flatMap(socketsIn);
   found.sort((a, b) => b.mtime - a.mtime);
   const sockets = found.map((f) => f.path);
   return env.NVIM ? [env.NVIM, ...sockets.filter((s) => s !== env.NVIM)] : sockets;
 }
 
-function luaCall(root: string, sessionId: string): string {
-  return `lua require("pi").review(${JSON.stringify(root)}, ${JSON.stringify(sessionId)})`;
-}
-
-function shellQuote(s: string): string {
-  return `'${s.replaceAll("'", `'\\''`)}'`;
-}
+/**
+ * The command typed into the new pane's shell. Root and session come from the pane's environment, so
+ * nothing in it depends on their characters or on the shell's quoting rules (fish, bash, zsh).
+ */
+const HERDR_NVIM_COMMAND = `nvim -c "lua require('pi').review(vim.env.PI_NVIM_ROOT, vim.env.PI_NVIM_SESSION)"`;
 
 /** Asks each running nvim in turn to open the checkpoint list; the first that answers "ok" (its cwd or buffer is in root) wins. */
 async function askRunningNvim(root: string, sessionId: string, runtimeDir: string | undefined, env: NodeJS.ProcessEnv): Promise<boolean> {
@@ -79,7 +102,11 @@ async function askRunningNvim(root: string, sessionId: string, runtimeDir: strin
 
 /** Splits a herdr pane to the right of pi's pane, in root, and starts nvim there with the review call. */
 async function openHerdrPane(root: string, sessionId: string, paneId: string): Promise<boolean> {
-  const split = await processRunner.run("herdr", ["pane", "split", paneId, "--direction", "right", "--cwd", root, "--focus"], HERDR_TIMEOUT_MS);
+  const split = await processRunner.run(
+    "herdr",
+    ["pane", "split", paneId, "--direction", "right", "--cwd", root, "--env", `PI_NVIM_ROOT=${root}`, "--env", `PI_NVIM_SESSION=${sessionId}`, "--focus"],
+    HERDR_TIMEOUT_MS,
+  );
   if (split.code !== 0) return false;
   let newPane: unknown;
   try {
@@ -88,7 +115,7 @@ async function openHerdrPane(root: string, sessionId: string, paneId: string): P
     return false;
   }
   if (typeof newPane !== "string") return false;
-  const run = await processRunner.run("herdr", ["pane", "run", newPane, `nvim -c ${shellQuote(luaCall(root, sessionId))}`], HERDR_TIMEOUT_MS);
+  const run = await processRunner.run("herdr", ["pane", "run", newPane, HERDR_NVIM_COMMAND], HERDR_TIMEOUT_MS);
   return run.code === 0;
 }
 

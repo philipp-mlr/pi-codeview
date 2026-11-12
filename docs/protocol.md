@@ -81,6 +81,8 @@ The extension renders them under the context or the annotation's note as a `Diag
 `activity_current` is sent on tool start (`busy` true, `current` the tool), tool end (`current` the still-running tool or `null`; `mutating` only here), `agent_start` (`busy` true, `current` null) and `agent_settled` (`busy` false, `current` null).
 `mutating` is false when the tool that ended cannot change files (e.g. `read`); clients reload buffers only when it is true.
 
+`mode_changed.mode` is the mode in effect (as in `status`); it is also sent when `/tree` changes whether the session can be reviewed.
+
 `outside_worktree` is sent at most once per agent run, when a mutating tool's `path` argument resolves outside the session's root (the tool is not blocked). Clients show a warning.
 
 A `checkpoint` call with no changes since the last checkpoint (no agent and no human steps) creates no chunk and broadcasts nothing; it returns "Nothing changed since the last checkpoint; no review needed. Continue." Drafts are untouched.

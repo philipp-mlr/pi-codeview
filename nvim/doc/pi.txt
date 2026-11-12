@@ -195,7 +195,7 @@ in each running Neovim: the first whose working directory or current file is
 inside `root` answers "ok", attaches to that session and opens the checkpoint
 list; the others answer "not here". With none, inside herdr pi starts Neovim
 in a new pane to the right of its own; else it tells you to open Neovim in the
-worktree and press the |:PiCheckpoints| key.
+worktree and run |:PiCheckpoints| (default `<leader>pv`).
 
 The checkpoint list (|:PiCheckpoints|) opens when a checkpoint arrives. In it:
 

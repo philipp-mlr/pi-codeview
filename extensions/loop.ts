@@ -443,8 +443,9 @@ export class ReviewLoop {
   }
 
   async setMode(mode: Mode): Promise<void> {
+    // A session that can't be reviewed never waits at its open checkpoint, so it does not block "off".
     const open = this.state.openChunk();
-    if (mode === "off" && open) {
+    if (mode === "off" && open && this.canBeReviewed()) {
       throw new Error(`checkpoint ${open.n} is open — continue (<leader>pc) or /checkpoints discard <note> first`);
     }
     if (mode === "checkpoints" && (await this.otherReviewSession())) throw new Error(ONE_REVIEW_SESSION);
@@ -699,7 +700,7 @@ export class ReviewLoop {
     if (this.stopped) return;
     if (opened === "nvim") this.notify(`pi: checkpoint ${n} opened in Neovim`, "info");
     else if (opened === "herdr") this.notify(`pi: checkpoint ${n} opens in a new Neovim pane`, "info");
-    else this.notify(`pi: open Neovim in ${this.root} and press <leader>pv (:PiCheckpoints)`, "info");
+    else this.notify(`pi: open Neovim in ${this.root} and run :PiCheckpoints (default <leader>pv)`, "info");
   }
 
   private persist(): void {

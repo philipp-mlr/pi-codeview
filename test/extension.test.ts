@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NO_REVIEW, ReviewLoop } from "../extensions/loop.ts";
-import { processRunner } from "../extensions/open-nvim.ts";
+import { openInNeovim, processRunner } from "../extensions/open-nvim.ts";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -1133,6 +1133,15 @@ describe("pi-nvim open checkpoint in a session nobody can review", () => {
     expect(await child.fire("input", { source: "interactive", text: "do the task" })).toEqual([undefined]);
   });
 
+  it("/checkpoints off works in a restored child that can't be reviewed, despite its open checkpoint", async () => {
+    const repo = await makeRepo();
+    const entries = await openCheckpointEntries(repo);
+    const child = await start(repo, { entries, hasUI: false, sessionId: "child3" });
+    await child.runCommand("checkpoints", "off");
+    expect(child.notifications.filter((n) => n.level === "error")).toEqual([]);
+    expect((await repo.git("config", "pi-nvim.checkpoints")).trim()).toBe("false");
+  });
+
   it("a reviewable session still queues the prompt", async () => {
     const repo = await makeRepo();
     const entries = await openCheckpointEntries(repo);
@@ -1142,7 +1151,7 @@ describe("pi-nvim open checkpoint in a session nobody can review", () => {
 });
 
 describe("pi-nvim tools restored by /tree", () => {
-  it("session_tree re-applies checkpoint mode and tells clients when the mode changed", async () => {
+  it("session_tree re-applies checkpoint mode and stays silent when the mode is unchanged", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "checkpoints" });
     const client = await connect(repo);
@@ -1152,13 +1161,19 @@ describe("pi-nvim tools restored by /tree", () => {
     expect(client.events.filter((e) => e.event === "mode_changed")).toEqual([]);
   });
 
-  it("session_tree broadcasts mode_changed when the session can no longer be reviewed", async () => {
+  it("session_tree broadcasts mode_changed once when the allowlist starts permitting checkpoint", async () => {
     const repo = await makeRepo();
-    const fake = await start(repo, { mode: "checkpoints", allowedTools: ["read", "bash", "edit", "write"] });
+    // The fake reads the allowlist live, so changing the array changes what pi lets be active.
+    const allowedTools = ["read", "bash", "edit", "write"];
+    const fake = await start(repo, { mode: "checkpoints", allowedTools });
     const client = await connect(repo);
-    // Start was already off (effective), so nothing changes.
+    expect((await client.request("status")).result.mode).toBe("off");
+    allowedTools.push("checkpoint");
     await fake.fire("session_tree", {});
-    expect(client.events.filter((e) => e.event === "mode_changed")).toEqual([]);
+    await until(() => client.events.some((e) => e.event === "mode_changed"));
+    // A request answered after the event: any second broadcast would have arrived by now.
+    await client.request("status");
+    expect(client.events.filter((e) => e.event === "mode_changed")).toEqual([{ event: "mode_changed", data: { mode: "checkpoints" } }]);
   });
 });
 
@@ -1224,7 +1239,8 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     await agentWrite(fake, repo, "a.txt", "a\n");
     void fake.callTool("checkpoint", { note: "add a" });
     await until(() => client.events.find((e) => e.event === "chunk_ready"));
-    await new Promise((r) => setTimeout(r, 50));
+    // The offer follows chunk_ready within the same turn of work; one flush lets it run.
+    await new Promise((r) => setImmediate(r));
     expect(fake.confirms).toEqual([]);
     expect(fake.notifications).toEqual([]);
   });
@@ -1254,6 +1270,24 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     expect(runs.some((r) => r.cmd === "herdr")).toBe(false);
   });
 
+  it("without XDG_RUNTIME_DIR finds nvim's sockets in <tmpdir>/nvim.<user>/*/", async () => {
+    const savedTmp = process.env.TMPDIR;
+    process.env.TMPDIR = runtimeDir;
+    cleanups.push(() => {
+      if (savedTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmp;
+    });
+    const dir = path.join(runtimeDir, `nvim.${os.userInfo().username}`, "Xa1b2");
+    fs.mkdirSync(dir, { recursive: true });
+    const sock = path.join(dir, "nvim.7.0");
+    const server = net.createServer((c) => c.destroy());
+    await new Promise<void>((res) => server.listen(sock, res));
+    cleanups.push(() => new Promise<void>((res) => server.close(() => res())));
+    const runs = stubRunner((cmd, args) => (cmd === "nvim" && args[1] === sock ? "ok" : null));
+    expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {} })).toBe("nvim");
+    expect(runs.map((r) => r.args[1])).toEqual([sock]);
+  });
+
   it("yes, no nvim in this worktree, inside herdr → splits a pane right of pi's and starts nvim there", async () => {
     const repo = await makeRepo();
     const fake = await start(repo, { mode: "checkpoints" });
@@ -1264,9 +1298,17 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     fake.setConfirmAnswer(true);
     await openCheckpoint(fake, repo);
     await until(() => runs.some((r) => r.args[1] === "run"));
+    // Root and session reach nvim through the pane's environment, so the typed command needs no quoting
+    // of them, whatever the pane's shell.
     expect(runs.filter((r) => r.cmd === "herdr")).toEqual([
-      { cmd: "herdr", args: ["pane", "split", "w1:p4", "--direction", "right", "--cwd", repo.root, "--focus"] },
-      { cmd: "herdr", args: ["pane", "run", "w1:p9", `nvim -c 'lua require("pi").review(${JSON.stringify(repo.root)}, "test-session")'`] },
+      {
+        cmd: "herdr",
+        args: [
+          "pane", "split", "w1:p4", "--direction", "right", "--cwd", repo.root,
+          "--env", `PI_NVIM_ROOT=${repo.root}`, "--env", "PI_NVIM_SESSION=test-session", "--focus",
+        ],
+      },
+      { cmd: "herdr", args: ["pane", "run", "w1:p9", `nvim -c "lua require('pi').review(vim.env.PI_NVIM_ROOT, vim.env.PI_NVIM_SESSION)"`] },
     ]);
     await until(() => fake.notifications.some((n) => n.message === "pi: checkpoint 1 opens in a new Neovim pane"));
   });
@@ -1278,7 +1320,7 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     fake.setConfirmAnswer(true);
     await openCheckpoint(fake, repo);
     await until(() => fake.notifications.length >= 2);
-    expect(fake.notifications.at(-1)?.message).toBe(`pi: open Neovim in ${repo.root} and press <leader>pv (:PiCheckpoints)`);
+    expect(fake.notifications.at(-1)?.message).toBe(`pi: open Neovim in ${repo.root} and run :PiCheckpoints (default <leader>pv)`);
     expect(runs).toEqual([]);
   });
 
@@ -1297,7 +1339,8 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     await agentWrite(fake, repo, "a.txt", "a\n");
     void fake.callTool("checkpoint", { note: "add a" });
     await until(() => errors.mock.calls.length > 0);
-    await new Promise((r) => setTimeout(r, 20));
+    // Node reports an unhandled rejection once the microtasks are done; one flush covers it.
+    await new Promise((r) => setImmediate(r));
     expect(String(errors.mock.calls[0][0])).toContain("pi-nvim: offer to open checkpoint 1 failed: stale ctx");
     expect(rejections).toEqual([]);
   });
@@ -1308,7 +1351,7 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => (release = r));
     let asked = false;
-    vi.spyOn(processRunner, "run").mockImplementation(async () => {
+    const run = vi.spyOn(processRunner, "run").mockImplementation(async () => {
       asked = true;
       await gate;
       return { code: 1, stdout: "" };
@@ -1321,7 +1364,9 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     const before = fake.notifications.length;
     await fake.fire("session_shutdown", { reason: "quit" });
     release();
-    await new Promise((r) => setTimeout(r, 50));
+    // The open attempt goes on from the nvim call's answer; once it is in, one flush lets it finish.
+    await run.mock.results[0].value;
+    await new Promise((r) => setImmediate(r));
     expect(fake.notifications).toHaveLength(before);
   });
 
