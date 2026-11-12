@@ -2,7 +2,8 @@
 -- that sends with <C-s>. q or <Esc> in normal mode, :q and wiping its buffer cancel; moving focus
 -- elsewhere (a panel opening, another window or tab) leaves it open. Text that is cancelled or fails
 -- to send is kept as a draft under the editor's `draft` key and comes back in the next editor with
--- that key, its footer saying "restored". One editor at a time.
+-- that key, its footer saying "restored". One editor at a time. The buffer is 'modified' while it
+-- holds text, so quitting nvim from another window stops at it; `:w` sends.
 local M = {}
 
 local MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT = 80, 3, 15
@@ -10,6 +11,7 @@ local FOOTER = " <C-s> send · q cancel "
 local RESTORED_FOOTER = " restored · <C-s> send · q cancel "
 
 local current = nil -- { win, buf } of the open editor
+local opened = 0 -- editors opened so far, for unique buffer names
 local drafts = {} -- key -> unsent text of a cancelled editor, restored by the next open with that key
 
 -- Forgets the draft of key: its text reached pi, or what it belonged to is gone. With `text`, only
@@ -62,11 +64,21 @@ function M.open(opts)
   end
   local origin = vim.api.nvim_get_current_win()
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
+  -- acwrite: `:w` runs the BufWriteCmd below instead of writing a file; it needs a name. hide, not
+  -- wipe: a modified buffer set to wipe keeps `<C-w>c` from closing its window. Hidden, it cancels.
+  vim.bo[buf].buftype = "acwrite"
+  vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].swapfile = false
+  opened = opened + 1
+  vim.api.nvim_buf_set_name(buf, ("pi://editor/%d"):format(opened))
   local lines = vim.split(opts.text or "", "\n", { plain = true })
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  local function mark_modified()
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.bo[buf].modified = not blank(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
+    end
+  end
+  mark_modified()
   local config = layout(#lines)
   config.style = "minimal"
   config.border = "rounded"
@@ -153,6 +165,17 @@ function M.open(opts)
         return true
       end
       vim.schedule(fit)
+      vim.schedule(mark_modified)
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWriteCmd", { group = group, buffer = buf, callback = submit })
+  -- `:q` in the editor cancels (the text stays a draft) instead of stopping at 'modified'; so does
+  -- `:qa` typed in it.
+  vim.api.nvim_create_autocmd("QuitPre", {
+    group = group,
+    buffer = buf,
+    callback = function()
+      vim.bo[buf].modified = false
     end,
   })
   vim.api.nvim_create_autocmd("BufUnload", {
@@ -163,7 +186,7 @@ function M.open(opts)
     end,
   })
   vim.api.nvim_create_autocmd("WinClosed", { group = group, pattern = tostring(win), callback = vim.schedule_wrap(cancel) })
-  vim.api.nvim_create_autocmd("BufWipeout", { group = group, buffer = buf, callback = vim.schedule_wrap(cancel) })
+  vim.api.nvim_create_autocmd({ "BufHidden", "BufWipeout" }, { group = group, buffer = buf, callback = vim.schedule_wrap(cancel) })
 
   fit()
   vim.api.nvim_win_set_cursor(win, { #lines, 0 })

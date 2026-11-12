@@ -88,7 +88,7 @@ the notice.
 | Key | Command | What it does |
 |---|---|---|
 | `<leader>pa` | `:PiAsk` | Ask pi. Normal mode sends the file and cursor line; visual mode sends the line range and the selected text. |
-| `<leader>pc` | `:PiContinue` | Continue: save all buffers, then send your annotations and edits as the review of the waiting checkpoint and let the agent go on. Without a waiting checkpoint it sends the annotations as a new prompt. |
+| `<leader>pc` | `:PiContinue` | Continue: save the modified buffers of this worktree (if one can't be saved, nothing is sent), then send your annotations and edits as the review of the waiting checkpoint and let the agent go on. Without a waiting checkpoint it sends the annotations as a new prompt. |
 | `<leader>ps` | `:PiStop` | Stop the agent's current run (like Escape in pi). |
 | `<leader>pn` | `:PiAnnotate` | Annotate the current line or the visual range. |
 | `<leader>pe` | `:PiAnnotationEdit` | Edit the text of one annotation under the cursor; when several cover the line, pick which. |
@@ -107,10 +107,10 @@ says where the text goes: ` pi ask · session.lua:5 · refactor-discover `
 ` pi edit note · session.lua:5-9 ` with the current text filled in. It starts
 in insert mode and is a markdown buffer, so paragraphs and lists work.
 
-- `<C-s>` sends (insert and normal mode); `<CR>` sends in normal mode.
+- `<C-s>` sends (insert and normal mode); `<CR>` sends in normal mode; so does `:w`.
 - `q` or `<Esc>` in normal mode cancels, as do `:q` and `<C-w>c`; nothing is
   sent. Moving to another window (say, the checkpoint panel opening) leaves
-  the editor open.
+  the editor open, and `:qa` from another window stops at its unsent text.
 - Text you cancel, or that failed to send, is not lost: the next editor of the
   same kind (ask, note, or edit of that annotation) opens with it, its footer
   reading ` restored · <C-s> send · q cancel `. Cancelling an edit you did not
@@ -120,8 +120,10 @@ in insert mode and is a markdown buffer, so paragraphs and lists work.
 Long text is previewed where you review it and read in full with
 `<leader>pk`:
 
-- In a checkpoint diff the note and the file's reason show their first 80
-  characters, then `… <leader>pk`. `<leader>pk` opens a float with
+- In a checkpoint diff the note and the file's reason show as much as fits
+  the left window (at most 80 characters), then `… <leader>pk`; the key
+  always shows, also in a narrow window, and the text re-fits when you
+  resize. `<leader>pk` opens a float with
   `checkpoint N — <title>`, the full note and `why: …` for the current file.
 - An annotation shows at most 2 lines below its range, wrapped to the
   window's text width, the second ending in `…` when cut. The wrap follows
@@ -300,7 +302,7 @@ Review flow:
    ` pi checkpoints — <CR> open · za more · g? keys` (just the keys when the
    window is narrow). One line per checkpoint:
    `● 4 waiting  <title>  3 files`; the title gets all the room left. The waiting checkpoint is
-   first and highlighted (`PiCheckpointWaiting`), the others follow newest
+   first and highlighted (`PiCheckpointWaitingRow`), the others follow newest
    first (`✓` reviewed, `✗` discarded). The title is the one the agent gave
    the step, or the first sentence of its note. `za` on a line shows the
    details below it: the full note, each file with its added and removed
@@ -314,7 +316,7 @@ Review flow:
 3. The checkpoint opens in its own tab as a diff view: on the left the file
    before the checkpoint, on the right your file. Above the diff you see the
    checkpoint note and the agent's one-line reason for the current file
-   (the first 80 characters; `<leader>pk` shows them in full).
+   (what fits, at most 80 characters; `<leader>pk` shows them in full).
    `<Tab>` and `<S-Tab>` move to the next and previous file (they stop at the
    ends), `q` closes the tab and takes you back to where you came from. Vim's
    own diff keys work: `]c` and `[c` jump between changes, `do` and `dp`

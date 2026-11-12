@@ -102,9 +102,11 @@ local function on_event(name, data)
       ("pi: the agent is editing outside %s"):format(worktree),
     }, vim.log.levels.WARN)
   end
-  if name == "chunk_ready" then
-    -- The server sends { chunk = {...} }.
-    local n = data and (data.chunk and data.chunk.n) or "?"
+  -- The server sends { chunk = {...} }. Only an open chunk waits for review; a recorded one (each
+  -- changed turn with checkpoint mode off) only shows up in the list, refreshed below.
+  local ready = name == "chunk_ready" and type(data) == "table" and type(data.chunk) == "table" and data.chunk or nil
+  if ready and ready.status == "open" then
+    local n = ready.n or "?"
     if not M.auto_open_panel or panel.visible() or diff.is_diff_window(vim.api.nvim_get_current_win()) then
       M.notify_waiting(n)
     else

@@ -293,7 +293,8 @@ local function help_rows()
   }
 end
 
--- A float listing the panel keys, styled like the editor; q or <Esc> closes it.
+-- A float listing the panel keys, styled like the editor; q or <Esc> closes it, and so does leaving it
+-- (like LSP hover).
 local function show_help()
   local rows = help_rows()
   local key_width = 0
@@ -327,7 +328,9 @@ local function show_help()
     title = " pi checkpoint keys ",
     title_pos = "center",
   })
+  local group = vim.api.nvim_create_augroup("PiPanelHelp", { clear = true })
   local function close()
+    pcall(vim.api.nvim_del_augroup_by_id, group)
     pcall(vim.api.nvim_win_close, float, true)
     if vim.api.nvim_win_is_valid(origin) then
       vim.api.nvim_set_current_win(origin)
@@ -336,6 +339,18 @@ local function show_help()
   for _, lhs in ipairs({ "q", "<Esc>" }) do
     vim.keymap.set("n", lhs, close, { buffer = help_buf, nowait = true, desc = "pi: close keys help" })
   end
+  -- Leaving goes where it was going: only the float closes, focus is not moved back.
+  vim.api.nvim_create_autocmd({ "WinLeave", "BufLeave" }, {
+    group = group,
+    buffer = help_buf,
+    once = true,
+    callback = function()
+      pcall(vim.api.nvim_del_augroup_by_id, group)
+      vim.schedule(function()
+        pcall(vim.api.nvim_win_close, float, true)
+      end)
+    end,
+  })
 end
 
 local function toggle_details()

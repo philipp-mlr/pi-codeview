@@ -148,6 +148,25 @@ M["panel: g? lists every key in a float that q and <Esc> close"] = function()
   press("q")
 end
 
+M["panel: g? help closes when focus leaves it"] = function()
+  local _, win = open_panel({})
+  vim.api.nvim_set_current_win(win)
+  press("g?")
+  local float = vim.api.nvim_get_current_win()
+  assert(float ~= win and vim.api.nvim_win_get_config(float).relative ~= "", "no help float")
+  vim.api.nvim_set_current_win(win)
+  -- Closed on the next loop turn: a window cannot close inside WinLeave.
+  assert(vim.wait(500, function() return not vim.api.nvim_win_is_valid(float) end, 10), "help stayed open after leaving it")
+  assert(vim.api.nvim_get_current_win() == win, "focus moved")
+  -- Opening it again works, and leaving it again closes it again.
+  press("g?")
+  float = vim.api.nvim_get_current_win()
+  vim.cmd("wincmd p")
+  assert(vim.wait(500, function() return not vim.api.nvim_win_is_valid(float) end, 10), "second help stayed open")
+  local left = pcall(vim.api.nvim_get_autocmds, { group = "PiPanelHelp" })
+  assert(not left, "help autocmds left behind")
+end
+
 M["panel: a without recorded turns says so"] = function()
   local buf = open_panel({ chunk(2, "reviewed") })
   local notes, notify = {}, vim.notify

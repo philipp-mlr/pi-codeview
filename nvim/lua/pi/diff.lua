@@ -9,7 +9,7 @@ local pi_text = require("pi.text")
 local fit = pi_text.fit
 
 local M = {}
-local PREVIEW_CHARS = 80 -- virt_lines do not wrap; the full text is one peek away
+local PREVIEW_CHARS = 80 -- at most this much of a note or why shows; the full text is one peek away
 
 M.mode = "auto" -- "auto" | "diffview" | "builtin", set by setup({ diff = ... })
 local warned_missing_diffview = false
@@ -301,27 +301,54 @@ local function place_winbars(view)
   ))
 end
 
--- Puts the chunk note and the file's why as virt_lines above line 1 of `buf`; returns them.
-function M.place_why(buf, chunk, path)
+-- The window showing buf in the current tab (the left side of a diff), or nil.
+local function window_of(buf)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      return win
+    end
+  end
+end
+
+-- Puts the chunk note and the file's why as virt_lines above line 1 of `buf`; returns them. Each is
+-- fitted to `win` (default: the window showing buf), since virt_lines do not wrap.
+function M.place_why(buf, chunk, path, win)
   local ns = vim.api.nvim_create_namespace("pi_why")
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-  -- virt_lines neither wrap nor span lines: one line each, whitespace collapsed, cut to the first
-  -- 80 characters followed by the peek key.
-  local function one_line(text)
+  win = win or window_of(buf)
+  local width = math.huge
+  if win and vim.api.nvim_win_is_valid(win) then
+    local info = vim.fn.getwininfo(win)[1]
+    width = info.width - info.textoff
+  end
+  -- One line each, whitespace collapsed. A longer text than fits (or than 80 characters) is cut
+  -- with "…" and followed by the peek key, which always stays visible; with no room for any text,
+  -- only the key shows.
+  local function one_line(text, prefix)
     text = vim.trim((text or ""):gsub("%s+", " "))
-    if vim.fn.strchars(text) > PREVIEW_CHARS then
-      text = vim.fn.strcharpart(text, 0, PREVIEW_CHARS) .. "… " .. keys.label("peek", ":PiPeek")
+    if text == "" then
+      return ""
     end
-    return text
+    local room = width - vim.fn.strdisplaywidth(prefix)
+    if vim.fn.strdisplaywidth(text) <= math.min(PREVIEW_CHARS, room) then
+      return prefix .. text
+    end
+    local hint = keys.label("peek", ":PiPeek")
+    local text_room = math.min(PREVIEW_CHARS + 1, room - vim.fn.strdisplaywidth(hint) - 1)
+    if text_room < 2 then
+      return prefix .. hint
+    end
+    -- The appended "…" makes fit always cut, also an 81-character text that would fit text_room.
+    return prefix .. fit(text .. "…", text_room) .. " " .. hint
   end
   local virt = {}
-  local note = one_line(chunk.note)
+  local note = one_line(chunk.note, "  ")
   if note ~= "" then
-    virt[#virt + 1] = { { "  " .. note, "Title" } }
+    virt[#virt + 1] = { { note, "Title" } }
   end
-  local why = one_line(chunk.why and chunk.why[path])
+  local why = one_line(chunk.why and chunk.why[path], "  why: ")
   if why ~= "" then
-    virt[#virt + 1] = { { "  why: " .. why, "Comment" } }
+    virt[#virt + 1] = { { why, "Comment" } }
   end
   if #virt > 0 then
     vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, { virt_lines = virt, virt_lines_above = true })
@@ -351,8 +378,6 @@ function M.show(view, index)
     vim.api.nvim_win_set_buf(view.right, right)
   end
 
-  local virt = M.place_why(left, chunk, file.path)
-
   place_winbars(view)
   for _, win in ipairs({ view.left, view.right }) do
     map_file_keys(vim.api.nvim_win_get_buf(win))
@@ -360,6 +385,8 @@ function M.show(view, index)
       vim.cmd("diffthis")
     end)
   end
+  -- Placed after diffthis: its fold column narrows the room for the previews.
+  local virt = M.place_why(left, chunk, file.path, view.left)
   -- diffthis resets the view, so the explanation is scrolled into sight only afterwards.
   if #virt > 0 then
     vim.api.nvim_win_call(view.left, function()
@@ -440,13 +467,32 @@ vim.api.nvim_create_autocmd("TabEnter", {
   end,
 })
 
--- Re-fits the winbars of the built-in views whose windows changed size.
-local function refit_winbars(windows)
+-- Re-fits the winbars and the note and why previews of the views whose windows changed size (all
+-- views when `windows` is nil). A diffview tab is re-placed only when current: its left buffer is
+-- found among the current tab's windows.
+local function refit_views(windows)
+  local function resized(wins)
+    if not windows then
+      return true
+    end
+    for _, win in ipairs(wins) do
+      if vim.tbl_contains(windows, win) then
+        return true
+      end
+    end
+    return false
+  end
   for tab, view in pairs(views) do
-    if vim.api.nvim_tabpage_is_valid(tab) and view.kind ~= "diffview" and view.index
-      and vim.api.nvim_win_is_valid(view.left) and vim.api.nvim_win_is_valid(view.right)
-      and (not windows or vim.tbl_contains(windows, view.left) or vim.tbl_contains(windows, view.right)) then
-      place_winbars(view)
+    if vim.api.nvim_tabpage_is_valid(tab) then
+      if view.kind == "diffview" then
+        if tab == vim.api.nvim_get_current_tabpage() and resized(vim.api.nvim_tabpage_list_wins(tab)) then
+          place_tab_explanation(tab, view)
+        end
+      elseif view.index and vim.api.nvim_win_is_valid(view.left) and vim.api.nvim_win_is_valid(view.right)
+        and resized({ view.left, view.right }) then
+        place_winbars(view)
+        M.place_why(vim.api.nvim_win_get_buf(view.left), view.chunk, view.files[view.index].path, view.left)
+      end
     end
   end
 end
@@ -456,13 +502,13 @@ local winbar_group = vim.api.nvim_create_augroup("PiDiffWinbar", { clear = false
 vim.api.nvim_create_autocmd("WinResized", {
   group = winbar_group,
   callback = function()
-    refit_winbars(vim.v.event.windows or {})
+    refit_views(vim.v.event.windows or {})
   end,
 })
 vim.api.nvim_create_autocmd("VimResized", {
   group = winbar_group,
   callback = function()
-    refit_winbars(nil)
+    refit_views(nil)
   end,
 })
 

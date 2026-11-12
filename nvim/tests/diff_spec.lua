@@ -451,16 +451,73 @@ end
 M["long note and why show their first 80 characters, then … and the peek key"] = function()
   local keys = require("pi.keys")
   local saved = keys.mapped
+  -- A buffer in no window: no width limit but the 80 characters. (Opening a diff in a window wide
+  -- enough and redrawing crashes this nvim build with some user configs, so no window here.)
+  local buf = vim.api.nvim_create_buf(false, true)
+  local function placed(note, why)
+    diff.place_why(buf, { note = note, why = { ["a.txt"] = why } }, "a.txt")
+    return why_text(buf)
+  end
   keys.mapped = { peek = "<leader>pk" }
-  local text = open_with_note(("x"):rep(300), ("y"):rep(81))
+  local text = placed(("x"):rep(300), ("y"):rep(81))
   assert(vim.deep_equal(text, {
     "  " .. ("x"):rep(80) .. "… <leader>pk",
     "  why: " .. ("y"):rep(80) .. "… <leader>pk",
   }), vim.inspect(text))
   keys.mapped = {}
-  text = open_with_note(("x"):rep(80), ("y"):rep(300))
+  text = placed(("x"):rep(80), ("y"):rep(300))
   assert(vim.deep_equal(text, { "  " .. ("x"):rep(80), "  why: " .. ("y"):rep(80) .. "… :PiPeek" }), vim.inspect(text))
   keys.mapped = saved
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["note and why previews fit the left window, the peek key always visible, refit on resize"] = function()
+  local keys = require("pi.keys")
+  local saved_keys, saved_columns = keys.mapped, vim.o.columns
+  keys.mapped = { peek = "<leader>pk" }
+  local ok, err = pcall(function()
+  for _, columns in ipairs({ 40, 120 }) do
+    vim.o.columns = columns
+    local root, sha = chunk_repo()
+    vim.fn.writefile({ "two" }, root .. "/a.txt")
+    session.root = root
+    session.cached = { sessionId = "fit" .. columns }
+    local original = session.request
+    session.request = function(_, _, cb)
+      cb(nil, { chunk = { n = 1, status = "open", fromSha = sha, note = ("x"):rep(300), humanFiles = {}, agentFiles = { "a.txt" }, why = { ["a.txt"] = ("y"):rep(300) } } })
+    end
+    diff.open(1)
+    session.request = original
+    local win = vim.fn.win_getid(1, vim.fn.tabpagenr())
+    local function check(label)
+      local info = vim.fn.getwininfo(win)[1]
+      local room = info.width - info.textoff
+      local text = why_text(vim.api.nvim_win_get_buf(win))
+      assert(#text == 2, vim.inspect(text))
+      for i, line in ipairs(text) do
+        local prefix = i == 1 and "  " or "  why: "
+        -- Cut with … before the key, or (no room for any text) only the key.
+        assert(vim.endswith(line, "… <leader>pk") or line == prefix .. "<leader>pk", label .. ": " .. line)
+        assert(vim.fn.strdisplaywidth(line) <= room, ("%s: %d > %d: %s"):format(label, vim.fn.strdisplaywidth(line), room, line))
+      end
+    end
+    check(columns .. " columns")
+    if columns == 120 then
+      local note = why_text(vim.api.nvim_win_get_buf(win))[1]
+      assert(note:find("^  xxxxx"), "no note text at 120 columns: " .. note)
+    end
+    vim.api.nvim_win_set_width(win, 24)
+    win_resized("PiDiffWinbar", { win })
+    check(columns .. " columns, resized to 24")
+    vim.cmd("tabclose")
+  end
+  end)
+  if not ok and #vim.api.nvim_list_tabpages() > 1 then
+    vim.cmd("silent! tabclose!")
+  end
+  session.cached = nil
+  keys.mapped, vim.o.columns = saved_keys, saved_columns
+  assert(ok, err)
 end
 
 M["peek_lines gives the checkpoint title, full note and the current file's why"] = function()

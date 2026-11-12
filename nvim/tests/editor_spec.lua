@@ -62,7 +62,7 @@ M["editor is a centred rounded float with title, footer, wrap and markdown"] = f
   assert(config.height == 3, config.height)
   assert(config.col == math.floor((vim.o.columns - config.width) / 2) - 1, config.col)
   assert(vim.wo[got.win].wrap and vim.wo[got.win].linebreak)
-  assert(vim.bo[got.buf].filetype == "markdown" and vim.bo[got.buf].buftype == "nofile" and vim.bo[got.buf].bufhidden == "wipe")
+  assert(vim.bo[got.buf].filetype == "markdown" and vim.bo[got.buf].buftype == "acwrite" and vim.bo[got.buf].bufhidden == "hide")
   type_text("<Esc>q")
   assert(vim.api.nvim_get_current_win() == origin)
   drain()
@@ -133,6 +133,44 @@ M["every other way of closing cancels exactly once and leaks no buffer"] = funct
     assert(not vim.api.nvim_buf_is_valid(got.buf) and bufs() == before, name .. " leaked the buffer")
     assert(vim.api.nvim_get_current_win() == origin, name .. " did not return")
   end
+  drain()
+end
+
+M[":w in the editor sends"] = function()
+  local origin = vim.api.nvim_get_current_win()
+  local got = open()
+  type_text("written<Esc>")
+  vim.cmd("w")
+  assert(vim.deep_equal(got.submitted, { "written" }) and got.cancelled == 0, vim.inspect(got))
+  assert(not vim.api.nvim_win_is_valid(got.win) and vim.api.nvim_get_current_win() == origin)
+end
+
+M["the editor buffer is modified while it has text, so :qa elsewhere is refused; :q in it cancels"] = function()
+  local origin = vim.api.nvim_get_current_win()
+  local got = open()
+  settle()
+  assert(not vim.bo[got.buf].modified, "empty editor is modified")
+  type_text("unsent<Esc>")
+  settle()
+  assert(vim.bo[got.buf].modified, "editor with text is not modified")
+  type_text("cc<Esc>")
+  settle()
+  assert(not vim.bo[got.buf].modified, "emptied editor is still modified")
+  type_text("ccunsent again<Esc>")
+  settle()
+  -- Quitting from another window stops at the editor's unsent text.
+  vim.api.nvim_set_current_win(origin)
+  local quit = pcall(vim.cmd, "qa")
+  assert(not quit and vim.api.nvim_win_is_valid(got.win), ":qa left the unsent text")
+  -- :q in the editor cancels and keeps the draft.
+  vim.api.nvim_set_current_win(got.win)
+  vim.cmd("q")
+  settle()
+  assert(got.cancelled == 1 and #got.submitted == 0, vim.inspect(got))
+  assert(not vim.api.nvim_win_is_valid(got.win) and vim.api.nvim_get_current_win() == origin)
+  local back = open()
+  assert(vim.deep_equal(vim.api.nvim_buf_get_lines(back.buf, 0, -1, false), { "unsent again" }), "draft lost")
+  type_text("<Esc>q")
   drain()
 end
 
@@ -271,6 +309,47 @@ M["discard_draft with text forgets the draft only while it is still that text"] 
   assert(vim.deep_equal(vim.api.nvim_buf_get_lines(second.buf, 0, -1, false), { "newer text" }), "newer draft dropped")
   type_text("<Esc>q")
   drain()
+end
+
+M["a checkpoint arriving while the editor is open keeps it, its text and the focus, and opens the list"] = function()
+  local pi = require("pi")
+  local session = require("pi.session")
+  local panel = require("pi.panel")
+  local live = require("pi.live")
+  local saved = { on_event = session.on_event, ensure = session.ensure, request = session.request, schedule = live.schedule }
+  local handler
+  session.on_event = function(fn) handler = fn end
+  local real_notify = vim.notify
+  vim.notify = function() end
+  pi.setup()
+  vim.notify = real_notify
+  session.on_event = saved.on_event
+  session.ensure = function(cb) cb() end
+  session.request = function(_, _, cb) cb(nil, {}) end
+  live.schedule = function() end
+  local ok, err = pcall(function()
+    vim.cmd("only")
+    local got = open()
+    -- Typed and still in insert mode when the checkpoint arrives.
+    local mode
+    _G.pi_spec_chunk_ready = function()
+      mode = vim.api.nvim_get_mode().mode
+      handler("chunk_ready", { chunk = { n = 5, status = "open" } })
+    end
+    type_text("half a note<Cmd>lua _G.pi_spec_chunk_ready()<CR>")
+    _G.pi_spec_chunk_ready = nil
+    assert(mode == "i", tostring(mode))
+    assert(vim.api.nvim_win_is_valid(got.win) and got.cancelled == 0, "the checkpoint closed the editor")
+    assert(vim.deep_equal(vim.api.nvim_buf_get_lines(got.buf, 0, -1, false), { "half a note" }), "text lost")
+    assert(vim.api.nvim_get_current_win() == got.win, "focus left the editor")
+    assert(panel.visible(), "checkpoint list not open")
+    type_text("<Esc>q")
+    panel.close()
+  end)
+  session.ensure, session.request, live.schedule = saved.ensure, saved.request, saved.schedule
+  vim.api.nvim_clear_autocmds({ group = "pi" })
+  drain()
+  assert(ok, err)
 end
 
 return M

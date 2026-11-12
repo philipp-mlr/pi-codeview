@@ -145,6 +145,10 @@ buffer. Its title says where the text goes. It starts in insert mode.
     <C-s>       send (insert and normal mode)
     <CR>        send (normal mode)
     q, <Esc>    cancel (normal mode); `:q` and `<C-w>c` cancel too
+    :w          send
+
+Unsent text keeps the editor modified, so `:qa` from another window stops
+at it; `:qa` typed in the editor itself quits and drops the text.
 
 Text you cancelled, or that failed to send, is offered again by the next
 editor of the same kind; its footer then starts with `restored`. Sending

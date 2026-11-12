@@ -18,7 +18,7 @@ local function capture_notify(fn)
   vim.notify = function(msg, level)
     notes[#notes + 1] = { msg = msg, level = level }
   end
-  local ok, err = pcall(fn)
+  local ok, err = pcall(fn, notes) -- fn may wait on the notices collected so far
   vim.notify = original
   assert(ok, err)
   return notes
@@ -980,8 +980,10 @@ M["notices fit the message line at 80 columns, so nvim never asks to press ENTER
   reset_maps()
 end
 
--- Fires chunk_ready through the handler setup(opts) registers; returns the notices and whether the panel opened.
-local function chunk_ready_with(opts)
+-- Fires chunk_ready (chunk defaults to an open checkpoint 7) through the handler setup(opts)
+-- registers, with the list shown when `visible`; returns the notices, whether the panel opened and
+-- whether it was refreshed.
+local function chunk_ready_with(opts, chunk, visible)
   local session = require("pi.session")
   local panel = require("pi.panel")
   local handlers = {}
@@ -991,16 +993,33 @@ local function chunk_ready_with(opts)
   session.on_event = real_on
   local diff = require("pi.diff")
   local saved = { open = panel.open, refresh = panel.refresh, visible = panel.visible, live = require("pi.live").schedule, in_diff = diff.is_diff_window }
-  local opened = false
+  local opened, refreshed = false, false
   diff.is_diff_window = function() return false end
   panel.open = function() opened = true end
-  panel.refresh = function() end
-  panel.visible = function() return false end
+  panel.refresh = function() refreshed = true end
+  panel.visible = function() return visible == true end
   require("pi.live").schedule = function() end
-  local notes = capture_notify(function() handlers[#handlers]("chunk_ready", { chunk = { n = 7 } }) end)
+  local notes = capture_notify(function() handlers[#handlers]("chunk_ready", { chunk = chunk or { n = 7, status = "open" } }) end)
   panel.open, panel.refresh, panel.visible, require("pi.live").schedule = saved.open, saved.refresh, saved.visible, saved.live
   diff.is_diff_window = saved.in_diff
-  return notes, opened
+  return notes, opened, refreshed
+end
+
+M["a recorded chunk_ready neither opens the list nor says a checkpoint waits"] = function()
+  reset_maps()
+  local recorded = { n = 3, status = "recorded" }
+  local notes, opened = chunk_ready_with(nil, recorded, false)
+  assert(not opened and #notes == 0, vim.inspect(notes))
+  local refreshed
+  notes, opened, refreshed = chunk_ready_with(nil, recorded, true)
+  assert(not opened and #notes == 0 and refreshed, vim.inspect(notes))
+  notes, opened = chunk_ready_with({ panel = { auto_open = false } }, recorded, false)
+  assert(not opened and #notes == 0, vim.inspect(notes))
+  -- An open one still opens the list.
+  notes, opened = chunk_ready_with(nil, { n = 4, status = "open" }, false)
+  assert(opened and #notes == 0, vim.inspect(notes))
+  capture_notify(function() pi.setup() end)
+  reset_maps()
 end
 
 M["chunk_ready opens the checkpoint list unless panel.auto_open is false"] = function()
@@ -1565,9 +1584,11 @@ M["review: a session id not running in root says so"] = function()
   vim.cmd("cd " .. vim.fn.fnameescape(root))
   local restore = fake_sessions(root)
   local ok, err = pcall(function()
-    local notes = capture_notify(function()
+    local notes = capture_notify(function(collected)
       assert(pi.review(root, "gone") == "ok")
-      vim.wait(500, function() return false end)
+      vim.wait(2000, function() return #collected > 0 end, 10)
+      -- Nothing else follows the one notice.
+      vim.wait(50, function() return false end)
     end)
     assert(#notes == 1 and notes[1].msg:find("no pi session gone", 1, true), vim.inspect(notes))
   end)
