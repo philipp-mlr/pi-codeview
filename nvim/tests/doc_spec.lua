@@ -22,7 +22,7 @@ end
 
 M["helptags finds pi, :PiContinue and pi-setup, and :help opens them"] = function()
   local copy, tags = helptags()
-  for _, name in ipairs({ "pi.txt", "pi", "pi-setup", ":PiContinue", "pi-keys", "pi-highlights", "pi-statusline" }) do
+  for _, name in ipairs({ "pi.txt", "pi", "pi-setup", ":PiContinue", "pi-keys", "pi-highlights", "pi-statusline", "pi-annotations" }) do
     assert(has_tag(tags, name), "no tag " .. name)
   end
   local old = vim.o.runtimepath

@@ -99,7 +99,7 @@ function probeStatus(sockPath: string): Promise<{ root?: string; mode?: string }
 
 /** The warning for edits outside the session's worktree; the same text shows in pi and in nvim. */
 export function outsideWorktreeText(root: string): string {
-  return `pi: the agent is editing files outside ${root} — checkpoint mode can't show them; start pi in that worktree`;
+  return `pi: the agent is editing outside ${path.basename(root)} — start pi in that worktree to review it`;
 }
 
 /** The review loop for one pi session in one git worktree. */

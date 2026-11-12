@@ -56,6 +56,8 @@ function runNvim(repo: TestRepo, body: string, cwd = repo.root): { notifications
     script,
     `
 local log = ${JSON.stringify(log)}
+-- Wide enough for every notice's full wording; notices shorten to fit narrower screens (nvim specs).
+vim.o.columns = 200
 local notes = {}
 vim.notify = function(msg, level)
   notes[#notes + 1] = { msg = tostring(msg), level = level or vim.log.levels.INFO }
@@ -169,7 +171,7 @@ cv.continue()
       "continue notification",
     );
     expect(notes.filter((n) => n.level === ERROR)).toEqual([]);
-    expect(notes.map((n) => n.msg)).toContain("PANEL ● 1  waiting   add a   2 files");
+    expect(notes.map((n) => n.msg)).toContain("PANEL ● 1 waiting  add a  2 files");
     expect(notes.map((n) => n.msg).filter((m) => m.startsWith("WINBAR"))).toEqual([
       "WINBAR checkpoint 1 · 1/2 · a.txt (agent)",
       "WINBAR checkpoint 1 · 2/2 · b.txt (agent)",
@@ -510,8 +512,8 @@ end, 5)
 `,
     );
     await until(() => nvim.notifications().some((n) => n.msg.startsWith("S0")), "attached");
-    await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "edit", args: { path: "a.ts" } });
-    await until(() => nvim.notifications().some((n) => n.msg === "S pi: work · working · edit a.ts"), "working · edit a.ts");
+    await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "edit", args: { path: "src/a.ts" } });
+    await until(() => nvim.notifications().some((n) => n.msg === "S pi: work · edit a.ts"), "edit a.ts");
     await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "edit", result: {}, isError: false });
     await until(() => nvim.notifications().some((n) => n.msg === "S pi: work · working"), "working");
     fake.setIdle(true);

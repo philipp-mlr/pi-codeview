@@ -4,6 +4,7 @@ local badge = require("pi.badge")
 local client = require("pi.client")
 local discover = require("pi.discover")
 local live = require("pi.live")
+local pi_text = require("pi.text")
 
 local M = {}
 
@@ -307,7 +308,7 @@ function M.ensure(cb, opts)
   opts = opts or {}
   local function fail(msg)
     if not opts.quiet then
-      vim.notify(msg, vim.log.levels.ERROR)
+      pi_text.notify_fit(msg, vim.log.levels.ERROR)
     end
   end
   local switching = false
@@ -327,13 +328,13 @@ function M.ensure(cb, opts)
   end
   local function attached(conn, r)
     if switching then
-      vim.notify(("pi: switched to %s (%s)"):format(M.label(M.cached), vim.fs.basename(r)))
+      pi_text.notify_fit({ ("pi: switched to %s (%s)"):format(M.label(M.cached), vim.fs.basename(r)), "pi: switched to " .. M.label(M.cached) })
     end
     cb(conn, r)
   end
   collect(dir, root, function(live)
     if #live == 0 then
-      return fail(("pi: no pi session for %s — start pi in that worktree"):format(vim.fs.basename(root)))
+      return fail({ ("pi: no pi session for %s — start pi in that worktree"):format(vim.fs.basename(root)), "pi: no pi session for this worktree" })
     end
     if #live == 1 then
       return pick_from(live, live[1], root, attached)
@@ -357,7 +358,7 @@ function M.choose(cb)
   end
   collect(dir, root, function(live)
     if #live == 0 then
-      return vim.notify(("pi: no pi session for %s — start pi in that worktree"):format(vim.fs.basename(root)), vim.log.levels.ERROR)
+      return pi_text.notify_fit({ ("pi: no pi session for %s — start pi in that worktree"):format(vim.fs.basename(root)), "pi: no pi session for this worktree" }, vim.log.levels.ERROR)
     end
     select_session(live, "pi: attach to which pi session?", function(choice)
       if not choice then
@@ -365,7 +366,7 @@ function M.choose(cb)
       end
       M.detach()
       pick_from(live, choice, root, function(conn, r)
-        vim.notify("pi: attached to " .. M.label(choice.status))
+        pi_text.notify_fit("pi: attached to " .. M.label(choice.status))
         if cb then
           cb(conn, r)
         end
@@ -426,11 +427,9 @@ function M.statusline_parts()
   end
   local state
   if type(current) == "table" and current.tool then
-    local target = current.target
-    state = "working · " .. current.tool
-    if type(target) == "string" and target ~= "" then
-      state = state .. " " .. (vim.fn.strchars(target) > 40 and vim.fn.strcharpart(target, 0, 40) .. "…" or target)
-    end
+    -- The tool says the agent works, so "working" is left out; a path shows as its file name.
+    local target = pi_text.short_target(current.target)
+    state = target ~= "" and (current.tool .. " " .. target) or current.tool
   elseif M.cached.busy then
     state = "working"
   else
@@ -439,7 +438,8 @@ function M.statusline_parts()
   return { { text = head .. state } }
 end
 
--- Statusline text: "pi: <label>[ [checkpoints]] · <state>"; "" when not attached. Reads the cache only.
+-- Statusline text: "pi: <label>[ [checkpoints]] · <state>", state being "<tool> <file name>",
+-- "working", "checkpoint N" or "idle"; "" when not attached. Reads the cache only.
 function M.statusline()
   local text = {}
   for _, part in ipairs(M.statusline_parts()) do

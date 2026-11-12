@@ -49,9 +49,26 @@ local function check_environment()
   end
 end
 
+-- The directory commands look for sessions from: the directory of the buffer Philipp was in, else
+-- the cwd. :checkhealth runs in its own health:// buffer, so his file is then the alternate one.
+local function session_dir()
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.api.nvim_buf_get_name(buf) == "health://" then
+    buf = vim.fn.bufnr("#")
+  end
+  if buf > 0 then
+    local name = vim.api.nvim_buf_get_name(buf)
+    local real = name ~= "" and vim.uv.fs_realpath(name) or nil
+    if real and vim.uv.fs_stat(real).type == "file" then
+      return vim.fs.dirname(real)
+    end
+  end
+  return vim.uv.cwd()
+end
+
 local function check_sessions()
   vim.health.start("pi.nvim: sessions")
-  local dir = vim.uv.cwd()
+  local dir = session_dir()
   local root = discover.root(dir)
   if not root then
     return vim.health.info("not inside a git repository, no sessions to look for")
@@ -101,7 +118,11 @@ local function check_setup()
   else
     vim.health.info("diffview.nvim is not installed, checkpoints open in the built-in diff (optional)")
   end
-  vim.health.info(('diff = "%s"'):format(diff.mode))
+  if diff.mode == "auto" then
+    vim.health.info(('diff = "auto" (uses %s)'):format(diffview.available() and "diffview.nvim" or "the built-in view"))
+  else
+    vim.health.info(('diff = "%s"'):format(diff.mode))
+  end
   if #keys_state.skipped == 0 then
     vim.health.ok("all default keys are mapped")
   else

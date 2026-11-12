@@ -112,9 +112,9 @@ in insert mode and is a markdown buffer, so paragraphs and lists work.
   sent. Moving to another window (say, the checkpoint panel opening) leaves
   the editor open.
 - Text you cancel, or that failed to send, is not lost: the next editor of the
-  same kind (ask, note, or edit of that annotation) opens with it and says
-  `pi: restored your unsent text`. Cancelling an edit you did not change
-  keeps nothing.
+  same kind (ask, note, or edit of that annotation) opens with it, its footer
+  reading ` restored · <C-s> send · q cancel `. Cancelling an edit you did not
+  change keeps nothing; removing an annotation drops its unsent edit.
 - Sending empty text cancels. Trailing blank lines and spaces are dropped.
 
 Long text is previewed where you review it and read in full with
@@ -127,9 +127,12 @@ Long text is previewed where you review it and read in full with
   window's text width, the second ending in `…` when cut. The wrap follows
   window resizes. `<leader>pk` on an annotated line shows every annotation
   of that line in full.
-- The peek float wraps, is at most 80 columns wide and closes when the cursor
-  moves, like LSP hover (`K`). Pressing `<leader>pk` again enters it to
-  scroll; `q` or `<Esc>` closes it there.
+- The peek float is at most 80 columns wide (the screen width minus 4 on a
+  narrow screen), sized from the screen rather than the window you are in,
+  and stays on screen. Its text is broken at spaces only, so `discover.lua`
+  or `nvim/lua/pi` never split. It closes when the cursor moves, like LSP
+  hover (`K`). Pressing `<leader>pk` again enters it to scroll; `q` or
+  `<Esc>` closes it there.
 
 ## Asking
 
@@ -167,18 +170,28 @@ lualine_x = { function()
 end }
 ```
 
-It shows `pi: <session> · working · <tool> <target>`, `· working`,
-`· checkpoint N` (a checkpoint is waiting) or `· idle`. `[checkpoints]` follows the
-session name while checkpoint mode is on and no checkpoint waits. Long targets end in `…`. It is empty when Neovim is not
-attached to a session. `require("pi").status()` returns `"checkpoint N"`,
+`%*` switches back to the plain statusline colours, so keep the coloured part
+last in the component, as here (lualine puts its padding before the `%*`).
+
+It shows `pi: <session> · <tool> <target>` (e.g.
+`pi: refactor-discover [checkpoints] · edit discover.lua`), `· working`,
+`· checkpoint N` (a checkpoint is waiting) or `· idle`. `[checkpoints]`
+follows the session name while checkpoint mode is on and no checkpoint waits.
+A target that is a path shows as its file name; long targets end in `…`. It
+is empty when Neovim is not attached to a session. `require("pi").status()` returns `"checkpoint N"`,
 `"working"`, `"idle"` or `""`.
 
 - A small badge in the top-right corner shows that the agent works:
-  `⠋ pi · <tool> <target>` or `⠋ pi · working`, with a spinner. While a
-  checkpoint waits it reads `pi · ⏸ N · <leader>pc continue`.
-  With a tabline showing it sits just below it. It never takes focus and is hidden when idle or not attached. Turn it off with
+  `⠋ pi · <tool> <target>` (the target's file name) or `⠋ pi · working`,
+  with a spinner. While a checkpoint waits it reads
+  `pi · ⏸ N · <leader>pc continue`. With a tabline showing it sits just below
+  it. It never takes focus and is hidden when idle, when not attached and
+  inside a checkpoint tab (that tab is the checkpoint). Turn it off with
   `setup({ badge = false })`; colors come from the `PiBadge` highlight group
   (links to `PmenuSel`).
+- Every notice fits the message line, so Neovim never stops with "Press
+  ENTER": on a narrow screen a notice uses a shorter wording or leaves out
+  the key hints.
 - When a run ends you get one notice: `pi: done — N files changed`
   (`1 file changed` for one), `pi: done` when nothing changed,
   `pi: stopped`, or, with a checkpoint waiting,
@@ -211,7 +224,7 @@ under the cursor.
 message (use `<leader>pa` for that). With a checkpoint waiting it is the
 review (`pi[my-session]: continuing — checkpoint 2 reviewed with 3 annotations`);
 otherwise the annotations go as a prompt (`pi[my-session]: 3 annotations sent`).
-Before sending, only the modified buffers whose files lie inside that session's worktree are saved (other projects' buffers, `pi://` views and scratch buffers are left alone). With no annotations and no waiting checkpoint
+Before sending, only the modified buffers whose files lie inside that session's worktree are saved (other projects' buffers, `pi://` views and scratch buffers are left alone). If one of them cannot be saved, nothing is sent and the annotations stay (`pi: could not save <file> — nothing sent`). With no annotations and no waiting checkpoint
 nothing is sent (`pi: nothing to send — <leader>pn to annotate, <leader>pa to ask`). Each annotation
 carries the LSP errors and warnings on its lines, under a `Diagnostics:`
 heading in the agent's message.
@@ -250,7 +263,7 @@ step. Use it when you want to be forced to look at every step, for example
 at the start of a new codebase. It is off by default and set per repository
 (git config `pi-nvim.checkpoints`).
 
-A checkpoint with no changes is skipped: the agent is told nothing needs review. Opening one from the list says `pi: checkpoint N has no file changes — <leader>pc to continue`. The empty list reads `checkpoint mode is off — <leader>pm to turn it on`, or `no checkpoints yet` with the mode on. If the agent edits files outside the worktree pi was started in, pi and Neovim warn once per run; start pi in that worktree.
+A checkpoint with no changes is skipped: the agent is told nothing needs review. Opening one from the list says `pi: checkpoint N has no file changes — <leader>pc to continue`. The empty list reads `checkpoint mode is off — <leader>pm to turn it on`, or `no checkpoints yet` with the mode on. If the agent edits files outside the worktree pi was started in, pi and Neovim warn once per run (`pi: the agent is editing outside <worktree> — start pi in that worktree to review it`).
 
 Switch it with `<leader>pm` / `:PiCheckpointMode on|off` in Neovim, or in pi:
 
@@ -269,7 +282,7 @@ Review flow:
    its width, cutting with `…`; it re-fits when you resize. Its first line is
    ` pi checkpoints — <CR> open · za more · g? keys` (just the keys when the
    window is narrow). One line per checkpoint:
-   `● 4  waiting   <title>   3 files`. The waiting checkpoint is
+   `● 4 waiting  <title>  3 files`; the title gets all the room left. The waiting checkpoint is
    first and highlighted (`PiCheckpointWaiting`), the others follow newest
    first (`✓` reviewed, `✗` discarded). The title is the one the agent gave
    the step, or the first sentence of its note. `za` on a line shows the
@@ -304,6 +317,12 @@ Review flow:
    the built-in view above is used. `setup({ diff = "builtin" })` always uses
    the built-in view, `"diffview"` prefers diffview (with a warning when it is
    missing), the default `"auto"` uses it when present.
+
+   Either way the tab is named `checkpoint N` (`t:tabname`, which lualine's
+   tabs component shows), and opening it says `pi: checkpoint N — <Tab> next
+   file · <leader>pn note · <leader>pc continue · q back`, or just
+   `pi: checkpoint N` when that does not fit (the window bar and diffview's
+   `g?` list the keys).
 4. Annotate lines with `<leader>pn` on the right side, your file. The left
    side is only a copy of the old state and cannot be annotated.
 5. `<leader>pc` continues: it sends the review (your annotations and your

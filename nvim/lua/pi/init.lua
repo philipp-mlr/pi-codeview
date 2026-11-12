@@ -10,6 +10,7 @@ local keys_state = require("pi.keys")
 local live = require("pi.live")
 local panel = require("pi.panel")
 local session = require("pi.session")
+local pi_text = require("pi.text")
 
 local M = {}
 
@@ -43,11 +44,17 @@ local function relpath(buf, root)
   return real and discover.relpath(root, real) or nil
 end
 
--- Tells that checkpoint n waits and which keys (or commands) look at it and continue.
+-- Tells that checkpoint n waits and which keys (or commands) look at it and continue; shorter
+-- wordings when the message line is narrow.
 function M.notify_waiting(n)
   local look = keys_state.label("checkpoints", ":PiCheckpoints")
   local go = keys_state.label("continue", ":PiContinue")
-  vim.notify(("pi: checkpoint %s waiting — %s to look, %s to continue"):format(n, look, go))
+  pi_text.notify_fit({
+    ("pi: checkpoint %s waiting — %s to look, %s to continue"):format(n, look, go),
+    ("pi: checkpoint %s waiting — %s look, %s continue"):format(n, look, go),
+    ("pi: checkpoint %s waiting — %s to continue"):format(n, go),
+    ("pi: checkpoint %s waiting"):format(n),
+  })
 end
 
 -- One notice when a run ends; reads the open checkpoint from a fresh status.
@@ -57,16 +64,16 @@ function M.notify_run_end(data)
   local function report(chunk)
     if chunk then
       if aborted then
-        vim.notify(("pi: stopped — checkpoint %s waiting"):format(chunk.n))
+        pi_text.notify_fit(("pi: stopped — checkpoint %s waiting"):format(chunk.n))
       else
         M.notify_waiting(chunk.n)
       end
     elseif aborted then
-      vim.notify("pi: stopped")
+      pi_text.notify_fit("pi: stopped")
     elseif files == 0 then
-      vim.notify("pi: done")
+      pi_text.notify_fit("pi: done")
     else
-      vim.notify(("pi: done — %d file%s changed"):format(files, files == 1 and "" or "s"))
+      pi_text.notify_fit(("pi: done — %d file%s changed"):format(files, files == 1 and "" or "s"))
     end
   end
   if not session.connected() then
@@ -89,10 +96,11 @@ local function on_event(name, data)
   -- The extension sends this once per agent run.
   if name == "outside_worktree" then
     local root = session.cached and session.cached.root
-    vim.notify(
-      ("pi: the agent is editing files outside %s — checkpoint mode can't show them; start pi in that worktree"):format(root or "its worktree"),
-      vim.log.levels.WARN
-    )
+    local worktree = type(root) == "string" and vim.fs.basename(root) or "its worktree"
+    pi_text.notify_fit({
+      ("pi: the agent is editing outside %s — start pi in that worktree to review it"):format(worktree),
+      ("pi: the agent is editing outside %s"):format(worktree),
+    }, vim.log.levels.WARN)
   end
   if name == "chunk_ready" then
     -- The server sends { chunk = {...} }.
@@ -153,7 +161,7 @@ function M.prompt(text, context, on_sent)
       on_sent()
     end
     if result and result.queued then
-      vim.notify("pi: prompt queued until the open checkpoint is reviewed")
+      pi_text.notify_fit({ "pi: prompt queued until the open checkpoint is reviewed", "pi: prompt queued" })
     else
       session.mark_busy()
     end
@@ -177,7 +185,7 @@ end
 function M.annotate(buf, start_line, end_line, note)
   local refusal = annotate_refusal(buf)
   if refusal then
-    return vim.notify(refusal)
+    return pi_text.notify_fit(refusal)
   end
   annotations.add(buf, start_line, end_line, note)
   session.ensure(function()
@@ -198,14 +206,15 @@ function M.stop()
     end
     -- A stop that took effect is announced once, by the run-end notice.
     if not result.cancelled then
-      vim.notify("pi: nothing to stop")
+      pi_text.notify_fit("pi: nothing to stop")
     end
     session.refresh_status()
   end)
 end
 
 -- Writes the modified, listed, file-backed buffers whose file lies inside the session's root; buffers
--- of other projects, pi:// views and scratch buffers stay as they are.
+-- of other projects, pi:// views and scratch buffers stay as they are. Returns the file name of the
+-- first buffer that could not be written, or nil when all were saved.
 local function save_session_buffers(root)
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     local name = vim.api.nvim_buf_get_name(buf)
@@ -218,9 +227,12 @@ local function save_session_buffers(root)
     then
       local real = vim.uv.fs_realpath(name) or name
       if discover.relpath(root, real) then
-        vim.api.nvim_buf_call(buf, function()
-          vim.cmd("silent! update")
+        local saved = vim.api.nvim_buf_call(buf, function()
+          return pcall(vim.cmd, "silent update")
         end)
+        if not saved then
+          return vim.fs.basename(name)
+        end
       end
     end
   end
@@ -230,8 +242,12 @@ end
 -- confirmation) and the agent continues; without one, sends the annotations as a new prompt.
 function M.continue()
   session.ensure(function(conn, root)
-    -- Saved inside ensure, so the saves are reported as Philipp's edits to the attached session.
-    save_session_buffers(root)
+    -- Saved inside ensure, so the saves are reported as Philipp's edits to the attached session. A
+    -- review against a file that did not save would be against the old text: nothing is sent.
+    local unsaved = save_session_buffers(root)
+    if unsaved then
+      return pi_text.notify_fit({ ("pi: could not save %s — nothing sent"):format(unsaved), "pi: could not save a file — nothing sent" }, vim.log.levels.WARN)
+    end
     session.refresh_status(function(status_err, status)
       if status_err then
         return vim.notify("pi: " .. status_err, vim.log.levels.ERROR)
@@ -241,7 +257,7 @@ function M.continue()
       if not open_chunk and count == 0 then
         local annotate = keys_state.label("annotate", ":PiAnnotate")
         local ask = keys_state.label("ask", ":PiAsk")
-        return vim.notify(("pi: nothing to send — %s to annotate, %s to ask"):format(annotate, ask))
+        return pi_text.notify_fit({ ("pi: nothing to send — %s to annotate, %s to ask"):format(annotate, ask), "pi: nothing to send" })
       end
       local payload = {
         annotations = annotations.list(root, { diagnostics = true }),
@@ -254,10 +270,15 @@ function M.continue()
         end
         annotations.clear_root(root)
         local counted = ("%d annotation%s"):format(count, count == 1 and "" or "s")
+        local label = session.label(status)
         if open_chunk then
-          vim.notify(("pi[%s]: continuing — checkpoint %d reviewed%s"):format(session.label(status), open_chunk.n, count > 0 and " with " .. counted or ""))
+          pi_text.notify_fit({
+            ("pi[%s]: continuing — checkpoint %d reviewed%s"):format(label, open_chunk.n, count > 0 and " with " .. counted or ""),
+            ("pi[%s]: checkpoint %d reviewed"):format(label, open_chunk.n),
+            ("pi[%s]: continuing"):format(label),
+          })
         else
-          vim.notify(("pi[%s]: %s sent"):format(session.label(status), counted))
+          pi_text.notify_fit({ ("pi[%s]: %s sent"):format(label, counted), ("pi[%s]: sent"):format(label) })
         end
         session.refresh_status()
       end)
@@ -266,7 +287,11 @@ function M.continue()
 end
 
 local MODE_TEXT = {
-  checkpoints = "pi: checkpoint mode on — the agent stops at each checkpoint for your review",
+  checkpoints = {
+    "pi: checkpoint mode on — the agent stops at each checkpoint for your review",
+    "pi: checkpoint mode on — the agent stops at each checkpoint",
+    "pi: checkpoint mode on",
+  },
   off = "pi: checkpoint mode off",
 }
 
@@ -275,7 +300,7 @@ function M.set_mode(mode)
     if err then
       return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
-    vim.notify(MODE_TEXT[result.mode] or ("pi: mode " .. tostring(result.mode)))
+    pi_text.notify_fit(MODE_TEXT[result.mode] or ("pi: mode " .. tostring(result.mode)))
     session.refresh_status()
   end)
 end
@@ -365,7 +390,7 @@ local function prompt_command(cmd)
         editor.stash("ask", text)
         session.ensure(function(_, send_root)
           M.prompt(text, M.prompt_context(buf, send_root, sel), function()
-            editor.discard_draft("ask")
+            editor.discard_draft("ask", text)
           end)
         end, { buf = buf })
       end,
@@ -378,7 +403,7 @@ local function annotate_command(cmd)
   local start_line, end_line = range_of(cmd)
   local refusal = annotate_refusal(buf)
   if refusal then
-    return vim.notify(refusal)
+    return pi_text.notify_fit(refusal)
   end
   editor.open({
     title = (" pi note · %s "):format(where(buf, start_line, end_line)),
@@ -393,7 +418,7 @@ end
 local function pick_annotation(prompt, act)
   local found = annotations.at_cursor()
   if #found == 0 then
-    vim.notify("pi: no annotation at the cursor")
+    pi_text.notify_fit("pi: no annotation at the cursor")
   elseif #found == 1 then
     act(found[1])
   else
@@ -409,6 +434,11 @@ local function remove_command()
   pick_annotation("pi: remove which annotation?", annotations.remove)
 end
 
+-- An unsent edit of a removed annotation has nothing left to edit.
+annotations.on_remove(function(item)
+  editor.discard_draft("edit:" .. item.id)
+end)
+
 local function edit_command()
   pick_annotation("pi: edit which annotation?", function(item)
     local start_line, end_line = annotations.range(item)
@@ -423,6 +453,41 @@ local function edit_command()
   end)
 end
 
+-- Peek width: from the editor, not the window peek is called from (a diff or file panel can be
+-- 20 columns wide).
+local PEEK_MAX_WIDTH = 80
+
+-- The peek text pre-wrapped at spaces to `width`, so nothing breaks a word at "." or "/"
+-- ('breakat'); blank lines stay, "---" becomes a rule.
+local function peek_text(lines, width)
+  local out = {}
+  for _, line in ipairs(lines) do
+    if line == "---" then
+      out[#out + 1] = ("─"):rep(width)
+    elseif vim.trim(line) == "" then
+      out[#out + 1] = ""
+    else
+      vim.list_extend(out, pi_text.wrap(line, width))
+    end
+  end
+  return out
+end
+
+-- Editor position for a float of width x height (plus border) next to the cursor: below it when
+-- it fits, else above; shifted left so it stays on screen.
+local function peek_position(width, height)
+  local origin = vim.fn.win_screenpos(0)
+  local cursor_row = origin[1] - 1 + vim.fn.winline() - 1
+  local cursor_col = origin[2] - 1 + vim.fn.wincol() - 1
+  local bottom = vim.o.lines - vim.o.cmdheight
+  local row = cursor_row + 1
+  if row + height + 2 > bottom then
+    row = math.max(0, cursor_row - height - 2)
+  end
+  local col = math.max(0, math.min(cursor_col, vim.o.columns - width - 2))
+  return row, col
+end
+
 -- Shows the full text behind the previews at the cursor: the checkpoint note and the file's why in
 -- a checkpoint diff, then every annotation of the cursor line. Closes like LSP hover.
 function M.peek()
@@ -434,18 +499,32 @@ function M.peek()
     vim.list_extend(lines, vim.split(item.note, "\n", { plain = true }))
   end
   if #lines == 0 then
-    return vim.notify("pi: nothing to peek here")
+    return pi_text.notify_fit("pi: nothing to peek here")
   end
+  local room = math.max(1, math.min(PEEK_MAX_WIDTH, vim.o.columns - 4))
+  local wrapped = peek_text(lines, room)
+  local width = 1
+  for _, line in ipairs(wrapped) do
+    width = math.max(width, vim.fn.strdisplaywidth(line))
+  end
+  local height = math.max(1, math.min(#wrapped, vim.o.lines - vim.o.cmdheight - 3))
   -- A second peek focuses the float; there q (mapped by nvim) and <Esc> close it.
-  local float_buf, float_win = vim.lsp.util.open_floating_preview(lines, "markdown", {
+  local float_buf, float_win = vim.lsp.util.open_floating_preview(wrapped, "markdown", {
     border = "rounded",
-    max_width = 80,
-    wrap = true,
+    width = width,
+    height = height,
+    wrap = false,
     focus_id = "pi_peek",
   })
-  if vim.api.nvim_win_is_valid(float_win) then
-    vim.keymap.set("n", "<Esc>", "<cmd>bdelete<CR>", { buffer = float_buf, nowait = true, desc = "pi: close peek" })
+  if not vim.api.nvim_win_is_valid(float_win) or vim.api.nvim_get_current_win() == float_win then
+    return
   end
+  -- open_floating_preview caps the width at the current window's and may drop blank lines; size
+  -- and place it against the editor.
+  height = math.max(1, math.min(vim.api.nvim_buf_line_count(float_buf), vim.o.lines - vim.o.cmdheight - 3))
+  local row, col = peek_position(width, height)
+  vim.api.nvim_win_set_config(float_win, { relative = "editor", anchor = "NW", row = row, col = col, width = width, height = height })
+  vim.keymap.set("n", "<Esc>", "<cmd>bdelete<CR>", { buffer = float_buf, nowait = true, desc = "pi: close peek" })
 end
 
 local function report_write(buf)
@@ -488,8 +567,12 @@ local function key_tokens(lhs)
   return tokens
 end
 
--- The key prefix (at least two keys, e.g. "<leader>p") shared by every key setup mapped; nil if none.
+-- The key prefix (at least two keys, e.g. "<leader>p") shared by every key setup mapped; nil if none
+-- or fewer than two keys are mapped (one key's whole lhs is a key, not a group).
 local function common_prefix()
+  if vim.tbl_count(keys_state.mapped) < 2 then
+    return nil
+  end
   local prefix
   for _, lhs in pairs(keys_state.mapped) do
     local tokens = key_tokens(lhs)
@@ -520,10 +603,10 @@ function M.setup(opts)
   local keys = vim.tbl_extend("force", M.default_keys, opts.keys or {})
   for _, legacy in ipairs({ "send", "cancel", "chunks" }) do
     if (opts.keys or {})[legacy] ~= nil then
-      vim.notify(
+      pi_text.notify_fit({
         "pi: setup keys renamed — send/cancel → continue/stop, chunks → checkpoints, checkpoints (mode) → mode",
-        vim.log.levels.INFO
-      )
+        "pi: setup keys renamed — see :help pi-setup-keys",
+      }, vim.log.levels.INFO)
       break
     end
   end
@@ -596,7 +679,10 @@ function M.setup(opts)
   map("n", "session", "<cmd>PiSession<CR>", "pi: choose pi session")
   map("n", "peek", "<cmd>PiPeek<CR>", "pi: peek at the full note or annotation")
   if #skipped > 0 then
-    vim.notify("pi: kept existing mappings, not mapped: " .. table.concat(skipped, ", "), vim.log.levels.INFO)
+    pi_text.notify_fit({
+      "pi: kept existing mappings, not mapped: " .. table.concat(skipped, ", "),
+      ("pi: kept %d existing mapping%s — :checkhealth pi lists them"):format(#skipped, #skipped == 1 and "" or "s"),
+    }, vim.log.levels.INFO)
   end
 
   register_which_key_group()

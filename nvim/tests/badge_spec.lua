@@ -39,6 +39,10 @@ M["busy without a tool says working; long targets are trimmed to 40 characters"]
   assert(vim.fn.strcharpart(text(), 1) == " pi · working", text())
   badge.update({ busy = true, tool = "read", target = string.rep("é", 60) })
   assert(vim.fn.strcharpart(text(), 1) == " pi · read " .. string.rep("é", 40) .. "…", text())
+  badge.update({ busy = true, tool = "edit", target = "nvim/lua/pi/session.lua" })
+  assert(vim.fn.strcharpart(text(), 1) == " pi · edit session.lua", text())
+  badge.update({ busy = true, tool = "bash", target = "npm run test/unit" })
+  assert(vim.fn.strcharpart(text(), 1) == " pi · bash npm run test/unit", text())
   badge.close()
 end
 
@@ -181,6 +185,26 @@ M["a tick retries after a failed first open, without an update"] = function()
   vim.wait(500, function() return badge.window() ~= nil end, 20)
   vim.api.nvim_open_win = real
   assert(badge.window() ~= nil, "the spinner tick should retry the open")
+  badge.close()
+end
+
+M["hides in a checkpoint tab and shows again on leaving it"] = function()
+  reset()
+  require("pi").setup()
+  vim.cmd("tabonly")
+  local normal = vim.api.nvim_get_current_tabpage()
+  badge.update({ chunk = 1 })
+  assert(badge.window() ~= nil, "badge not shown in a normal tab")
+  vim.cmd("tabnew")
+  vim.t.pi_checkpoint = 1
+  badge.update({ chunk = 1 })
+  assert(badge.window() == nil and float_count() == 0, "badge shown in the checkpoint tab")
+  vim.api.nvim_set_current_tabpage(normal)
+  assert(badge.window() ~= nil, "badge not back after leaving the checkpoint tab")
+  vim.cmd("tabnext")
+  assert(badge.window() == nil and float_count() == 0, "badge back in the checkpoint tab on TabEnter")
+  vim.api.nvim_set_current_tabpage(normal)
+  vim.cmd("tabonly")
   badge.close()
 end
 

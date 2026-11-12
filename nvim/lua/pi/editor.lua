@@ -2,18 +2,22 @@
 -- that sends with <C-s>. q or <Esc> in normal mode, :q and wiping its buffer cancel; moving focus
 -- elsewhere (a panel opening, another window or tab) leaves it open. Text that is cancelled or fails
 -- to send is kept as a draft under the editor's `draft` key and comes back in the next editor with
--- that key. One editor at a time.
+-- that key, its footer saying "restored". One editor at a time.
 local M = {}
 
 local MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT = 80, 3, 15
 local FOOTER = " <C-s> send · q cancel "
+local RESTORED_FOOTER = " restored · <C-s> send · q cancel "
 
 local current = nil -- { win, buf } of the open editor
 local drafts = {} -- key -> unsent text of a cancelled editor, restored by the next open with that key
 
--- Forgets the draft of key: its text reached pi.
-function M.discard_draft(key)
-  drafts[key] = nil
+-- Forgets the draft of key: its text reached pi, or what it belonged to is gone. With `text`, only
+-- while the draft is still that text (a newer one, typed while the send was in flight, stays).
+function M.discard_draft(key, text)
+  if text == nil or drafts[key] == text then
+    drafts[key] = nil
+  end
 end
 
 local function blank(text)
@@ -51,10 +55,10 @@ function M.open(opts)
   end
   local prefill = opts.text
   local key = opts.draft
-  if key and drafts[key] then
+  local restored = key ~= nil and drafts[key] ~= nil
+  if restored then
     opts = vim.tbl_extend("force", opts, { text = drafts[key] })
     drafts[key] = nil
-    vim.notify("pi: restored your unsent text")
   end
   local origin = vim.api.nvim_get_current_win()
   local buf = vim.api.nvim_create_buf(false, true)
@@ -68,7 +72,8 @@ function M.open(opts)
   config.border = "rounded"
   config.title = opts.title
   config.title_pos = "center"
-  config.footer = FOOTER
+  -- Said in the footer, not as a notice: it would stack on a switch notice into a "Press ENTER".
+  config.footer = restored and RESTORED_FOOTER or FOOTER
   config.footer_pos = "right"
   local win = vim.api.nvim_open_win(buf, true, config)
   vim.wo[win].wrap = true

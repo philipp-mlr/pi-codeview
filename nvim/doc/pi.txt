@@ -8,11 +8,12 @@ CONTENTS                                                          *pi-contents*
     3. Keys ........................................ |pi-keys|
     4. Commands .................................... |pi-commands|
     5. Writing and reading long text ............... |pi-editor|
-    6. Checkpoint mode ............................. |pi-checkpoints|
-    7. Sessions .................................... |pi-sessions|
-    8. Highlight groups ............................ |pi-highlights|
-    9. Statusline .................................. |pi-statusline|
-   10. Health check ................................ |pi-health|
+    6. Annotations ................................. |pi-annotations|
+    7. Checkpoint mode ............................. |pi-checkpoints|
+    8. Sessions .................................... |pi-sessions|
+    9. Highlight groups ............................ |pi-highlights|
+   10. Statusline .................................. |pi-statusline|
+   11. Health check ................................ |pi-health|
 
 ==============================================================================
 1. Introduction                                                      *pi-intro*
@@ -146,10 +147,33 @@ buffer. Its title says where the text goes. It starts in insert mode.
     q, <Esc>    cancel (normal mode); `:q` and `<C-w>c` cancel too
 
 Text you cancelled, or that failed to send, is offered again by the next
-editor of the same kind. Sending empty text cancels.
+editor of the same kind; its footer then starts with `restored`. Sending
+empty text cancels.
+
+|:PiPeek| shows a note or annotation in full in a float at most 80 columns
+wide (less on a narrow screen), sized from the screen, not the window, and
+broken at spaces only.
 
 ==============================================================================
-6. Checkpoint mode                                              *pi-checkpoints*
+6. Annotations                                                *pi-annotations*
+
+|:PiAnnotate| on a line or range opens the editor for a note. The note shows
+below the range as `✎ <text>`, at most 2 wrapped lines ending in `…` when
+cut, with a `✎` sign on the first line and the range's line numbers
+highlighted. |:PiPeek| shows it in full. |:PiAnnotationEdit| and
+|:PiAnnotationRemove| act on the annotation at the cursor.
+
+|:PiContinue| sends every annotation of the worktree with the LSP errors and
+warnings on its lines, then clears them. With a checkpoint waiting they are
+its review; otherwise they go as a prompt. Modified buffers inside the
+worktree are saved first; when one cannot be saved nothing is sent and you
+get `pi: could not save <file> — nothing sent`.
+
+Annotations survive restarts of Neovim: they are kept by the pi session as
+drafts until sent.
+
+==============================================================================
+7. Checkpoint mode                                              *pi-checkpoints*
 
 In checkpoint mode the agent stops at the end of each step (or after 150
 changed lines) and waits for your review. It is off by default and set per
@@ -167,10 +191,12 @@ The checkpoint list (|:PiCheckpoints|) opens when a checkpoint arrives. In it:
 A checkpoint opens in its own tab as a diff: the file before on the left,
 your file on the right. `<Tab>` and `<S-Tab>` move between files, `q` closes
 the tab. Annotate on the right side, then |:PiContinue| sends the review.
-With diffview.nvim installed it is used instead (see |pi-setup-diff|).
+With diffview.nvim installed it is used instead (see |pi-setup-diff|). The
+tab is named `checkpoint N` in `t:tabname`, which lualine's tabs component
+shows; the badge is hidden while you are in it.
 
 ==============================================================================
-7. Sessions                                                       *pi-sessions*
+8. Sessions                                                       *pi-sessions*
 
 Neovim attaches to a pi session running in the same worktree as the current
 buffer. With one such session it attaches on first use; with several it
@@ -182,7 +208,7 @@ When there is none you get `pi: no pi session for <worktree> — start pi in
 that worktree`.
 
 ==============================================================================
-8. Highlight groups                                             *pi-highlights*
+9. Highlight groups                                             *pi-highlights*
 
 All groups are defined with `default`, so colorschemes and your config can
 override them.
@@ -199,12 +225,13 @@ override them.
     PiLiveSignDelete        sign of a deleted line; `Removed`
 
 ==============================================================================
-9. Statusline                                                  *pi-statusline*
+10. Statusline                                                 *pi-statusline*
 
 `require("pi").statusline()` returns `pi: <session> · <state>`, where state is
-`working · <tool> <target>`, `working`, `checkpoint N` or `idle`. While
-checkpoint mode is on and nothing waits, `[checkpoints]` follows the name.
-It is empty when Neovim is not attached. With lualine: >lua
+`<tool> <target>`, `working`, `checkpoint N` or `idle`. A target that is a
+path shows as its file name, e.g. `edit discover.lua`. While checkpoint mode
+is on and nothing waits, `[checkpoints]` follows the name. It is empty when
+Neovim is not attached. With lualine: >lua
 
     lualine_x = { function() return require("pi").statusline() end }
 <
@@ -221,20 +248,23 @@ a list of `{ text, hl }` (hl is nil for plain text): >lua
       return table.concat(out)
     end }
 <
+`%*` switches back to the plain statusline colours, so keep the coloured part
+last in the component, as here; lualine puts its padding before the `%*`.
+
 `require("pi").status()` returns `"checkpoint N"`, `"working"`, `"idle"` or
 `""`, and `require("pi").session_label()` the attached session's name.
 
 ==============================================================================
-10. Health check                                                   *pi-health*
+11. Health check                                                   *pi-health*
 
 >
     :checkhealth pi
 <
 Checks Neovim 0.10 or newer, git on PATH, the runtime directory, the live pi
-sessions of the current worktree with the protocol version of each, whether
-diffview.nvim is installed and which `diff` setting is used, and which default
-keys were skipped because they were already mapped. It works without
-|pi-setup| having run, outside a git repository and without a runtime
+sessions of the current buffer's worktree with the protocol version of each,
+whether diffview.nvim is installed and which view the `diff` setting uses, and
+which default keys were skipped because they were already mapped. It works
+without |pi-setup| having run, outside a git repository and without a runtime
 directory.
 
  vim:tw=78:ts=8:ft=help:norl:

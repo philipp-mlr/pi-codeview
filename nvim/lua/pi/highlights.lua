@@ -17,6 +17,8 @@ function M.define()
     vim.api.nvim_set_hl(0, name, { default = true, link = target })
   end
   -- Annotations read like comments but in italic: Comment's colour, copied (a link cannot add italic).
+  -- `default = true` never replaces an existing definition, so the copy follows a new Comment colour
+  -- only after the group was cleared: by a colorscheme's `:hi clear`, or by hand.
   local comment = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
   if comment.fg then
     vim.api.nvim_set_hl(0, "PiAnnotation", { default = true, italic = true, fg = comment.fg })

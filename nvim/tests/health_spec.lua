@@ -52,6 +52,7 @@ M["health runs outside a git repository, without runtime dir and without setup"]
   keys_state.mapped, keys_state.skipped = {}, nil
   local outside = vim.fn.tempname()
   vim.fn.mkdir(outside, "p")
+  vim.cmd("enew") -- no file buffer: the cwd decides
   with_env(outside .. "/no-run", outside, function()
     local report = run_check()
     assert(find(report, "start", "pi.nvim"), dump(report))
@@ -78,8 +79,39 @@ M["health lists skipped keys and the diff setting"] = function()
   end)
   keys_state.mapped, keys_state.skipped = saved[1], saved[2]
   require("pi.diff").mode = saved[3]
-  keys_state.skipped = nil
-  keys_state.skipped = saved[2]
+end
+
+M["health says which view diff = auto uses"] = function()
+  local saved = { keys_state.mapped, keys_state.skipped, require("pi.diff").mode }
+  keys_state.mapped, keys_state.skipped = {}, {}
+  require("pi.diff").mode = "auto"
+  local report = run_check()
+  keys_state.mapped, keys_state.skipped = saved[1], saved[2]
+  require("pi.diff").mode = saved[3]
+  local expected = require("pi.diffview").available() and 'diff = "auto" (uses diffview.nvim)' or 'diff = "auto" (uses the built-in view)'
+  assert(find(report, "info", expected), dump(report))
+end
+
+M["health looks for sessions from the current buffer's directory, not the cwd"] = function()
+  local repo = temp_repo()
+  local outside = vim.fn.tempname()
+  vim.fn.mkdir(outside, "p")
+  vim.fn.writefile({ "x" }, repo .. "/f.txt")
+  vim.cmd("edit " .. vim.fn.fnameescape(repo .. "/f.txt"))
+  local buf = vim.api.nvim_get_current_buf()
+  with_env(outside .. "/no-run", outside, function()
+    local report = run_check()
+    assert(not find(report, "info", "not inside a git repository"), dump(report))
+    assert(find(report, "info", "no pi session"), dump(report))
+    -- Under :checkhealth the current buffer is health://; the file Philipp came from decides.
+    local health_buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_buf_set_name(health_buf, "health://")
+    vim.api.nvim_set_current_buf(health_buf)
+    report = run_check()
+    assert(not find(report, "info", "not inside a git repository"), dump(report))
+    vim.api.nvim_buf_delete(health_buf, { force = true })
+  end)
+  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 M["health reports no skipped keys after a clean setup"] = function()

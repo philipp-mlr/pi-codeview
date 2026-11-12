@@ -637,7 +637,7 @@ describe("pi-nvim extension", () => {
     });
 
     const warning = (root: string) =>
-      `pi: the agent is editing files outside ${root} — checkpoint mode can't show them; start pi in that worktree`;
+      `pi: the agent is editing outside ${path.basename(root)} — start pi in that worktree to review it`;
 
     it("warns once per run for absolute and relative paths, resets on agent_start", async () => {
       const repo = await makeRepo();

@@ -2,6 +2,9 @@
 local diff = require("pi.diff")
 local keys = require("pi.keys")
 local session = require("pi.session")
+local pi_text = require("pi.text")
+
+local fit, wrap = pi_text.fit, pi_text.wrap
 
 local M = {}
 
@@ -67,54 +70,13 @@ local function title_of(chunk)
   return (first:gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
 end
 
--- `text` cut to at most `width` display cells, ending in "…" when cut.
-local function fit(text, width)
-  if width <= 0 then
-    return ""
-  end
-  if vim.fn.strdisplaywidth(text) <= width then
-    return text
-  end
-  local chars = vim.fn.strchars(text)
-  while chars > 0 and vim.fn.strdisplaywidth(vim.fn.strcharpart(text, 0, chars)) > width - 1 do
-    chars = chars - 1
-  end
-  return vim.fn.strcharpart(text, 0, chars) .. "…"
-end
-
+-- "● 1 waiting  <title>  2 files": the title takes all the room the rest leaves.
 local function format(chunk, width)
   local count = #files_of(chunk)
-  local prefix = ("%s %-2d %-9s "):format(ICONS[chunk.status] or "?", chunk.n, STATUS_WORDS[chunk.status] or chunk.status)
-  local suffix = ("   %d file%s"):format(count, count == 1 and "" or "s")
+  local prefix = ("%s %d %s  "):format(ICONS[chunk.status] or "?", chunk.n, STATUS_WORDS[chunk.status] or chunk.status)
+  local suffix = ("  %d file%s"):format(count, count == 1 and "" or "s")
   local room = width - vim.fn.strdisplaywidth(prefix) - vim.fn.strdisplaywidth(suffix)
   return prefix .. fit(title_of(chunk), room) .. suffix
-end
-
--- `text` broken at spaces into lines of at most `width` cells; longer words are cut.
-local function wrap(text, width)
-  local out, current = {}, ""
-  for word in text:gmatch("%S+") do
-    while vim.fn.strdisplaywidth(word) > width do
-      if current ~= "" then
-        out[#out + 1] = current
-        current = ""
-      end
-      out[#out + 1] = vim.fn.strcharpart(word, 0, width)
-      word = vim.fn.strcharpart(word, width)
-    end
-    if current == "" then
-      current = word
-    elseif vim.fn.strdisplaywidth(current) + 1 + vim.fn.strdisplaywidth(word) <= width then
-      current = current .. " " .. word
-    else
-      out[#out + 1] = current
-      current = word
-    end
-  end
-  if current ~= "" then
-    out[#out + 1] = current
-  end
-  return out
 end
 
 -- 35% of the screen, at least 40 and at most 60 columns.
@@ -353,7 +315,7 @@ local function show_help()
   local float = vim.api.nvim_open_win(help_buf, true, {
     relative = "editor",
     width = width,
-    height = #text,
+    height = math.max(1, math.min(#text, vim.o.lines - 2)),
     row = math.max(0, math.floor((vim.o.lines - #text) / 2) - 1),
     col = math.max(0, math.floor((vim.o.columns - width) / 2) - 1),
     style = "minimal",
@@ -414,7 +376,8 @@ local function ensure_buf()
   return buf
 end
 
-local resize_group = vim.api.nvim_create_augroup("PiPanelResize", { clear = true })
+-- Not cleared: a second load of this module (specs do that) must not drop the first one's autocmds.
+local resize_group = vim.api.nvim_create_augroup("PiPanelResize", { clear = false })
 -- A new screen size gives the panel its share of the columns again; any resize re-fits the text.
 vim.api.nvim_create_autocmd("VimResized", {
   group = resize_group,

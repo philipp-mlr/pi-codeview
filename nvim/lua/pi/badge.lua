@@ -1,12 +1,12 @@
 -- Small floating badge in the top-right corner while the agent works or a checkpoint waits for review.
 -- Never focusable and never entered; one timer animates the spinner and runs only while it shows.
 local keys = require("pi.keys")
+local pi_text = require("pi.text")
 
 local M = {}
 
 local FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 local FRAME_MS = 100
-local TARGET_MAX_CHARS = 40
 
 M.enabled = true
 local win, buf, timer = nil, nil, nil
@@ -61,10 +61,15 @@ local function stop_timer()
 end
 
 -- Never raises: it can run while Philipp types (textlock, cmdline, prompts); a failed open leaves `win` nil, and the next tick, TabEnter/resize or update retries.
+-- A checkpoint tab (marked `t:pi_checkpoint` by the diff view) is the checkpoint itself, so the
+-- badge stays out of it and comes back on TabEnter elsewhere.
 local function draw()
   local line = text()
   local width = vim.fn.strdisplaywidth(line)
   pcall(function()
+    if vim.t.pi_checkpoint ~= nil then
+      return close_win()
+    end
     if not shown() then
       close_win() -- bufhidden=wipe may wipe the buffer, so recreate it below
     end
@@ -136,11 +141,8 @@ function M.update(state)
   elseif state.busy then
     spinning = true
     if state.tool then
-      local target = state.target
-      if type(target) == "string" and target ~= "" then
-        if vim.fn.strchars(target) > TARGET_MAX_CHARS then
-          target = vim.fn.strcharpart(target, 0, TARGET_MAX_CHARS) .. "…"
-        end
+      local target = pi_text.short_target(state.target)
+      if target ~= "" then
         label = ("pi · %s %s"):format(state.tool, target)
       else
         label = ("pi · %s"):format(state.tool)

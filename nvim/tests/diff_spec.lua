@@ -123,6 +123,23 @@ local function shown_path()
   return vim.api.nvim_buf_get_name(0):match("[^/]+$")
 end
 
+M["a checkpoint tab is named for lualine and the badge leaves it at once"] = function()
+  local badge = require("pi.badge")
+  badge.enabled = true
+  badge.update({ chunk = 1 })
+  assert(badge.window() ~= nil, "badge not shown before")
+  open_two_files()
+  assert(vim.t.tabname == "checkpoint 1", tostring(vim.t.tabname))
+  assert(vim.t.pi_checkpoint == 1, tostring(vim.t.pi_checkpoint))
+  local hidden = badge.window() == nil
+  vim.cmd("tabclose")
+  local back = badge.window() ~= nil
+  badge.close()
+  session.cached = nil
+  assert(hidden, "badge still shown in the checkpoint tab")
+  assert(back, "badge not back after closing the checkpoint tab")
+end
+
 M["<Tab> and <S-Tab> move between files and stop at the ends"] = function()
   open_two_files()
   assert(shown_path() == "a.txt")
@@ -630,7 +647,24 @@ M["auto with diffview opens an open chunk with the exact DiffviewOpen args"] = w
   local expected = ("%s -C%s -- a.txt b\\ c.txt"):format(sha, vim.fn.fnameescape(root))
   assert(fake.calls[1] == expected, vim.inspect(fake.calls))
   assert(diff.viewed(1), "diffview chunk not viewed")
-  assert(seen[1].msg == "pi: checkpoint 1 — <Tab> next file · :PiAnnotate annotate · :PiContinue continue · q back", seen[1].msg)
+  assert(vim.t[fake.tab].tabname == "checkpoint 1" and vim.t[fake.tab].pi_checkpoint == 1, "diffview tab not named")
+  -- At 80 columns the key list does not fit the message line: the diffview's keys are one g? away.
+  assert(seen[1].msg == "pi: checkpoint 1", seen[1].msg)
+end)
+
+M["the diffview checkpoint notice lists the keys when they fit the message line"] = with_fake(function()
+  install_fake_diffview()
+  local _, sha = fake_repo()
+  require("pi.keys").mapped = { annotate = "<leader>pn", continue = "<leader>pc" }
+  local saved = vim.o.columns
+  vim.o.columns = 120
+  local seen, restore = capture_notify()
+  local ok, err = pcall(fetch, { n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = {} })
+  restore()
+  vim.o.columns = saved
+  require("pi.keys").mapped = {}
+  assert(ok, err)
+  assert(seen[1].msg == "pi: checkpoint 1 — <Tab> next file · <leader>pn note · <leader>pc continue · q back", seen[1].msg)
 end)
 
 M["q in the diffview checkpoint tab closes it and returns to the origin tab"] = with_fake(function()

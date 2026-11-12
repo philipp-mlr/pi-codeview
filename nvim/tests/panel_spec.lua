@@ -169,17 +169,24 @@ M["panel: open checkpoint first, then newest first, title falls back to the note
   local buf = open_panel(list)
   local l = lines(buf)
   assert(#l == 5, vim.inspect(l)) -- help + 4, recorded hidden
-  assert(l[2] == "● 4  waiting   Fourth   1 file", l[2])
-  assert(l[3]:match("^✓ 5  reviewed  Fifth%s+2 files$"), l[3])
-  assert(l[4]:match("^✓ 3  reviewed  Added parser%.%s+2 files$"), l[4])
-  assert(l[5]:match("^✗ 2  discarded Second%s+2 files$"), l[5])
+  assert(l[2] == "● 4 waiting  Fourth  1 file", l[2])
+  assert(l[3] == "✓ 5 reviewed  Fifth  2 files", l[3])
+  assert(l[4] == "✓ 3 reviewed  Added parser.  2 files", l[4])
+  assert(l[5] == "✗ 2 discarded  Second  2 files", l[5])
   for i = 2, #l do assert(vim.fn.strdisplaywidth(l[i]) <= 60, l[i]) end
   local marks = vim.api.nvim_buf_get_extmarks(buf, -1, 0, -1, { details = true })
   local groups = {}
   for _, m in ipairs(marks) do groups[m[2]] = m[4].line_hl_group end
   assert(groups[0] == "Comment" and groups[1] == "PiCheckpointWaitingRow" and groups[2] == nil, vim.inspect(groups))
+  -- At 42 columns the title gets everything but the icon, number, status and count (20 cells).
+  vim.o.columns = 120
+  local narrow = open_panel({ chunk(1, "open", { title = "Extract session discovery into discover.lua" }) }, nil, 120)
+  vim.api.nvim_win_set_width(vim.fn.bufwinid(narrow), 42)
+  panel.refresh()
+  local row = lines(narrow)[2]
+  assert(row == "● 1 waiting  Extract session dis…  2 files", row)
   local long = open_panel({ chunk(1, "reviewed", { title = ("x"):rep(60) }) })
-  local row = lines(long)[2]
+  row = lines(long)[2]
   assert(vim.fn.strdisplaywidth(row) <= 60 and row:find("…", 1, true), row)
 end
 
@@ -188,7 +195,7 @@ M["panel: recorded checkpoints are hidden until a is pressed"] = function()
   assert(#lines(buf) == 2)
   press("a")
   local l = lines(buf)
-  assert(#l == 3 and l[3]:match("^· 1  recorded"), vim.inspect(l))
+  assert(#l == 3 and l[3]:match("^· 1 recorded  "), vim.inspect(l))
   press("a")
   assert(#lines(buf) == 2)
 end

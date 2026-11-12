@@ -8,6 +8,7 @@ local items = {}
 local unplaced = {} -- drafts whose file is missing; kept verbatim so save round-trips never drop them
 local next_id = 0
 local change_listener = nil
+local remove_listener = nil
 
 local function notify_change()
   if change_listener then
@@ -254,7 +255,15 @@ function M.remove(item)
   end
   items = kept
   drop(item)
+  if remove_listener then
+    remove_listener(item)
+  end
   notify_change()
+end
+
+-- fn(item) runs after M.remove took an annotation away.
+function M.on_remove(fn)
+  remove_listener = fn
 end
 
 function M.edit(item, text)

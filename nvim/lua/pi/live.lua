@@ -1,6 +1,7 @@
 -- Live view of the agent's changes in open buffers: reloads untouched buffers and marks the lines
 -- that differ from the mark base (the open chunk's start, or the start of the run with checkpoints off).
 local discover = require("pi.discover")
+local pi_text = require("pi.text")
 
 local M = {}
 
@@ -129,7 +130,10 @@ function M.refresh(root, baseline)
         local key = baseline .. "\0" .. path
         if mtimes[real] and seen ~= mtimes[real] and not warned[key] then
           warned[key] = true
-          vim.notify(("pi: %s changed on disk; your unsaved edits are kept"):format(path), vim.log.levels.WARN)
+          pi_text.notify_fit({
+            ("pi: %s changed on disk; your unsaved edits are kept"):format(path),
+            ("pi: %s changed on disk; your edits are kept"):format(vim.fs.basename(path)),
+          }, vim.log.levels.WARN)
         end
       else
         local autoread = vim.bo[buf].autoread

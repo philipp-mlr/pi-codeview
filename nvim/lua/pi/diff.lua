@@ -1,8 +1,12 @@
 -- Checkpoint diff view: one tabpage per checkpoint, one file at a time, `fromSha` against the live file
 -- (open chunk) or against `toSha` (past chunks).
+local badge = require("pi.badge")
 local keys = require("pi.keys")
 local session = require("pi.session")
 local diffview = require("pi.diffview")
+local pi_text = require("pi.text")
+
+local fit = pi_text.fit
 
 local M = {}
 local PREVIEW_CHARS = 80 -- virt_lines do not wrap; the full text is one peek away
@@ -74,6 +78,15 @@ local function files_of(chunk)
   return vim.tbl_map(function(path)
     return { path = path, label = label[path] }
   end, files)
+end
+
+-- Names a checkpoint tab: `t:tabname` is what lualine's tabs component (and :LualineRenameTab)
+-- shows instead of the buffer name; `t:pi_checkpoint` tells the badge to stay out of it.
+local function name_tab(tab, n)
+  vim.t[tab].tabname = "checkpoint " .. n
+  vim.t[tab].pi_checkpoint = n
+  -- TabEnter came before the mark, and the badge followed into the tab: let it leave again.
+  badge.reposition()
 end
 
 local function current_view()
@@ -168,18 +181,18 @@ end
 -- blocks :tabclose).
 local function back(buf)
   local tab = vim.api.nvim_get_current_tabpage()
-  current_view()
+  current_view() -- drops the views of tabs that are gone, so a stale entry cannot match below
   local view = views[tab]
   if not view then
     return passthrough(buf, "q")
   end
   if view.kind == "diffview" then
     if unsaved_in(tab) then
-      return vim.notify(SAVE_FIRST, vim.log.levels.WARN)
+      return pi_text.notify_fit(SAVE_FIRST, vim.log.levels.WARN)
     end
     diffview.close(tab)
     if vim.api.nvim_tabpage_is_valid(tab) then
-      return vim.notify(SAVE_FIRST, vim.log.levels.WARN)
+      return pi_text.notify_fit(SAVE_FIRST, vim.log.levels.WARN)
     end
     views[tab] = nil
     if view.origin and vim.api.nvim_tabpage_is_valid(view.origin) then
@@ -190,7 +203,7 @@ local function back(buf)
   if #vim.api.nvim_list_tabpages() > 1 then
     pcall(vim.cmd, "tabclose " .. vim.api.nvim_tabpage_get_number(tab))
     if vim.api.nvim_tabpage_is_valid(tab) then
-      return vim.notify(SAVE_FIRST, vim.log.levels.WARN)
+      return pi_text.notify_fit(SAVE_FIRST, vim.log.levels.WARN)
     end
     views[tab] = nil
     local origin = view.origin
@@ -272,21 +285,6 @@ local function map_diffview_keys(tab)
       map_back_key(buf)
     end
   end
-end
-
--- `text` cut to at most `width` display cells, ending in "…" when cut.
-local function fit(text, width)
-  if width <= 0 then
-    return ""
-  end
-  if vim.fn.strdisplaywidth(text) <= width then
-    return text
-  end
-  local chars = vim.fn.strchars(text)
-  while chars > 0 and vim.fn.strdisplaywidth(vim.fn.strcharpart(text, 0, chars)) > width - 1 do
-    chars = chars - 1
-  end
-  return vim.fn.strcharpart(text, 0, chars) .. "…"
 end
 
 local function set_winbar(win, text)
@@ -381,7 +379,7 @@ local function use_diffview()
   end
   if M.mode == "diffview" and not warned_missing_diffview then
     warned_missing_diffview = true
-    vim.notify("pi: diffview.nvim not found, using the built-in view", vim.log.levels.WARN)
+    pi_text.notify_fit("pi: diffview.nvim not found, using the built-in view", vim.log.levels.WARN)
   end
   return false
 end
@@ -521,12 +519,17 @@ local function open_in_diffview(n, chunk, files, selected)
     return false
   end
   views[tab] = { key = key, n = n, chunk = chunk, root = root, files = files, origin = pending_origin, kind = "diffview" }
+  name_tab(tab, n)
   map_diffview_keys(tab)
   M.cleanup()
   viewed[key] = true
-  vim.notify(("pi: checkpoint %d — <Tab> next file · %s annotate · %s continue · q back"):format(
-    n, keys.label("annotate", ":PiAnnotate"), keys.label("continue", ":PiContinue")
-  ))
+  -- The key list only when it fits the message line; the winbar and diffview's g? show the keys.
+  pi_text.notify_fit({
+    ("pi: checkpoint %d — <Tab> next file · %s note · %s continue · q back"):format(
+      n, keys.label("annotate", ":PiAnnotate"), keys.label("continue", ":PiContinue")
+    ),
+    ("pi: checkpoint %d"):format(n),
+  })
   return true
 end
 
@@ -559,7 +562,10 @@ function M.open(n, path)
     local chunk = result.chunk
     local files = files_of(chunk)
     if #files == 0 then
-      return vim.notify(("pi: checkpoint %d has no file changes — %s to continue"):format(n, keys.label("continue", ":PiContinue")), vim.log.levels.INFO)
+      return pi_text.notify_fit({
+        ("pi: checkpoint %d has no file changes — %s to continue"):format(n, keys.label("continue", ":PiContinue")),
+        ("pi: checkpoint %d has no file changes"):format(n),
+      }, vim.log.levels.INFO)
     end
     local origin = vim.api.nvim_get_current_tabpage()
     if use_diffview() and open_in_diffview(n, chunk, files, path) then
@@ -572,6 +578,7 @@ function M.open(n, path)
     local right = vim.api.nvim_get_current_win()
     local view = { key = chunk_key(n), n = n, chunk = chunk, root = session.root, files = files, index = index_of(files, path), origin = origin, left = left, right = right }
     views[vim.api.nvim_get_current_tabpage()] = view
+    name_tab(vim.api.nvim_get_current_tabpage(), n)
     M.show(view, view.index)
     vim.api.nvim_set_current_win(right)
   end)

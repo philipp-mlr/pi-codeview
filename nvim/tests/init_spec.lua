@@ -24,6 +24,21 @@ local function capture_notify(fn)
   return notes
 end
 
+-- Runs fn with the screen `columns` wide; every notice must then fit v:echospace.
+local function at_columns(columns, fn)
+  local saved = vim.o.columns
+  vim.o.columns = columns
+  local ok, err = pcall(fn)
+  vim.o.columns = saved
+  assert(ok, err)
+end
+
+local function assert_fits(notes)
+  for _, note in ipairs(notes) do
+    assert(vim.fn.strdisplaywidth(note.msg) <= vim.v.echospace, ("%q is wider than %d"):format(note.msg, vim.v.echospace))
+  end
+end
+
 M["default keys live under <leader>p with pi: descriptions"] = function()
   reset_maps()
   assert(vim.deep_equal(pi.default_keys, {
@@ -446,7 +461,18 @@ M["PiAnnotation is italic in Comment's colour, recomputed on ColorScheme, linked
   vim.api.nvim_set_hl(0, "PiAnnotation", { fg = 0xabcdef })
   vim.cmd("doautocmd ColorScheme")
   assert(vim.api.nvim_get_hl(0, { name = "PiAnnotation" }).fg == 0xabcdef, "user definition must survive")
+  vim.cmd("hi clear PiAnnotation")
   vim.api.nvim_set_hl(0, "Comment", { fg = 0x808080, italic = true })
+end
+
+M["a PiAnnotation defined before setup survives setup"] = function()
+  vim.cmd("hi clear PiAnnotation")
+  vim.api.nvim_set_hl(0, "PiAnnotation", { fg = 0x112233, bold = true })
+  pi.setup({})
+  local hl = vim.api.nvim_get_hl(0, { name = "PiAnnotation" })
+  vim.cmd("hi clear PiAnnotation")
+  pi.setup({})
+  assert(hl.fg == 0x112233 and hl.bold and not hl.italic, vim.inspect(hl))
 end
 
 M["setup live options set the sign and line highlight"] = function()
@@ -672,6 +698,54 @@ M["continue with a checkpoint open and annotations counts them and clears them"]
   assert(notes[1].msg == "pi[wt-a]: continuing — checkpoint 5 reviewed with 2 annotations", vim.inspect(notes))
 end
 
+M["continue notices with a long session name fit the message line and keep the label whole"] = function()
+  local session = require("pi.session")
+  local real_label = session.label
+  session.label = function() return "refactor-session-discovery" end
+  local ok, err = pcall(at_columns, 80, function()
+    local notes = continue_with({ n = 14 }, 2)
+    assert_fits(notes)
+    assert(notes[1].msg == "pi[refactor-session-discovery]: checkpoint 14 reviewed", notes[1].msg)
+    -- A label too long for any wording is cut with "…", never silently.
+    session.label = function() return ("very-long-session-name-"):rep(4) end
+    notes = continue_with({ n = 14 }, 2)
+    assert_fits(notes)
+    assert(vim.startswith(notes[1].msg, "pi[very-long-session-name-") and vim.endswith(notes[1].msg, "…"), notes[1].msg)
+  end)
+  session.label = real_label
+  assert(ok, err)
+end
+
+M["continue stops with a warning when a buffer cannot be saved; nothing is sent"] = function()
+  local session = require("pi.session")
+  local real = { ensure = session.ensure, refresh_status = session.refresh_status }
+  local requests = {}
+  local conn = { request = function(_, method, payload, cb) requests[#requests + 1] = method; cb(nil, {}) end }
+  local root = vim.uv.fs_realpath(vim.fn.tempname() .. "_s") or (function() local d = vim.fn.tempname(); vim.fn.mkdir(d, "p"); return vim.uv.fs_realpath(d) end)()
+  local path = root .. "/locked.txt"
+  vim.fn.writefile({ "old" }, path)
+  local buf = vim.fn.bufadd(path)
+  vim.fn.bufload(buf)
+  vim.bo[buf].buflisted = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "new" })
+  annotations.add(buf, 1, 1, "keep me")
+  -- The write fails: the buffer's file is now a directory.
+  vim.fn.delete(path)
+  vim.fn.mkdir(path, "p")
+  session.ensure = function(cb) cb(conn, root) end
+  session.refresh_status = function(cb) if cb then cb(nil, { openChunk = { n = 2 }, name = "w" }) end end
+  local ok, notes = pcall(capture_notify, function() pi.continue() end)
+  session.ensure, session.refresh_status = real.ensure, real.refresh_status
+  local remaining = #annotations.list(root)
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+  vim.fn.delete(root, "rf")
+  assert(ok, notes)
+  assert(#requests == 0, vim.inspect(requests))
+  assert(#notes == 1 and notes[1].level == vim.log.levels.WARN and notes[1].msg == "pi: could not save locked.txt — nothing sent", vim.inspect(notes))
+  assert(remaining == 1, "annotations dropped")
+end
+
 M["continue without a checkpoint sends annotations as a prompt, or says nothing to send"] = function()
   reset_maps()
   capture_notify(function() pi.setup() end)
@@ -844,12 +918,16 @@ M["statusline_parts colours checkpoint N and leaves other states plain"] = funct
   session.cached = { name = "x", activity = { tool = "read", target = string.rep("é", 50) }, mode = "checkpoints" }
   local working = pi.statusline_parts()
   local working_line = pi.statusline()
+  session.cached = { name = "refactor-discover", activity = { tool = "edit", target = "src/discover.lua" }, busy = true, mode = "checkpoints" }
+  local path_line = pi.statusline()
   session.cached = nil
   local detached = pi.statusline_parts()
   session.connected, session.cached = real.connected, real.cached
   assert(vim.deep_equal(waiting, { { text = "pi: x · " }, { text = "checkpoint 3", hl = "PiCheckpointWaiting" } }), vim.inspect(waiting))
   assert(#working == 1 and working[1].hl == nil, vim.inspect(working))
-  assert(working_line == "pi: x [checkpoints] · working · read " .. string.rep("é", 40) .. "…", working_line)
+  assert(working_line == "pi: x [checkpoints] · read " .. string.rep("é", 40) .. "…", working_line)
+  -- A tool replaces "working"; a path shows as its file name.
+  assert(path_line == "pi: refactor-discover [checkpoints] · edit discover.lua", path_line)
   assert(vim.deep_equal(detached, {}))
 end
 
@@ -865,7 +943,41 @@ M["outside_worktree event shows the warning text via WARN"] = function()
   local notes = capture_notify(function() handlers[#handlers]("outside_worktree", { path = "/x/y" }) end)
   session.cached = real
   assert(#notes == 1 and notes[1].level == vim.log.levels.WARN, vim.inspect(notes))
-  assert(notes[1].msg == "pi: the agent is editing files outside /work/a — checkpoint mode can't show them; start pi in that worktree", notes[1].msg)
+  assert(notes[1].msg == "pi: the agent is editing outside a — start pi in that worktree to review it", notes[1].msg)
+end
+
+M["notices fit the message line at 80 columns, so nvim never asks to press ENTER"] = function()
+  local session = require("pi.session")
+  at_columns(80, function()
+    -- A long worktree name: the outside-worktree warning drops its advice, then cuts with "…".
+    local real = session.cached
+    session.cached = { root = "/home/philipp/repos/pi-nvim-feature-long-worktree" }
+    local handlers = {}
+    local real_on = session.on_event
+    session.on_event = function(fn) handlers[#handlers + 1] = fn end
+    capture_notify(function() pi.setup() end)
+    session.on_event = real_on
+    local notes = capture_notify(function() handlers[#handlers]("outside_worktree", { path = "/x/y" }) end)
+    session.cached = real
+    assert(#notes == 1 and notes[1].level == vim.log.levels.WARN, vim.inspect(notes))
+    assert(notes[1].msg == "pi: the agent is editing outside pi-nvim-feature-long-worktree", notes[1].msg)
+    assert_fits(notes)
+    -- The waiting notice shortens its wording, then keeps only the continue key.
+    notes = capture_notify(function() pi.notify_waiting(12) end)
+    assert(notes[1].msg == "pi: checkpoint 12 waiting — <leader>pv look, <leader>pc continue", notes[1].msg)
+    assert_fits(notes)
+    notes = capture_notify(function() pi.setup({ keys = { send = "<leader>pr" } }) end)
+    assert_fits(notes)
+  end)
+  at_columns(64, function()
+    local notes = capture_notify(function() pi.notify_waiting(12) end)
+    assert(notes[1].msg == "pi: checkpoint 12 waiting — <leader>pc to continue", notes[1].msg)
+  end)
+  at_columns(200, function()
+    local notes = capture_notify(function() pi.notify_waiting(12) end)
+    assert(notes[1].msg == "pi: checkpoint 12 waiting — <leader>pv to look, <leader>pc to continue", notes[1].msg)
+  end)
+  reset_maps()
 end
 
 -- Fires chunk_ready through the handler setup(opts) registers; returns the notices and whether the panel opened.
@@ -1030,12 +1142,59 @@ M["PiAsk resolves the session before opening the editor and keeps the text when 
   end)
   local text = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   assert(vim.deep_equal(text, { "precious text" }), vim.inspect(text))
-  assert(notes[1] and notes[1].msg == "pi: restored your unsent text", vim.inspect(notes))
+  assert(#notes == 0, vim.inspect(notes))
   vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR><Esc>q"), "xt", false)
   require("pi.editor").discard_draft("ask")
   session.ensure = saved.ensure
   vim.api.nvim_buf_delete(buf, { force = true })
   reset_maps()
+end
+
+M["a PiAsk send confirmed late keeps a newer ask draft"] = function()
+  reset_maps()
+  capture_notify(function() pi.setup() end)
+  local session = require("pi.session")
+  local editor = require("pi.editor")
+  local buf, dir = file_in_dir("late.lua", { "a" })
+  local saved = { ensure = session.ensure, request = session.request, mark_busy = session.mark_busy }
+  local pending
+  session.ensure = function(cb) cb(nil, dir) end
+  session.request = function(_, _, cb) pending = cb end
+  session.mark_busy = function() end
+  capture_notify(function()
+    vim.cmd("PiAsk")
+    vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR>first<C-s>"), "xt", false)
+  end)
+  -- While the send is in flight the restored draft is changed and cancelled.
+  vim.cmd("PiAsk")
+  vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR> and more<Esc>q"), "xt", false)
+  pending(nil, {})
+  vim.cmd("PiAsk")
+  local text = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR><Esc>q"), "xt", false)
+  session.ensure, session.request, session.mark_busy = saved.ensure, saved.request, saved.mark_busy
+  editor.discard_draft("ask")
+  vim.api.nvim_buf_delete(buf, { force = true })
+  reset_maps()
+  assert(vim.deep_equal(text, { "first and more" }), vim.inspect(text))
+end
+
+M["removing an annotation drops its edit draft"] = function()
+  annotations.clear()
+  local editor = require("pi.editor")
+  local buf = file_in_dir("gone.txt", { "a" })
+  annotations.add(buf, 1, 1, "note")
+  local item = annotations.at_cursor()[1]
+  editor.stash("edit:" .. item.id, "half edit")
+  annotations.remove(item)
+  local got
+  editor.open({ title = " x ", draft = "edit:" .. item.id, on_submit = function() end })
+  got = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR><Esc>q"), "xt", false)
+  editor.discard_draft("edit:" .. item.id)
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+  assert(vim.deep_equal(got, { "" }), vim.inspect(got))
 end
 
 M["a PiAsk send leaves a cancelled PiAnnotate draft alone"] = function()
@@ -1089,6 +1248,43 @@ local function float_lines()
   return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(wins[1]), 0, -1, false)
 end
 
+M["PiPeek from a narrow window is sized from the editor, breaks only at spaces and stays on screen"] = function()
+  annotations.clear()
+  vim.cmd("tabnew")
+  local saved = vim.o.columns
+  vim.o.columns = 80
+  local buf = file_in_dir("narrow.txt", { "a", "b", "c" })
+  vim.cmd("vsplit")
+  vim.cmd("vertical resize 20")
+  local note = "call discover.collect(root) from session.lua then move nvim/lua/pi/session.lua " .. ("word "):rep(30) .. "end"
+  annotations.add(buf, 2, 2, note)
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  vim.cmd("PiPeek")
+  local win = floats()[1]
+  local width = vim.api.nvim_win_get_width(win)
+  local config = vim.api.nvim_win_get_config(win)
+  local lines = float_lines()
+  local ok, err = pcall(function()
+    assert(width > 20 and width <= 76, "width " .. width)
+    assert(not vim.wo[win].wrap, "the float wraps itself")
+    for _, line in ipairs(lines) do
+      assert(vim.fn.strdisplaywidth(line) <= width, line)
+    end
+    local joined = table.concat(lines, "\n")
+    for _, word in ipairs({ "discover.collect(root)", "session.lua", "nvim/lua/pi/session.lua" }) do
+      assert(joined:find(word, 1, true), "word broken: " .. word .. "\n" .. joined)
+    end
+    local pos = vim.api.nvim_win_get_position(win)
+    assert(pos[2] >= 0 and pos[2] + width + 2 <= vim.o.columns, vim.inspect({ pos, width, config }))
+  end)
+  vim.api.nvim_win_close(win, true)
+  vim.o.columns = saved
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+  pcall(vim.cmd, "tabclose")
+  assert(ok, err)
+end
+
 M["PiPeek shows every full annotation of the line in a wrapping float that closes on cursor move"] = function()
   annotations.clear()
   local long = ("word "):rep(60) .. "end"
@@ -1100,8 +1296,9 @@ M["PiPeek shows every full annotation of the line in a wrapping float that close
   vim.cmd("PiPeek")
   local win = floats()[1]
   local text = table.concat(float_lines(), "\n")
-  assert(text:find(long, 1, true) and text:find("second\nparagraph", 1, true), text)
-  assert(vim.wo[win].wrap and vim.api.nvim_win_get_width(win) <= 80, vim.api.nvim_win_get_width(win))
+  assert(text:gsub("%s+", " "):find(long, 1, true) and text:find("second\nparagraph", 1, true), text)
+  -- Pre-wrapped at spaces, so nvim never breaks a word: the float itself does not wrap.
+  assert(not vim.wo[win].wrap and vim.api.nvim_win_get_width(win) <= 80, vim.api.nvim_win_get_width(win))
   assert(vim.api.nvim_get_current_win() ~= win, "peek took focus")
   -- A second peek focuses the float, where <Esc> closes it.
   vim.cmd("PiPeek")
@@ -1189,6 +1386,12 @@ M["which-key: setup registers the pi group under the keys' common prefix"] = fun
   added = {}
   with_which_key({ add = function(spec) added[#added + 1] = spec end }, function()
     capture_notify(function() pi.setup({ keys = { ask = "<C-a>", continue = "<C-b>", stop = false, annotate = false, edit = false, remove = false, checkpoints = false, mode = false, session = false, peek = false } }) end)
+  end)
+  assert(#added == 0, vim.inspect(added))
+  -- A single mapped key is a key, not a group.
+  added = {}
+  with_which_key({ add = function(spec) added[#added + 1] = spec end }, function()
+    capture_notify(function() pi.setup({ keys = { ask = "<leader>pa", continue = false, stop = false, annotate = false, edit = false, remove = false, checkpoints = false, mode = false, session = false, peek = false } }) end)
   end)
   assert(#added == 0, vim.inspect(added))
   for _, lhs in ipairs({ "<C-a>", "<C-b>" }) do pcall(vim.keymap.del, "n", lhs) end
