@@ -344,18 +344,23 @@ local function install_fake_diffview()
   vim.api.nvim_create_user_command("DiffviewOpen", function(cmd)
     fake.calls[#fake.calls + 1] = cmd.args
     vim.cmd("tabnew")
+    fake.opened = (fake.opened or 0) + 1
     fake.left = vim.api.nvim_get_current_win()
     vim.cmd("rightbelow vsplit " .. vim.fn.fnameescape(fake.root .. "/a.txt"))
     fake.right = vim.api.nvim_get_current_win()
     local left = vim.api.nvim_create_buf(false, true)
     vim.bo[left].bufhidden = "wipe"
-    vim.api.nvim_buf_set_name(left, "diffview://" .. fake.root .. "/.git/abc123/a.txt")
+    vim.api.nvim_buf_set_name(left, "diffview://" .. fake.root .. "/.git/abc" .. fake.opened .. "/a.txt")
     vim.api.nvim_win_set_buf(fake.left, left)
     for _, win in ipairs({ fake.left, fake.right }) do
       vim.wo[win].diff = true
     end
     fake.left_buf = left
     fake.tab = vim.api.nvim_get_current_tabpage()
+    if fake.fire_inside_open then
+      vim.api.nvim_set_current_win(fake.left)
+      vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+    end
   end, { nargs = "*", complete = "file" })
   vim.api.nvim_create_user_command("DiffviewClose", function()
     fake.closes = fake.closes + 1
@@ -467,7 +472,7 @@ M["diff = diffview without diffview falls back and warns once"] = with_fake(func
   local warnings = vim.tbl_filter(function(item)
     return item.msg == "pi: diffview.nvim not found, using the built-in view" and item.level == vim.log.levels.WARN
   end, seen)
-  assert(#warnings <= 1, "warned more than once")
+  assert(#warnings == 1, "expected exactly one warning, got " .. #warnings)
   assert(vim.wo.diff, "built-in diff not shown")
 end)
 
@@ -523,6 +528,41 @@ M["diffview left buffer gets the note and why only in the chunk tab"] = with_fak
   vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
   assert(#why_text(other) == 0, "other tab got the explanation")
   assert(vim.api.nvim_tabpage_is_valid(chunk_tab))
+end)
+
+M["every diffview chunk tab keeps its explanation"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  vim.fn.writefile({ "y" }, root .. "/b.txt")
+  local function chunk(n, note)
+    return { n = n, status = "open", fromSha = sha, note = note, why = { ["a.txt"] = "w" .. n, ["b.txt"] = "wb" .. n }, agentFiles = { "a.txt", "b.txt" }, humanFiles = {} }
+  end
+  fetch(chunk(1, "note1"))
+  local tab1, win1 = fake.tab, fake.left
+  vim.cmd("tabprevious")
+  fetch(chunk(2, "note2"))
+  local tab2, win2 = fake.tab, fake.left
+  -- chunk 1's tab moves to its second file
+  vim.api.nvim_set_current_tabpage(tab1)
+  vim.api.nvim_set_current_win(win1)
+  local second = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(second, "diffview://" .. root .. "/.git/abc123/b.txt")
+  vim.api.nvim_win_set_buf(win1, second)
+  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+  assert(vim.deep_equal(why_text(second), { "  note1", "  why: wb1" }), vim.inspect(why_text(second)))
+  -- and chunk 2's tab still works
+  vim.api.nvim_set_current_tabpage(tab2)
+  vim.api.nvim_set_current_win(win2)
+  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+  assert(vim.deep_equal(why_text(vim.api.nvim_win_get_buf(win2)), { "  note2", "  why: w2" }), vim.inspect(why_text(vim.api.nvim_win_get_buf(win2))))
+end)
+
+M["an event fired synchronously inside :DiffviewOpen still places the explanation"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  fake.fire_inside_open = true
+  fetch({ n = 1, status = "open", fromSha = sha, note = "early", why = { ["a.txt"] = "now" }, agentFiles = { "a.txt" }, humanFiles = {} })
+  assert(vim.deep_equal(why_text(fake.left_buf), { "  early", "  why: now" }), vim.inspect(why_text(fake.left_buf)))
 end)
 
 M["opening the same diffview chunk twice reuses the tab"] = with_fake(function()

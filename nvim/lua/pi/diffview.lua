@@ -2,6 +2,7 @@
 local M = {}
 
 local group = vim.api.nvim_create_augroup("PiDiffview", { clear = true })
+local registered = false
 local handlers = nil -- { on_left = function(buf, win), on_closed = function() } set by open()
 
 function M.available()
@@ -25,7 +26,10 @@ function M.is_left_window(win)
 end
 
 local function ensure_autocmds()
-  vim.api.nvim_clear_autocmds({ group = group })
+  if registered then
+    return
+  end
+  registered = true
   vim.api.nvim_create_autocmd("User", {
     group = group,
     pattern = "DiffviewDiffBufWinEnter",

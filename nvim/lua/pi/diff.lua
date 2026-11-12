@@ -281,6 +281,45 @@ local function use_diffview()
   return false
 end
 
+-- The diffview chunk being opened: its tab does not exist yet when :DiffviewOpen starts firing
+-- events, so the handler adopts a new, unregistered tab for it.
+local pending = nil -- { key, chunk, files, origin }
+
+local function diffview_entry()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local entry = views[tab]
+  if entry then
+    return entry.kind == "diffview" and entry or nil
+  end
+  return pending and tab ~= pending.origin and pending or nil
+end
+
+local diffview_handlers = {
+  on_left = function(buf)
+    local entry = diffview_entry()
+    if not entry then
+      return
+    end
+    local name = vim.api.nvim_buf_get_name(buf)
+    local best
+    for _, file in ipairs(entry.files) do
+      if vim.endswith(name, "/" .. file.path) and (not best or #file.path > #best) then
+        best = file.path
+      end
+    end
+    if best then
+      M.place_why(buf, entry.chunk, best)
+    end
+  end,
+  on_closed = function()
+    for registered in pairs(views) do
+      if not vim.api.nvim_tabpage_is_valid(registered) then
+        views[registered] = nil
+      end
+    end
+  end,
+}
+
 -- Opens the chunk in diffview and registers its tab; false (nothing left open) on any failure.
 local function open_in_diffview(n, chunk, files)
   local paths = vim.tbl_map(function(file)
@@ -289,31 +328,12 @@ local function open_in_diffview(n, chunk, files)
   local range = chunk.status == "open" and chunk.fromSha or (chunk.fromSha .. ".." .. chunk.toSha)
   local root = session.root
   local key = chunk_key(n)
-  local tab = diffview.open({ range = range, root = root, files = paths }, {
-    on_left = function(buf)
-      local current = views[vim.api.nvim_get_current_tabpage()]
-      if not current or current.kind ~= "diffview" or current.key ~= key then
-        return
-      end
-      local name = vim.api.nvim_buf_get_name(buf)
-      local best
-      for _, path in ipairs(paths) do
-        if vim.endswith(name, "/" .. path) and (not best or #path > #best) then
-          best = path
-        end
-      end
-      if best then
-        M.place_why(buf, chunk, best)
-      end
-    end,
-    on_closed = function()
-      for registered in pairs(views) do
-        if not vim.api.nvim_tabpage_is_valid(registered) then
-          views[registered] = nil
-        end
-      end
-    end,
-  })
+  pending = { key = key, chunk = chunk, files = files, origin = vim.api.nvim_get_current_tabpage() }
+  local ok, tab = pcall(diffview.open, { range = range, root = root, files = paths }, diffview_handlers)
+  pending = nil
+  if not ok then
+    error(tab, 0)
+  end
   if not tab then
     return false
   end
