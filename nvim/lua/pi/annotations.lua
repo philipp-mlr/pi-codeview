@@ -268,10 +268,11 @@ function M.range(item)
   return position(item)
 end
 
--- Rewraps the previews of every buffer shown in a resized window.
-local function on_resized()
+-- Rewraps the previews of every buffer shown in a resized window, or newly shown in a window.
+local function on_resized(args)
   local resized = {}
-  for _, win in ipairs(vim.v.event.windows or vim.api.nvim_list_wins()) do
+  local wins = args.event == "BufWinEnter" and { vim.api.nvim_get_current_win() } or vim.v.event.windows or vim.api.nvim_list_wins()
+  for _, win in ipairs(wins) do
     if vim.api.nvim_win_is_valid(win) then
       resized[vim.api.nvim_win_get_buf(win)] = true
     end
@@ -283,7 +284,7 @@ local function on_resized()
   end
 end
 
-vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+vim.api.nvim_create_autocmd({ "WinResized", "VimResized", "BufWinEnter" }, {
   group = vim.api.nvim_create_augroup("PiAnnotationsResize", { clear = true }),
   callback = on_resized,
 })

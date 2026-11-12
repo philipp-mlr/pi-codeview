@@ -733,6 +733,7 @@ M["PiAsk opens the editor titled with file, line or range and session, and sends
   assert(seen.input.title == " pi ask · ask.lua:2 ", vim.inspect(seen.input))
   assert(#sent == 2, vim.inspect(sent))
   session.ensure, pi.prompt, session.root, session.attached_label = saved.ensure, saved.prompt, saved.root, saved.label
+  require("pi.editor").discard_draft() -- pi.prompt was stubbed, so nothing confirmed the send
   vim.api.nvim_buf_delete(buf, { force = true })
   reset_maps()
 end
@@ -748,6 +749,89 @@ M["PiAnnotate opens the editor titled with file and range and places the written
   assert(#list == 1 and list[1].note == "long\nnote" and list[1].endLine == 3, vim.inspect(list))
   annotations.clear()
   vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["PiAnnotate with the real editor places the note typed and sent with <C-s>"] = function()
+  annotations.clear()
+  local buf, dir = file_in_dir("real.txt", { "a", "b", "c" })
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  capture_notify(function()
+    vim.cmd("PiAnnotate")
+    vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR>typed note<C-s>"), "xt", false)
+  end)
+  local list = annotations.list(dir)
+  assert(#list == 1 and list[1].note == "typed note" and list[1].startLine == 2, vim.inspect(list))
+  annotations.clear()
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+M["PiAsk with the real editor sends the typed prompt as a request"] = function()
+  reset_maps()
+  capture_notify(function() pi.setup() end)
+  local session = require("pi.session")
+  local buf, dir = file_in_dir("realask.lua", { "a", "b" })
+  local saved = { ensure = session.ensure, request = session.request, mark_busy = session.mark_busy }
+  local sent = {}
+  session.ensure = function(cb) cb(nil, dir) end
+  session.request = function(method, params, cb)
+    sent[#sent + 1] = { method = method, params = params }
+    cb(nil, {})
+  end
+  session.mark_busy = function() end
+  vim.cmd("PiAsk")
+  vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR>why this?<C-s>"), "xt", false)
+  session.ensure, session.request, session.mark_busy = saved.ensure, saved.request, saved.mark_busy
+  assert(#sent == 1 and sent[1].method == "prompt" and sent[1].params.text == "why this?", vim.inspect(sent))
+  assert(sent[1].params.context.path == "realask.lua", vim.inspect(sent))
+  vim.api.nvim_buf_delete(buf, { force = true })
+  reset_maps()
+end
+
+M["PiAsk resolves the session before opening the editor and keeps the text when sending fails"] = function()
+  reset_maps()
+  capture_notify(function() pi.setup() end)
+  local session = require("pi.session")
+  local editor = require("pi.editor")
+  local buf, dir = file_in_dir("fail.lua", { "a" })
+  local saved = { ensure = session.ensure, request = session.request }
+  local opened = false
+  local real_open = editor.open
+  editor.open = function() opened = true end
+  session.ensure = function() end -- no session: ensure reports and never calls back
+  vim.cmd("PiAsk")
+  editor.open = real_open
+  assert(not opened, "editor opened without a session")
+  session.ensure = function(cb) cb(nil, dir) end
+  session.request = function(_, _, cb) cb("boom") end
+  capture_notify(function()
+    vim.cmd("PiAsk")
+    vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR>precious text<C-s>"), "xt", false)
+  end)
+  session.request = saved.request
+  local notes = capture_notify(function()
+    vim.cmd("PiAsk")
+  end)
+  local text = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  assert(vim.deep_equal(text, { "precious text" }), vim.inspect(text))
+  assert(notes[1] and notes[1].msg == "pi: restored your unsent text", vim.inspect(notes))
+  vim.api.nvim_feedkeys(vim.keycode("<Cmd><CR><Esc>q"), "xt", false)
+  require("pi.editor").discard_draft()
+  session.ensure = saved.ensure
+  vim.api.nvim_buf_delete(buf, { force = true })
+  reset_maps()
+end
+
+M["editor titles call an unnamed buffer [No Name]"] = function()
+  local session = require("pi.session")
+  local real_ensure = session.ensure
+  session.ensure = function(cb) cb(nil, vim.uv.cwd()) end
+  vim.cmd("enew")
+  local seen, restore = stub_ui(nil, nil)
+  vim.cmd("PiAsk")
+  restore()
+  session.ensure = real_ensure
+  assert(seen.input.title:find("[No Name]:1", 1, true), seen.input.title)
+  vim.cmd("bwipeout!")
 end
 
 -- The floating windows of the current tab.

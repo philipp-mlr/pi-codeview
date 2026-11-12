@@ -277,6 +277,21 @@ M["annotation preview rewraps when its window is resized"] = function()
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
+M["annotation preview refits when its buffer is shown in a narrower window"] = function()
+  annotations.clear()
+  local root = temp_root()
+  local buf = file_buf(root, "w.txt", numbered(3))
+  vim.cmd("tabnew") -- the note is built while the buffer is in no window: full editor width
+  annotations.add(buf, 1, 1, ("word "):rep(12) .. "end")
+  assert(#virt_text(buf) == 1, vim.inspect(virt_text(buf)))
+  vim.cmd("vsplit | vertical resize 30")
+  vim.cmd("buffer " .. buf)
+  assert(vim.wait(500, function() return #virt_text(buf) == 2 end, 10), vim.inspect(virt_text(buf)))
+  annotations.clear()
+  vim.cmd("tabclose")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 M["sign has priority 200, above live marks, and the number highlight covers every line of the range"] = function()
   annotations.clear()
   local root = temp_root()

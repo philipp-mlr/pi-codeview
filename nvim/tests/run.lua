@@ -4,7 +4,7 @@ package.path = vim.fs.dirname(tests_dir) .. "/lua/?.lua;" .. vim.fs.dirname(test
 -- Nix pack dir) would shadow this checkout. Put the checkout first on the runtimepath.
 vim.opt.runtimepath:prepend(vim.fs.dirname(tests_dir))
 
-local failed = 0
+local failed, passed = 0, 0
 local specs = vim.fn.sort(vim.fn.glob(tests_dir .. "/*_spec.lua", false, true))
 
 for _, file in ipairs(specs) do
@@ -19,6 +19,7 @@ for _, file in ipairs(specs) do
     for _, name in ipairs(names) do
       local ok, err = xpcall(spec[name], debug.traceback)
       if ok then
+        passed = passed + 1
         print(("ok %s %s"):format(spec_name, name))
       else
         failed = failed + 1
@@ -28,5 +29,5 @@ for _, file in ipairs(specs) do
   end
 end
 
-io.stdout:write("\n")
+io.stdout:write(("\n%d ok, %d failed\n"):format(passed, failed))
 os.exit(failed > 0 and 1 or 0)

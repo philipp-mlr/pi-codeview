@@ -97,8 +97,11 @@ says where the text goes: ` pi ask · session.lua:5 · refactor-discover `
 in insert mode and is a markdown buffer, so paragraphs and lists work.
 
 - `<C-s>` sends (insert and normal mode); `<CR>` sends in normal mode.
-- `q` or `<Esc>` in normal mode cancels. Closing the window any other way
-  (`:q`, `<C-w>c`, moving to another window) cancels too; nothing is sent.
+- `q` or `<Esc>` in normal mode cancels, as do `:q` and `<C-w>c`; nothing is
+  sent. Moving to another window (say, the checkpoint panel opening) leaves
+  the editor open.
+- Text you cancel, or that failed to send, is not lost: the next editor opens
+  with it and says `pi: restored your unsent text`.
 - Sending empty text cancels. Trailing blank lines and spaces are dropped.
 
 Long text is previewed where you review it and read in full with

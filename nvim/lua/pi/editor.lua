@@ -1,11 +1,30 @@
 -- Floating editor for text sent to pi (ask, annotation notes): a wrapping markdown float, centred,
--- that sends with <C-s> and cancels on any other way out. One editor at a time.
+-- that sends with <C-s>. q or <Esc> in normal mode, :q and wiping its buffer cancel; moving focus
+-- elsewhere (a panel opening, another window or tab) leaves it open. Text that is cancelled or fails
+-- to send is kept as a draft and comes back in the next editor. One editor at a time.
 local M = {}
 
 local MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT = 80, 3, 15
 local FOOTER = " <C-s> send · q cancel "
 
 local current = nil -- { win, buf } of the open editor
+local draft = nil -- unsent text of the last cancelled editor, restored by the next open without opts.text
+
+-- Forgets the draft: its text reached pi.
+function M.discard_draft()
+  draft = nil
+end
+
+local function blank(text)
+  return text == nil or text:match("^%s*$") ~= nil
+end
+
+-- Keeps text (when not blank) for the next open.
+function M.stash(text)
+  if not blank(text) then
+    draft = text
+  end
+end
 
 -- Size and position for a float showing `rows` screen lines, centred in the editor.
 local function layout(rows)
@@ -21,12 +40,18 @@ local function layout(rows)
 end
 
 -- opts = { title, text?, on_submit(text), on_cancel? }. Starts in insert mode at the end of text.
--- Sending trims trailing whitespace; empty text, q/<Esc> in normal mode, :q, <C-w>c, leaving the
--- window or wiping its buffer cancel.
+-- Sending trims trailing whitespace; empty text, q/<Esc> in normal mode, :q, <C-w>c or wiping the
+-- buffer cancel.
 function M.open(opts)
   if current and vim.api.nvim_win_is_valid(current.win) then
     vim.api.nvim_set_current_win(current.win)
+    vim.notify("pi: finish or cancel the open note first")
     return
+  end
+  if opts.text == nil and draft then
+    opts = vim.tbl_extend("force", opts, { text = draft })
+    draft = nil
+    vim.notify("pi: restored your unsent text")
   end
   local origin = vim.api.nvim_get_current_win()
   local buf = vim.api.nvim_create_buf(false, true)
@@ -50,6 +75,13 @@ function M.open(opts)
 
   local group = vim.api.nvim_create_augroup("PiEditor", { clear = true })
   local done = false
+  local last_text = opts.text or "" -- the buffer's text as it was unloaded, for a wipe
+  local function buffer_text()
+    if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
+      return table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+    end
+    return last_text
+  end
   -- Closes the editor once; text nil cancels. Runs the callback from the window it was opened in.
   local function finish(text)
     if done then
@@ -57,6 +89,9 @@ function M.open(opts)
     end
     done = true
     current = nil
+    if not text then
+      M.stash(buffer_text())
+    end
     vim.api.nvim_del_augroup_by_id(group)
     local focused = vim.api.nvim_get_current_win() == win
     if focused then
@@ -106,8 +141,13 @@ function M.open(opts)
       vim.schedule(fit)
     end,
   })
-  -- The layout cannot change inside WinLeave, so the close waits for the next loop.
-  vim.api.nvim_create_autocmd("WinLeave", { group = group, buffer = buf, callback = vim.schedule_wrap(cancel) })
+  vim.api.nvim_create_autocmd("BufUnload", {
+    group = group,
+    buffer = buf,
+    callback = function()
+      last_text = buffer_text()
+    end,
+  })
   vim.api.nvim_create_autocmd("WinClosed", { group = group, pattern = tostring(win), callback = vim.schedule_wrap(cancel) })
   vim.api.nvim_create_autocmd("BufWipeout", { group = group, buffer = buf, callback = vim.schedule_wrap(cancel) })
 

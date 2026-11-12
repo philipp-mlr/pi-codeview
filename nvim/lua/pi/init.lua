@@ -137,10 +137,13 @@ function M.attach()
 end
 
 -- Sends text as a prompt; context is { path, startLine?, endLine? } or nil.
-function M.prompt(text, context)
+function M.prompt(text, context, on_sent)
   session.request("prompt", { text = text, context = context }, function(err, result)
     if err then
       return vim.notify("pi: " .. err, vim.log.levels.ERROR)
+    end
+    if on_sent then
+      on_sent()
     end
     if result and result.queued then
       vim.notify("pi: prompt queued until the open checkpoint is reviewed")
@@ -301,6 +304,9 @@ end
 -- the title stays short.
 local function where(buf, line1, line2)
   local name = vim.fs.basename(vim.api.nvim_buf_get_name(buf))
+  if name == "" then
+    name = "[No Name]"
+  end
   local lines = line1 == line2 and tostring(line1) or ("%d-%d"):format(line1, line2)
   return ("%s:%s"):format(name, lines)
 end
@@ -316,16 +322,21 @@ local function prompt_command(cmd)
     local line = vim.api.nvim_win_get_cursor(0)[1]
     sel = { line1 = line, line2 = line }
   end
-  local label = session.attached_label()
-  local title = (" pi ask · %s%s "):format(where(buf, sel.line1, sel.line2), label ~= "" and " · " .. label or "")
-  editor.open({
-    title = title,
-    on_submit = function(text)
-      session.ensure(function(_, root)
-        M.prompt(text, M.prompt_context(buf, root, sel))
-      end, { buf = buf })
-    end,
-  })
+  -- Resolve the session first: a missing one errors before anything is typed.
+  session.ensure(function()
+    local label = session.attached_label()
+    local title = (" pi ask · %s%s "):format(where(buf, sel.line1, sel.line2), label ~= "" and " · " .. label or "")
+    editor.open({
+      title = title,
+      on_submit = function(text)
+        -- Kept as the draft until pi has taken it, so a failed send does not lose it.
+        editor.stash(text)
+        session.ensure(function(_, send_root)
+          M.prompt(text, M.prompt_context(buf, send_root, sel), editor.discard_draft)
+        end, { buf = buf })
+      end,
+    })
+  end, { buf = buf })
 end
 
 local function annotate_command(cmd)
