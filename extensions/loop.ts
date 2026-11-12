@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as net from "node:net";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ActivityLog, toolLine } from "./activity.ts";
@@ -26,6 +27,9 @@ export const ONE_REVIEW_SESSION =
 
 const READ_ONLY_TOOLS = new Set([
   "read",
+  "grep",
+  "find",
+  "ls",
   CHECKPOINT_TOOL,
   "module_report",
   "read_symbol",
@@ -169,8 +173,8 @@ export class ReviewLoop {
     const chunk = await this.serial(async () => {
       const open = this.state.openChunk();
       if (open) return open;
-      const { sha, files: changed } = await this.recordSince("agent");
-      if (changed.length === 0 && this.state.steps.length === 0) return null;
+      const { sha } = await this.recordSince("agent");
+      if (await this.settleIfNetEmpty(sha)) return null;
       const created = this.state.createChunk(note, sha, "open", files, title);
       this.persist();
       this.broadcast("chunk_ready", { chunk: created });
@@ -202,6 +206,7 @@ export class ReviewLoop {
     await this.serial(async () => {
       if (this.state.openChunk()) return;
       const { sha } = await this.recordSince("agent");
+      if (await this.settleIfNetEmpty(sha)) return;
       if (!this.state.steps.some((s) => s.author === "agent")) return this.persist();
       const chunk = this.state.createChunk(END_OF_RUN_NOTE, sha);
       this.persist();
@@ -247,7 +252,8 @@ export class ReviewLoop {
     for (const key of ["path", "file_path"]) {
       const value = args[key];
       if (typeof value !== "string" || value === "") continue;
-      const target = path.resolve(this.ctx.cwd, value);
+      const expanded = value === "~" || value.startsWith("~/") ? path.join(os.homedir(), value.slice(1)) : value;
+      const target = path.resolve(this.ctx.cwd, expanded);
       if (this.isOutsideRoot(target)) {
         this.warnedOutside = true;
         this.notify(outsideWorktreeText(this.root), "warning");
@@ -499,6 +505,18 @@ export class ReviewLoop {
     this.state.recordStep({ from: previous, sha, author, files, lines: changed.reduce((sum, c) => sum + c.lines, 0) });
     if (author === "agent") for (const f of files) this.runAgentFiles.add(f);
     return { sha, files };
+  }
+
+  /**
+   * When the net change from the baseline to `sha` is empty (an edit that was reverted) and Philipp has
+   * no unreported steps, moves the baseline to `sha` and persists, so no empty checkpoint opens.
+   */
+  private async settleIfNetEmpty(sha: string): Promise<boolean> {
+    if (this.state.steps.some((s) => s.author === "human" && !s.reported)) return false;
+    if ((await numstat(this.root, this.state.baseline, sha)).length > 0) return false;
+    this.state.setBaseline(sha);
+    this.persist();
+    return true;
   }
 
   /** Philipp's edits inside the chunk plus those made since it was opened, step by step so the agent's hunks stay out. */

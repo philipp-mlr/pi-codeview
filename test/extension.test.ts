@@ -111,7 +111,7 @@ function text(result: any): string {
 describe("isReadOnlyTool", () => {
   it("treats read-only tools as read-only and everything else as mutating", () => {
     for (const name of ["read", "checkpoint", "lens_diagnostics", "module_report", "read_symbol", "read_enclosing",
-      "symbol_search", "project_report", "effective_config", "ask_user_question", "todo"]) {
+      "symbol_search", "project_report", "effective_config", "ask_user_question", "todo", "grep", "find", "ls"]) {
       expect(isReadOnlyTool(name)).toBe(true);
     }
     for (const name of ["write", "edit", "bash", "some_custom_tool"]) expect(isReadOnlyTool(name)).toBe(false);
@@ -587,7 +587,55 @@ describe("pi-nvim extension", () => {
     await pending;
   });
 
+  it("checkpoint after an edit and its revert returns the empty text and opens no chunk", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    fs.rmSync(path.join(repo.root, "a.txt"));
+    await fake.fire("tool_result", { toolName: "bash", input: {}, content: [], isError: false });
+    const out = await fake.callTool("checkpoint", { note: "reverted" });
+    expect(text(out)).toBe("Nothing changed since the last checkpoint; no review needed. Continue.");
+    expect((await client.request("list_chunks")).result).toEqual([]);
+    expect(client.events.filter((e) => e.event === "chunk_ready")).toEqual([]);
+    // A real net change still opens one.
+    await agentWrite(fake, repo, "b.txt", "b\n");
+    const pending = fake.callTool("checkpoint", { note: "real" });
+    expect(await until(async () => (await client.request("status")).result.openChunk)).toMatchObject({ n: 1, agentFiles: ["b.txt"] });
+    await fake.runCommand("checkpoints", "discard done");
+    await pending;
+  });
+
+  it("end of run after an edit and its revert creates no chunk", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    fs.rmSync(path.join(repo.root, "a.txt"));
+    await fake.fire("tool_result", { toolName: "bash", input: {}, content: [], isError: false });
+    await fake.fire("agent_settled", { aborted: false });
+    expect((await client.request("list_chunks")).result).toEqual([]);
+    expect((await client.request("status")).result.openChunk).toBeNull();
+  });
+
   describe("outside-worktree warning", () => {
+    it("search tools and ~/ paths", async () => {
+      const repo = await makeRepo();
+      const other = await makeRepo();
+      const fake = await start(repo, { mode: "checkpoints" });
+      const client = await connect(repo);
+      for (const toolName of ["grep", "find", "ls"]) {
+        await fake.fire("tool_call", { toolName, input: { path: other.root } });
+      }
+      expect(fake.notifications.filter((n) => n.level === "warning")).toEqual([]);
+      expect(client.events.filter((e) => e.event === "outside_worktree")).toEqual([]);
+      await fake.fire("tool_call", { toolName: "write", input: { path: "~/pi-nvim-outside-test/x.txt" } });
+      await until(() => client.events.some((e) => e.event === "outside_worktree"));
+      expect(client.events.find((e) => e.event === "outside_worktree")?.data.path).toBe(
+        path.join(os.homedir(), "pi-nvim-outside-test/x.txt"),
+      );
+    });
+
     const warning = (root: string) =>
       `pi: the agent is editing files outside ${root} — checkpoint mode can't show them; start pi in that worktree`;
 
@@ -600,16 +648,16 @@ describe("pi-nvim extension", () => {
       await fake.fire("tool_call", { toolName: "write", input: { path: path.join(other.root, "x.al") } });
       await fake.fire("tool_call", { toolName: "edit", input: { path: "../" + path.basename(other.root) + "/x.al" } });
       expect(warnings().map((n) => n.message)).toEqual([warning(repo.root)]);
-      const events = client.events.filter((e) => e.event === "outside_worktree");
       await until(() => client.events.some((e) => e.event === "outside_worktree"));
-      expect(events.length).toBeLessThanOrEqual(1);
+      expect(client.events.filter((e) => e.event === "outside_worktree")).toHaveLength(1);
       expect(client.events.filter((e) => e.event === "outside_worktree")).toEqual([
         { event: "outside_worktree", data: { path: path.join(other.root, "x.al") } },
       ]);
       await fake.fire("agent_start", {});
       await fake.fire("tool_call", { toolName: "edit", input: { path: "../" + path.basename(other.root) + "/x.al" } });
       expect(warnings()).toHaveLength(2);
-      expect(client.events.filter((e) => e.event === "outside_worktree").at(-1)).toBeDefined();
+      await until(() => client.events.filter((e) => e.event === "outside_worktree").length >= 2);
+      expect(client.events.filter((e) => e.event === "outside_worktree")).toHaveLength(2);
     });
 
     it("stays quiet for paths inside the root, new files, and read-only tools", async () => {
