@@ -3,7 +3,7 @@ local M = {}
 
 local group = vim.api.nvim_create_augroup("PiDiffview", { clear = true })
 local registered = false
-local handlers = nil -- { on_left = function(buf, win), on_closed = function() } set by open()
+local handlers = nil -- { on_left = function(buf, win), on_right = function(buf, win), on_closed = function() } set by open()
 
 function M.available()
   return (pcall(require, "diffview")) and vim.fn.exists(":DiffviewOpen") == 2
@@ -36,8 +36,12 @@ local function ensure_autocmds()
     callback = function()
       local win = vim.api.nvim_get_current_win()
       local buf = vim.api.nvim_get_current_buf()
-      if handlers and vim.startswith(vim.api.nvim_buf_get_name(buf), "diffview://") and M.is_left_window(win) then
-        handlers.on_left(buf, win)
+      if handlers and vim.startswith(vim.api.nvim_buf_get_name(buf), "diffview://") then
+        if M.is_left_window(win) then
+          handlers.on_left(buf, win)
+        elseif vim.wo[win].diff then
+          handlers.on_right(buf, win)
+        end
       end
     end,
   })

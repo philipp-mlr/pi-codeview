@@ -327,7 +327,7 @@ local function place_tab_explanation(tab, entry, left_buf)
 end
 
 vim.api.nvim_create_autocmd("TabEnter", {
-  group = vim.api.nvim_create_augroup("PiDiffChunkTabs", { clear = true }),
+  group = vim.api.nvim_create_augroup("PiDiffChunkTabs", { clear = false }),
   callback = function()
     local tab = vim.api.nvim_get_current_tabpage()
     local entry = views[tab]
@@ -342,6 +342,13 @@ local diffview_handlers = {
     local entry = diffview_entry()
     if entry then
       place_tab_explanation(vim.api.nvim_get_current_tabpage(), entry, buf)
+    end
+  end,
+  -- The buffer may carry another chunk's explanation (shared per revision and path), and diffview
+  -- places it in its window only after the left one, so the tab-entry clear cannot catch it.
+  on_right = function(buf)
+    if diffview_entry() then
+      vim.api.nvim_buf_clear_namespace(buf, vim.api.nvim_create_namespace("pi_why"), 0, -1)
     end
   end,
   on_closed = function()

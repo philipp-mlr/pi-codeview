@@ -378,6 +378,13 @@ local function install_fake_diffview()
       vim.api.nvim_set_current_win(fake.left)
       vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
     end
+    if fake.fire_both then
+      -- like diffview: the left window's event first, then the right window's
+      for _, win in ipairs({ fake.left, fake.right }) do
+        vim.api.nvim_set_current_win(win)
+        vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+      end
+    end
   end, { nargs = "*", complete = "file" })
   vim.api.nvim_create_user_command("DiffviewClose", function()
     fake.closes = fake.closes + 1
@@ -574,10 +581,11 @@ M["every diffview chunk tab keeps its explanation"] = with_fake(function()
   assert(vim.deep_equal(why_text(vim.api.nvim_win_get_buf(win2)), { "  note2", "  why: w2" }), vim.inspect(why_text(vim.api.nvim_win_get_buf(win2))))
 end)
 
-M["a buffer shared between chunk tabs shows the explanation only on the current tab's left side"] = with_fake(function()
+M["diffview's left-then-right events leave a shared buffer's explanation off the right side"] = with_fake(function()
   install_fake_diffview()
   local root, sha = fake_repo()
   fake.share_buffers = true
+  fake.fire_both = true
   local function chunk(n, status, note)
     return { n = n, status = status, fromSha = "S" .. n, toSha = "S" .. (n - 1), note = note, why = { ["a.txt"] = "why" .. n }, agentFiles = { "a.txt" }, humanFiles = {} }
   end
@@ -585,13 +593,9 @@ M["a buffer shared between chunk tabs shows the explanation only on the current 
   fake.revs = { "S2" }
   fetch(chunk(1, "open", "chunk one"))
   local tab_a, left_a = fake.tab, fake.left_buf
-  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
-  vim.cmd("tabprevious")
   fake.revs = { "S1", "S2" }
   fetch(chunk(2, "past", "chunk two"))
   local tab_b, win_b_left, win_b_right = fake.tab, fake.left, fake.right
-  vim.api.nvim_set_current_win(win_b_left)
-  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
   local left_b, right_b = vim.api.nvim_win_get_buf(win_b_left), vim.api.nvim_win_get_buf(win_b_right)
   assert(right_b == left_a, "fake does not share the buffer")
   assert(vim.deep_equal(why_text(left_b), { "  chunk two", "  why: why2" }), vim.inspect(why_text(left_b)))
