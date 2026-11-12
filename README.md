@@ -287,8 +287,13 @@ order:
    whitespace (no quoting, no shell); `{root}` and `{session}` are replaced inside
    arguments and `{nvim}` becomes `nvim -c "lua require('pi').review(...)"`. It runs
    in the worktree with `PI_NVIM_ROOT` and `PI_NVIM_SESSION` set; exit 0 means
-   opened. If it fails, pi says `pi-nvim.openCommand failed (exit N)` and shows
-   the hint below without trying the built-ins.
+   opened. `{nvim}` must be an argument of its own (`--cmd={nvim}` is passed
+   literally). The command must return promptly — a launcher or splitter such
+   as `wezterm cli split-pane` or `kitty @ launch`, not a terminal that stays
+   in the foreground (`alacritty -e`) — because pi stops waiting after 5 s. If
+   it fails, pi says `pi-nvim.openCommand failed (exit N)` (or `<program> not
+   found`, or `no answer after 5 s`) and shows the hint below without trying
+   the built-ins.
 2. Inside [herdr](https://herdr.dev): a new pane to the right of pi's.
 3. Inside tmux: `tmux split-window -h` next to pi's pane.
 4. Inside zellij: `zellij run --direction right`.

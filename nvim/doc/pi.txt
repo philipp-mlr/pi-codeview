@@ -199,9 +199,13 @@ list; the others answer "not here". With none, pi tries in order:
    `kitty @ launch --location=vsplit --cwd {root} {nvim}`. Split on whitespace
    (no quoting, no shell); `{root}` and `{session}` are replaced inside
    arguments, `{nvim}` becomes `nvim -c "lua require('pi').review(...)"`.
-   Runs in the worktree with PI_NVIM_ROOT and PI_NVIM_SESSION set. If it
-   fails, pi reports the exit code and shows the hint, without trying the
-   others.
+   Runs in the worktree with PI_NVIM_ROOT and PI_NVIM_SESSION set. `{nvim}`
+   must be an argument of its own (`--cmd={nvim}` is passed literally). The
+   command must return promptly, like a launcher or splitter (`wezterm cli
+   split-pane`, `kitty @ launch`), not a terminal that stays in the
+   foreground (`alacritty -e`): pi stops waiting after 5 s. If it fails, pi
+   reports the exit code, "not found" or "no answer after 5 s" and shows the
+   hint, without trying the others.
 2. Inside herdr: a new pane to the right of pi's.
 3. Inside tmux: `tmux split-window -h` next to pi's pane.
 4. Inside zellij: `zellij run --direction right`.

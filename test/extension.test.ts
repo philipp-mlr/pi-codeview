@@ -1379,8 +1379,41 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     const result = await openInNeovim({
       root: "/repo", sessionId: "s", runtimeDir: undefined, env: { HERDR_PANE_ID: "p", TMUX: "x", ZELLIJ: "0" }, openCommand: "kitty @ launch {nvim}",
     });
-    expect(result).toEqual({ opened: "hint", commandExit: 1 });
+    expect(result).toEqual({ opened: "hint", commandFailure: { program: "kitty", exit: 1 } });
     expect(runs.map((r) => r.cmd)).toEqual(["kitty"]);
+  });
+
+  it("openCommand: a root with spaces stays one argument", async () => {
+    const runs = stubRunner(() => "");
+    await openInNeovim({ root: "/my repo", sessionId: "s", runtimeDir: undefined, env: {}, openCommand: "term --cwd={root} {root}" });
+    expect(runs[0].args).toEqual(["--cwd=/my repo", "/my repo"]);
+  });
+
+  it("a blank openCommand counts as unset: the built-ins are tried", async () => {
+    const runs = stubRunner(() => "");
+    const result = await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: { TMUX: "x" }, openCommand: "   " });
+    expect(result).toEqual({ opened: "pane", tool: "tmux" });
+    expect(runs.map((r) => r.cmd)).toEqual(["tmux"]);
+  });
+
+  it("openCommand failing: a missing program and a timeout are reported as such", async () => {
+    for (const reason of ["missing", "timeout"] as const) {
+      vi.spyOn(processRunner, "run").mockResolvedValue({ code: 1, stdout: "", reason });
+      const result = await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {}, openCommand: "nope {nvim}" });
+      expect(result).toEqual({ opened: "hint", commandFailure: { program: "nope", exit: 1, reason } });
+    }
+  });
+
+  it("loop: openCommand notices name a missing program and a timeout", async () => {
+    for (const [reason, text] of [["missing", "myterm not found"], ["timeout", "no answer after 5 s"]] as const) {
+      const repo = await makeRepo();
+      await repo.git("config", "pi-nvim.openCommand", "myterm {nvim}");
+      const fake = await start(repo, { mode: "checkpoints" });
+      vi.spyOn(processRunner, "run").mockResolvedValue({ code: 1, stdout: "", reason });
+      fake.setConfirmAnswer(true);
+      await openCheckpoint(fake, repo);
+      await until(() => fake.notifications.some((n) => n.message === `pi: pi-nvim.openCommand failed (${text})`));
+    }
   });
 
   it("herdr wins over tmux and zellij when all are set", async () => {

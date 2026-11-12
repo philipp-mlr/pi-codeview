@@ -13,7 +13,8 @@ const PANE_TIMEOUT_MS = 5000;
 /** Working directory and extra environment variables for one command. */
 export type RunOptions = { cwd?: string; env?: Record<string, string> };
 
-export type RunResult = { code: number; stdout: string };
+/** `reason` is set when the program was not found or was killed for running past the timeout. */
+export type RunResult = { code: number; stdout: string; reason?: "missing" | "timeout" };
 
 /** Runs external commands; tests replace `run` so no real nvim or herdr pane is started. */
 export const processRunner = {
@@ -22,7 +23,8 @@ export const processRunner = {
       const env = options.env ? { ...process.env, ...options.env } : undefined;
       execFile(cmd, args, { timeout: timeoutMs, encoding: "utf8", cwd: options.cwd, env }, (err, stdout) => {
         const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
-        resolve({ code, stdout: stdout ?? "" });
+        const reason = err?.code === "ENOENT" ? "missing" : err?.killed ? "timeout" : undefined;
+        resolve({ code, stdout: stdout ?? "", ...(reason && { reason }) });
       });
     });
   },
@@ -30,13 +32,15 @@ export const processRunner = {
 
 /**
  * Where the checkpoint was opened: a running nvim, a new pane of a terminal multiplexer, the user's own
- * `pi-nvim.openCommand`, or nowhere (Philipp gets a hint; `commandExit` is set when openCommand failed).
+ * `pi-nvim.openCommand`, or nowhere (Philipp gets a hint; `commandFailure` is set when openCommand failed).
  */
+export type CommandFailure = { program: string; exit: number; reason?: "missing" | "timeout" };
+
 export type OpenedIn =
   | { opened: "nvim" }
   | { opened: "pane"; tool: "herdr" | "tmux" | "zellij" }
   | { opened: "command" }
-  | { opened: "hint"; commandExit?: number };
+  | { opened: "hint"; commandFailure?: CommandFailure };
 
 function isLiveSocket(sockPath: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -170,19 +174,18 @@ async function openZellijPane(root: string, sessionId: string): Promise<boolean>
 /**
  * Runs `pi-nvim.openCommand`: split on whitespace (no quoting, no shell), `{root}` and `{session}`
  * substituted inside arguments, `{nvim}` expanded to the separate arguments of the nvim command.
- * Returns the exit code.
+ * Returns null on success, else how it failed.
  */
-async function runOpenCommand(command: string, root: string, sessionId: string): Promise<number> {
+async function runOpenCommand(command: string, root: string, sessionId: string): Promise<CommandFailure | null> {
   const argv = command
     .split(/\s+/)
     .filter(Boolean)
     .flatMap((arg) => (arg === "{nvim}" ? NVIM_ARGV : [arg.replaceAll("{root}", root).replaceAll("{session}", sessionId)]));
-  if (argv.length === 0) return 1;
-  const { code } = await processRunner.run(argv[0], argv.slice(1), PANE_TIMEOUT_MS, {
+  const { code, reason } = await processRunner.run(argv[0], argv.slice(1), PANE_TIMEOUT_MS, {
     cwd: root,
     env: { PI_NVIM_ROOT: root, PI_NVIM_SESSION: sessionId },
   });
-  return code;
+  return code === 0 ? null : { program: argv[0], exit: code, ...(reason && { reason }) };
 }
 
 /**
@@ -198,9 +201,9 @@ export async function openInNeovim(opts: {
 }): Promise<OpenedIn> {
   const env = opts.env ?? process.env;
   if (await askRunningNvim(opts.root, opts.sessionId, opts.runtimeDir, env)) return { opened: "nvim" };
-  if (opts.openCommand) {
-    const code = await runOpenCommand(opts.openCommand, opts.root, opts.sessionId);
-    return code === 0 ? { opened: "command" } : { opened: "hint", commandExit: code };
+  if (opts.openCommand?.trim()) {
+    const commandFailure = await runOpenCommand(opts.openCommand, opts.root, opts.sessionId);
+    return commandFailure ? { opened: "hint", commandFailure } : { opened: "command" };
   }
   if (env.HERDR_PANE_ID && (await openHerdrPane(opts.root, opts.sessionId, env.HERDR_PANE_ID))) return { opened: "pane", tool: "herdr" };
   if (env.TMUX && (await openTmuxPane(opts.root, opts.sessionId, env.TMUX_PANE))) return { opened: "pane", tool: "tmux" };

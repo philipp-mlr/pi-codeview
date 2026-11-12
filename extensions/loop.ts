@@ -707,7 +707,11 @@ export class ReviewLoop {
     else if (opened.opened === "pane") this.notify(`pi: checkpoint ${n} opens in a new Neovim pane (${opened.tool})`, "info");
     else if (opened.opened === "command") this.notify(`pi: checkpoint ${n} opens via pi-nvim.openCommand`, "info");
     else {
-      if (opened.commandExit !== undefined) this.notify(`pi: pi-nvim.openCommand failed (exit ${opened.commandExit})`, "info");
+      const failure = opened.commandFailure;
+      if (failure) {
+        const why = failure.reason === "missing" ? `${failure.program} not found` : failure.reason === "timeout" ? "no answer after 5 s" : `exit ${failure.exit}`;
+        this.notify(`pi: pi-nvim.openCommand failed (${why})`, "info");
+      }
       this.notify(`pi: open Neovim in ${this.root} and run :PiCheckpoints (default <leader>pv)`, "info");
     }
   }
