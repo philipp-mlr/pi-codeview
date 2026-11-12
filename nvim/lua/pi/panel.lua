@@ -13,8 +13,8 @@ local ns = vim.api.nvim_create_namespace("pi_panel")
 local buf = nil
 local list = {} -- chunks from the last refresh
 local show_recorded = false
-local expanded = {} -- chunk n -> true while its details are shown (reset by refresh)
-local stats = {} -- chunk n -> { path, added, removed }[] or "loading" (reset by refresh)
+local expanded = {} -- chunk n -> true while its details are shown
+local stats = {} -- chunk n -> { path, added, removed }[], "loading" or "failed"; dropped by refresh when the status changed
 local generation = 0 -- bumped by refresh so late get_chunk answers are dropped
 local lines_info = {} -- line number -> { n = chunk n, path = file path or nil }
 
@@ -146,7 +146,9 @@ local function detail_lines(chunk, width)
   local counts = stats[chunk.n]
   for _, path in ipairs(files_of(chunk)) do
     local info = "…"
-    if type(counts) == "table" then
+    if counts == "failed" then
+      info = "?"
+    elseif type(counts) == "table" then
       info = "+0 −0"
       for _, entry in ipairs(counts) do
         if entry.path == path then
@@ -198,6 +200,37 @@ local function render()
   end
 end
 
+-- Loads the file counts of checkpoint n; a late answer from before a refresh is dropped.
+local function fetch_stats(n)
+  stats[n] = "loading"
+  local mine = generation
+  session.request("get_chunk", { n = n }, function(err, result)
+    if mine ~= generation then
+      return
+    end
+    if err then
+      stats[n] = "failed"
+      vim.notify("pi: " .. err, vim.log.levels.ERROR)
+    else
+      stats[n] = result.stats or {}
+    end
+    render()
+  end)
+end
+
+-- Puts the panel cursor on checkpoint `n`'s line, else back on `line` clamped to the buffer.
+local function restore_cursor(win, n, line)
+  local target
+  for lnum = 1, vim.api.nvim_buf_line_count(buf) do
+    local info = lines_info[lnum]
+    if info and info.n == n and not info.path and not target then
+      target = lnum
+    end
+  end
+  target = target or math.min(line, vim.api.nvim_buf_line_count(buf))
+  vim.api.nvim_win_set_cursor(win, { math.max(target, 1), 0 })
+end
+
 function M.refresh()
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then
     return
@@ -206,10 +239,41 @@ function M.refresh()
     if err then
       return vim.notify("pi: " .. err, vim.log.levels.ERROR)
     end
+    local win = panel_win()
+    local line = win and vim.api.nvim_win_get_cursor(win)[1] or 1
+    local anchor = win and lines_info[line] and lines_info[line].n
+    local old_status = {}
+    for _, c in ipairs(list) do
+      old_status[c.n] = c.status
+    end
     list = chunks or {}
-    expanded, stats = {}, {}
+    local present = {}
+    for _, c in ipairs(list) do
+      present[c.n] = true
+      if old_status[c.n] ~= c.status or stats[c.n] == "loading" then
+        stats[c.n] = nil
+      end
+    end
+    for n in pairs(expanded) do
+      if not present[n] then
+        expanded[n] = nil
+      end
+    end
+    for n in pairs(stats) do
+      if not present[n] then
+        stats[n] = nil
+      end
+    end
     generation = generation + 1
+    for n in pairs(expanded) do
+      if stats[n] == nil then
+        fetch_stats(n)
+      end
+    end
     render()
+    if win then
+      restore_cursor(win, anchor, line)
+    end
   end)
 end
 
@@ -225,21 +289,12 @@ local function toggle_details()
   local n = info.n
   expanded[n] = not expanded[n] or nil
   if expanded[n] and stats[n] == nil then
-    stats[n] = "loading"
-    local mine = generation
-    session.request("get_chunk", { n = n }, function(err, result)
-      if mine ~= generation then
-        return
-      end
-      if err then
-        stats[n] = {}
-        return vim.notify("pi: " .. err, vim.log.levels.ERROR)
-      end
-      stats[n] = result.stats or {}
-      render()
-    end)
+    fetch_stats(n)
   end
   render()
+  if not expanded[n] then
+    restore_cursor(0, n, vim.api.nvim_win_get_cursor(0)[1])
+  end
 end
 
 local function ensure_buf()
@@ -274,6 +329,7 @@ function M.open()
   session.ensure(function()
     local win = panel_win()
     if not win then
+      list, expanded, stats = {}, {}, {} -- a freshly opened panel starts collapsed
       local previous = vim.api.nvim_get_current_win()
       vim.cmd("topleft vertical " .. PANEL_WIDTH .. "split")
       win = vim.api.nvim_get_current_win()

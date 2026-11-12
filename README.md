@@ -162,7 +162,7 @@ heading in the agent's message.
 Neovim attaches to a pi session running in the same worktree as the current
 buffer. With one such session it attaches on first use; with several it
 asks. Running a command from a buffer in another worktree switches to that
-worktree's session. `<leader>ps` (`:PiSession`) picks a session on purpose.
+worktree's session. `<leader>pi` (`:PiSession`) picks a session on purpose.
 Name your pi sessions (`/name` in pi) to tell them apart in the picker.
 `require("pi").session_label()` gives the attached session's name.
 
@@ -235,7 +235,8 @@ automatically: the git config `pi-codeview.mode`, `.cap` and `.retentionDays`
 are read while the `pi-nvim.*` ones are unset, saved checkpoint state is restored
 from the old session entry, and old snapshot refs are pruned as before.
 Update your config to `require("pi")`, `:Pi*` commands and the `<leader>p`
-keys, and to `/checkpoints` in pi.
+keys, and to `/checkpoints` in pi. An old `keys.checkpoints` (the mode toggle)
+now means the checkpoint list; use `keys.mode` for the toggle.
 
 If you use pablopunk's pi.nvim, remove it. Both plugins use `require("pi")`
 and `<leader>p` keys.

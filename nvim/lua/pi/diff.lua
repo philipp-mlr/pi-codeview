@@ -108,7 +108,11 @@ local function passthrough(buf, lhs)
   local saved = mapped[buf] and mapped[buf][lhs] or global_map(lhs)
   if saved then
     if saved.callback then
-      return saved.callback()
+      local value = saved.callback()
+      if saved.expr == 1 and type(value) == "string" then
+        return feed(count .. value, saved.noremap ~= 1)
+      end
+      return value
     end
     local rhs = saved.rhs or ""
     if saved.expr == 1 then

@@ -293,6 +293,30 @@ M["<Tab> and q outside the chunk tab run global maps; buffer-local wins"] = func
   session.cached = nil
 end
 
+M["a global expr map with a Lua callback feeds its returned keys outside the chunk tab"] = function()
+  vim.cmd("tabnew")
+  local root = open_two_files("exprglobal")
+  local chunk_tab = vim.api.nvim_get_current_tabpage()
+  local buf = vim.api.nvim_get_current_buf()
+  vim.cmd("tabnew")
+  local other = vim.api.nvim_get_current_tabpage()
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.keymap.set("n", "q", function()
+    return "<Cmd>lua _G.pi_expr_q = (_G.pi_expr_q or 0) + 1<CR>"
+  end, { expr = true, desc = "global expr q" })
+  press("q")
+  assert(_G.pi_expr_q == 1, "expr callback result not fed: " .. tostring(_G.pi_expr_q))
+  assert(vim.api.nvim_get_current_tabpage() == other)
+  vim.keymap.del("n", "q")
+  _G.pi_expr_q = nil
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_tabpage(chunk_tab)
+  vim.cmd("tabclose")
+  diff.cleanup()
+  vim.cmd("tabclose")
+  session.cached = nil
+end
+
 M["winbar shows the help line with keys or commands"] = function()
   local keys = require("pi.keys")
   local saved = keys.mapped

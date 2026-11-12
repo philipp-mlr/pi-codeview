@@ -222,7 +222,6 @@ M["annotate command refuses before asking for the note, with the right message"]
   end
   assert(asked == 0, "asked for a note before refusing")
   -- A real file is asked.
-  local dir = vim.uv.fs_realpath(vim.fn.tempname() .. "") or vim.fn.tempname()
   local file = vim.fn.tempname()
   vim.fn.writefile({ "x" }, file)
   vim.cmd("edit " .. vim.fn.fnameescape(file))

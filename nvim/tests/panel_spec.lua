@@ -77,11 +77,11 @@ M["panel: open checkpoint first, then newest first, title falls back to the note
   for i = 2, #l do assert(vim.fn.strdisplaywidth(l[i]) <= 60, l[i]) end
   local marks = vim.api.nvim_buf_get_extmarks(buf, -1, 0, -1, { details = true })
   local groups = {}
-  for _, m in ipairs(marks) do groups[m[2]] = m[4].line_hl_group   local long = open_panel({ chunk(1, "reviewed", { title = ("x"):rep(60) }) })
+  for _, m in ipairs(marks) do groups[m[2]] = m[4].line_hl_group end
+  assert(groups[0] == "Comment" and groups[1] == "PiCheckpointWaiting" and groups[2] == nil, vim.inspect(groups))
+  local long = open_panel({ chunk(1, "reviewed", { title = ("x"):rep(60) }) })
   local row = lines(long)[2]
   assert(vim.fn.strdisplaywidth(row) <= 60 and row:find("…", 1, true), row)
-end
-  assert(groups[0] == "Comment" and groups[1] == "PiCheckpointWaiting" and groups[2] == nil, vim.inspect(groups))
 end
 
 M["panel: recorded checkpoints are hidden until a is pressed"] = function()
@@ -132,6 +132,61 @@ M["panel: za shows … while the counts load"] = function()
   assert(lines(buf)[4] == "    a.txt  …", vim.inspect(lines(buf)))
   pending(nil, { chunk = list[1], stats = { { path = "a.txt", added = 1, removed = 2 }, { path = "b.txt", added = 0, removed = 0 } } })
   assert(lines(buf)[4] == "    a.txt  +1 −2", vim.inspect(lines(buf)))
+end
+
+M["panel: a failed get_chunk shows ? for the counts"] = function()
+  local list = { chunk(1, "reviewed") }
+  local buf = open_panel(list)
+  local notified = vim.notify
+  vim.notify = function() end
+  session.request = function(_, _, cb) cb("boom") end
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  press("za")
+  vim.notify = notified
+  local l = lines(buf)
+  assert(l[4] == "    a.txt  ?" or l[3] == "    a.txt  ?", vim.inspect(l))
+  for _, line in ipairs(l) do assert(not line:find("+0 −0", 1, true), line) end
+end
+
+M["panel: refresh keeps details and the cursor's checkpoint, drops stats of changed ones"] = function()
+  local list = { chunk(1, "reviewed"), chunk(2, "reviewed"), chunk(3, "open") }
+  local requested = {}
+  local buf = open_panel(list, function(n)
+    requested[#requested + 1] = n
+    return { chunk = list[1], stats = { { path = "a.txt", added = n, removed = 0 } } }
+  end)
+  -- order: 3 open, 2, 1. Expand 1, then 2.
+  vim.api.nvim_win_set_cursor(0, { 4, 0 })
+  press("za")
+  vim.api.nvim_win_set_cursor(0, { 3, 0 })
+  press("za")
+  assert(lines(buf)[5]:match("a%.txt  %+2 −0"), vim.inspect(lines(buf)))
+  -- a new checkpoint arrives and 3 is reviewed: 2 and 1 stay expanded, cursor stays on checkpoint 2's detail line
+  local next_list = { chunk(1, "reviewed"), chunk(2, "reviewed"), chunk(3, "reviewed"), chunk(4, "open") }
+  local stub = session.request
+  session.request = function(type, payload, cb)
+    if type == "list_chunks" then cb(nil, next_list) else stub(type, payload, cb) end
+  end
+  vim.api.nvim_win_set_cursor(0, { 3, 0 })
+  local before = #requested
+  panel.refresh()
+  local l = lines(buf)
+  assert(l[2]:match("^● 4 "), vim.inspect(l))
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  assert(l[row]:match("^✓ 2 "), "cursor on " .. l[row])
+  assert(l[row + 1]:match("note 2") and l[row + 2]:match("%+2 −0"), vim.inspect(l))
+  assert(#requested == before, "stats of unchanged checkpoints refetched")
+end
+
+M["panel: za on a detail line collapses and moves the cursor to the checkpoint line"] = function()
+  local list = { chunk(1, "reviewed") }
+  local buf = open_panel(list)
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  press("za")
+  vim.api.nvim_win_set_cursor(0, { 4, 0 })
+  press("za")
+  assert(#lines(buf) == 2, vim.inspect(lines(buf)))
+  assert(vim.api.nvim_win_get_cursor(0)[1] == 2, vim.api.nvim_win_get_cursor(0)[1])
 end
 
 M["panel: <CR> on a checkpoint line opens it, on a file line opens it at that file"] = function()
