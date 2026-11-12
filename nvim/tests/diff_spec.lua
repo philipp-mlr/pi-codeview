@@ -352,6 +352,23 @@ local function install_fake_diffview()
     vim.bo[left].bufhidden = "wipe"
     vim.api.nvim_buf_set_name(left, "diffview://" .. fake.root .. "/.git/abc" .. fake.opened .. "/a.txt")
     vim.api.nvim_win_set_buf(fake.left, left)
+    if fake.share_buffers then
+      -- like diffview: one buffer per (revision, path); a chunk's left is another chunk's right
+      fake.buffers = fake.buffers or {}
+      local function shared(rev)
+        if not fake.buffers[rev] or not vim.api.nvim_buf_is_valid(fake.buffers[rev]) then
+          local buf = vim.api.nvim_create_buf(false, true)
+          vim.api.nvim_buf_set_name(buf, "diffview://" .. fake.root .. "/.git/" .. rev .. "/a.txt")
+          fake.buffers[rev] = buf
+        end
+        return fake.buffers[rev]
+      end
+      left = shared(fake.revs[1])
+      vim.api.nvim_win_set_buf(fake.left, left)
+      if fake.revs[2] then
+        vim.api.nvim_win_set_buf(fake.right, shared(fake.revs[2]))
+      end
+    end
     for _, win in ipairs({ fake.left, fake.right }) do
       vim.wo[win].diff = true
     end
@@ -555,6 +572,35 @@ M["every diffview chunk tab keeps its explanation"] = with_fake(function()
   vim.api.nvim_set_current_win(win2)
   vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
   assert(vim.deep_equal(why_text(vim.api.nvim_win_get_buf(win2)), { "  note2", "  why: w2" }), vim.inspect(why_text(vim.api.nvim_win_get_buf(win2))))
+end)
+
+M["a buffer shared between chunk tabs shows the explanation only on the current tab's left side"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  fake.share_buffers = true
+  local function chunk(n, status, note)
+    return { n = n, status = status, fromSha = "S" .. n, toSha = "S" .. (n - 1), note = note, why = { ["a.txt"] = "why" .. n }, agentFiles = { "a.txt" }, humanFiles = {} }
+  end
+  -- A (open) shows S2 on its left; B (past) shows S1 on its left and the same S2 buffer on its right
+  fake.revs = { "S2" }
+  fetch(chunk(1, "open", "chunk one"))
+  local tab_a, left_a = fake.tab, fake.left_buf
+  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+  vim.cmd("tabprevious")
+  fake.revs = { "S1", "S2" }
+  fetch(chunk(2, "past", "chunk two"))
+  local tab_b, win_b_left, win_b_right = fake.tab, fake.left, fake.right
+  vim.api.nvim_set_current_win(win_b_left)
+  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+  local left_b, right_b = vim.api.nvim_win_get_buf(win_b_left), vim.api.nvim_win_get_buf(win_b_right)
+  assert(right_b == left_a, "fake does not share the buffer")
+  assert(vim.deep_equal(why_text(left_b), { "  chunk two", "  why: why2" }), vim.inspect(why_text(left_b)))
+  assert(#why_text(right_b) == 0, "right side of B shows A's explanation: " .. vim.inspect(why_text(right_b)))
+  vim.api.nvim_set_current_tabpage(tab_a)
+  assert(vim.deep_equal(why_text(left_a), { "  chunk one", "  why: why1" }), vim.inspect(why_text(left_a)))
+  vim.api.nvim_set_current_tabpage(tab_b)
+  assert(vim.deep_equal(why_text(left_b), { "  chunk two", "  why: why2" }), vim.inspect(why_text(left_b)))
+  assert(#why_text(right_b) == 0, "right side of B shows A's explanation after switching back")
 end)
 
 M["an event fired synchronously inside :DiffviewOpen still places the explanation"] = with_fake(function()

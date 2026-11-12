@@ -294,21 +294,54 @@ local function diffview_entry()
   return pending and tab ~= pending.origin and pending or nil
 end
 
+-- diffview reuses one buffer per (revision, path) across views, so a buffer that is the left side
+-- of one chunk tab can be the right side of another. Only the visible tab matters: clear the
+-- explanation from every buffer shown in `tab`, then place this chunk's on the left one.
+local function place_tab_explanation(tab, entry, left_buf)
+  local ns = vim.api.nvim_create_namespace("pi_why")
+  local wins = vim.api.nvim_tabpage_list_wins(tab)
+  for _, win in ipairs(wins) do
+    vim.api.nvim_buf_clear_namespace(vim.api.nvim_win_get_buf(win), ns, 0, -1)
+  end
+  if not left_buf then
+    for _, win in ipairs(wins) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      if vim.startswith(vim.api.nvim_buf_get_name(buf), "diffview://") and diffview.is_left_window(win) then
+        left_buf = buf
+      end
+    end
+  end
+  if not left_buf then
+    return
+  end
+  local name = vim.api.nvim_buf_get_name(left_buf)
+  local best
+  for _, file in ipairs(entry.files) do
+    if vim.endswith(name, "/" .. file.path) and (not best or #file.path > #best) then
+      best = file.path
+    end
+  end
+  if best then
+    M.place_why(left_buf, entry.chunk, best)
+  end
+end
+
+vim.api.nvim_create_autocmd("TabEnter", {
+  group = vim.api.nvim_create_augroup("PiDiffChunkTabs", { clear = true }),
+  callback = function()
+    local tab = vim.api.nvim_get_current_tabpage()
+    local entry = views[tab]
+    if entry and entry.kind == "diffview" then
+      place_tab_explanation(tab, entry)
+    end
+  end,
+})
+
 local diffview_handlers = {
   on_left = function(buf)
     local entry = diffview_entry()
-    if not entry then
-      return
-    end
-    local name = vim.api.nvim_buf_get_name(buf)
-    local best
-    for _, file in ipairs(entry.files) do
-      if vim.endswith(name, "/" .. file.path) and (not best or #file.path > #best) then
-        best = file.path
-      end
-    end
-    if best then
-      M.place_why(buf, entry.chunk, best)
+    if entry then
+      place_tab_explanation(vim.api.nvim_get_current_tabpage(), entry, buf)
     end
   end,
   on_closed = function()
