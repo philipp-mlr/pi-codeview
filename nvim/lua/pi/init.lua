@@ -384,6 +384,7 @@ function M.setup(opts)
   opts = opts or {}
   local keys = vim.tbl_extend("force", M.default_keys, opts.keys or {})
   session.on_event(on_event)
+  diff.mode = opts.diff or "auto"
 
   highlights.define()
   badge.enabled = opts.badge ~= false

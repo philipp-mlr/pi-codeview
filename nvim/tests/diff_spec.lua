@@ -165,9 +165,7 @@ M["q with the origin tab gone just closes the chunk tab"] = function()
 end
 
 M["q on the last tab does nothing"] = function()
-  while #vim.api.nvim_list_tabpages() > 1 do
-    vim.cmd("tabclose")
-  end
+  vim.cmd("tabonly")
   open_two_files()
   vim.cmd("tabprevious")
   vim.cmd("tabclose")
@@ -255,11 +253,11 @@ M["winbar shows the help line with keys or commands"] = function()
   vim.cmd("tabnew")
   vim.cmd("tabnew")
   keys.mapped = { annotate = "<leader>pn", send = "<leader>pr" }
-  open_two_files()
+  open_two_files("winbar")
   assert(vim.wo.winbar:find("chunk 1 · 1/2 · a.txt · agent   <Tab> next · <leader>pn annotate · <leader>pr send · q back", 1, true), vim.wo.winbar)
   vim.cmd("tabclose")
   keys.mapped = {}
-  open_two_files()
+  open_two_files("winbar2")
   assert(vim.wo.winbar:find("<Tab> next · :PiAnnotate annotate · :PiSendAnnotations send · q back", 1, true), vim.wo.winbar)
   vim.cmd("tabclose")
   keys.mapped = saved
@@ -332,5 +330,227 @@ M["forget closes the diff tab of a reviewed chunk"] = function()
   vim.cmd("tabclose")
   session.cached = nil
 end
+
+-- Fake diffview.nvim: :DiffviewOpen records its args and opens a tab with two windows (left a
+-- diffview:// buffer, right the real file); :DiffviewClose closes the tab and fires the User event.
+local fake = {}
+
+local function install_fake_diffview()
+  fake = { calls = {}, closes = 0 }
+  require("pi.keys").mapped = {}
+  package.preload["diffview"] = function()
+    return {}
+  end
+  vim.api.nvim_create_user_command("DiffviewOpen", function(cmd)
+    fake.calls[#fake.calls + 1] = cmd.args
+    vim.cmd("tabnew")
+    fake.left = vim.api.nvim_get_current_win()
+    vim.cmd("rightbelow vsplit " .. vim.fn.fnameescape(fake.root .. "/a.txt"))
+    fake.right = vim.api.nvim_get_current_win()
+    local left = vim.api.nvim_create_buf(false, true)
+    vim.bo[left].bufhidden = "wipe"
+    vim.api.nvim_buf_set_name(left, "diffview://" .. fake.root .. "/.git/abc123/a.txt")
+    vim.api.nvim_win_set_buf(fake.left, left)
+    for _, win in ipairs({ fake.left, fake.right }) do
+      vim.wo[win].diff = true
+    end
+    fake.left_buf = left
+    fake.tab = vim.api.nvim_get_current_tabpage()
+  end, { nargs = "*", complete = "file" })
+  vim.api.nvim_create_user_command("DiffviewClose", function()
+    fake.closes = fake.closes + 1
+    if #vim.api.nvim_list_tabpages() == 1 then
+      vim.cmd("tabnew")
+    end
+    vim.cmd("tabclose " .. vim.api.nvim_tabpage_get_number(fake.tab))
+    vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewViewClosed" })
+  end, {})
+end
+
+local function remove_fake_diffview()
+  package.preload["diffview"] = nil
+  package.loaded["diffview"] = nil
+  pcall(vim.api.nvim_del_user_command, "DiffviewOpen")
+  pcall(vim.api.nvim_del_user_command, "DiffviewClose")
+  diff.mode = "auto"
+  while #vim.api.nvim_list_tabpages() > 1 do
+    vim.cmd("tabclose")
+  end
+  session.cached = nil
+end
+
+local function with_fake(fn)
+  return function()
+    vim.cmd("tabonly")
+    local ok, err = xpcall(fn, debug.traceback)
+    remove_fake_diffview()
+    if not ok then
+      error(err, 0)
+    end
+  end
+end
+
+local function fetch(chunk, sessionId)
+  session.cached = { sessionId = sessionId or "dv" }
+  local original = session.request
+  session.request = function(_, _, cb)
+    cb(nil, { chunk = chunk })
+  end
+  diff.open(chunk.n)
+  session.request = original
+end
+
+local function capture_notify()
+  local seen = {}
+  local original = vim.notify
+  vim.notify = function(msg, level)
+    seen[#seen + 1] = { msg = msg, level = level }
+  end
+  return seen, function()
+    vim.notify = original
+  end
+end
+
+local function fake_repo()
+  local root, sha = chunk_repo()
+  session.root = root
+  fake.root = root
+  return root, sha
+end
+
+M["auto with diffview opens an open chunk with the exact DiffviewOpen args"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  vim.fn.writefile({ "x" }, root .. "/b c.txt")
+  local seen, restore = capture_notify()
+  fetch({ n = 1, status = "open", fromSha = sha, agentFiles = { "b c.txt" }, humanFiles = { "a.txt" } })
+  restore()
+  local expected = ("%s -C%s -- a.txt b\\ c.txt"):format(sha, vim.fn.fnameescape(root))
+  assert(fake.calls[1] == expected, vim.inspect(fake.calls))
+  assert(diff.viewed(1), "diffview chunk not viewed")
+  assert(seen[1].msg == "pi: chunk 1 — <Tab> next file · :PiAnnotate annotate · :PiSendAnnotations send · :DiffviewClose to go back", seen[1].msg)
+end)
+
+M["auto with diffview opens a past chunk as a revision range"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  fetch({ n = 2, status = "reviewed", fromSha = sha, toSha = "beefcafe", agentFiles = { "a.txt" }, humanFiles = {} })
+  assert(fake.calls[1] == ("%s..beefcafe -C%s -- a.txt"):format(sha, vim.fn.fnameescape(root)), vim.inspect(fake.calls))
+end)
+
+M["auto without diffview uses the built-in view"] = with_fake(function()
+  local root, sha = chunk_repo()
+  open_chunk(root, sha, "nodv")
+  local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(diff.is_diff_window(vim.api.nvim_get_current_win()) and vim.api.nvim_get_current_win() or 0))
+  assert(#vim.api.nvim_list_tabpages() == 2 and diff.viewed(1), name)
+  assert(vim.wo.diff, "built-in diff not shown")
+end)
+
+M["diff = builtin ignores an installed diffview"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  diff.mode = "builtin"
+  open_chunk(root, sha, "forced")
+  assert(#fake.calls == 0, "DiffviewOpen was called")
+  assert(vim.wo.diff, "built-in diff not shown")
+end)
+
+M["diff = diffview without diffview falls back and warns once"] = with_fake(function()
+  local root, sha = chunk_repo()
+  diff.mode = "diffview"
+  local seen, restore = capture_notify()
+  open_chunk(root, sha, "warn")
+  vim.cmd("tabclose")
+  session.cached = nil
+  open_chunk(root, sha, "warn2")
+  restore()
+  local warnings = vim.tbl_filter(function(item)
+    return item.msg == "pi: diffview.nvim not found, using the built-in view" and item.level == vim.log.levels.WARN
+  end, seen)
+  assert(#warnings <= 1, "warned more than once")
+  assert(vim.wo.diff, "built-in diff not shown")
+end)
+
+M["diff = diffview without diffview warns (first time in this nvim)"] = with_fake(function()
+  local root, sha = chunk_repo()
+  diff.mode = "diffview"
+  package.loaded["pi.diff"] = nil
+  local fresh = require("pi.diff")
+  fresh.mode = "diffview"
+  local seen, restore = capture_notify()
+  session.root = root
+  session.cached = { sessionId = "w" }
+  local original = session.request
+  session.request = function(_, _, cb)
+    cb(nil, { chunk = { n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = {} } })
+  end
+  fresh.open(1)
+  session.request = original
+  restore()
+  package.loaded["pi.diff"] = diff
+  assert(seen[1] and seen[1].msg == "pi: diffview.nvim not found, using the built-in view" and seen[1].level == vim.log.levels.WARN, vim.inspect(seen))
+end)
+
+M["a failing :DiffviewOpen falls back to the built-in view"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  vim.api.nvim_create_user_command("DiffviewOpen", function()
+    error("boom")
+  end, { nargs = "*" })
+  open_chunk(root, sha, "boom")
+  assert(vim.wo.diff and vim.api.nvim_buf_get_name(0):match("a.txt$"), "built-in view not shown")
+end)
+
+M["diffview left buffer gets the note and why only in the chunk tab"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  fetch({ n = 1, status = "open", fromSha = sha, note = "the note", why = { ["a.txt"] = "because" }, agentFiles = { "a.txt" }, humanFiles = {} })
+  local chunk_tab = fake.tab
+  local right_buf = vim.api.nvim_win_get_buf(fake.right)
+  vim.api.nvim_set_current_win(fake.right)
+  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+  assert(#why_text(fake.left_buf) == 0, "right side got the explanation")
+  vim.api.nvim_set_current_win(fake.left)
+  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+  assert(vim.deep_equal(why_text(fake.left_buf), { "  the note", "  why: because" }), vim.inspect(why_text(fake.left_buf)))
+  assert(#why_text(right_buf) == 0)
+  -- another tab (not the chunk's, e.g. a plain diffview) gets nothing
+  vim.cmd("tabnew")
+  local other = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(other, "diffview://" .. root .. "/.git/def/a.txt")
+  vim.api.nvim_win_set_buf(0, other)
+  vim.wo.diff = true
+  vim.api.nvim_exec_autocmds("User", { pattern = "DiffviewDiffBufWinEnter" })
+  assert(#why_text(other) == 0, "other tab got the explanation")
+  assert(vim.api.nvim_tabpage_is_valid(chunk_tab))
+end)
+
+M["opening the same diffview chunk twice reuses the tab"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  local chunk = { n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = {} }
+  fetch(chunk)
+  local tab = fake.tab
+  vim.cmd("tabprevious")
+  fetch(chunk)
+  assert(#fake.calls == 1, "DiffviewOpen ran twice")
+  assert(vim.api.nvim_get_current_tabpage() == tab, "did not switch to the diffview tab")
+end)
+
+M["forget closes the diffview tab; ViewClosed unregisters it"] = with_fake(function()
+  install_fake_diffview()
+  local root, sha = fake_repo()
+  fetch({ n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = {} })
+  assert(#vim.api.nvim_list_tabpages() == 2)
+  diff.forget(1)
+  assert(fake.closes == 1, "DiffviewClose not used")
+  assert(#vim.api.nvim_list_tabpages() == 1, "diffview tab still open")
+  -- closed by the user: ViewClosed unregisters, so opening again runs DiffviewOpen again
+  fetch({ n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = {} })
+  assert(#fake.calls == 2, vim.inspect(fake.calls))
+  vim.cmd("DiffviewClose")
+  fetch({ n = 1, status = "open", fromSha = sha, agentFiles = { "a.txt" }, humanFiles = {} })
+  assert(#fake.calls == 3, vim.inspect(fake.calls))
+end)
 
 return M

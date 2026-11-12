@@ -136,7 +136,7 @@ describe("pi.nvim end to end", () => {
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 cv.toggle_panel()
 local panel_line
@@ -185,7 +185,7 @@ cv.send({ note = "" })
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 cv.toggle_panel()
 vim.wait(5000, function() return cv.status() ~= "" end)
@@ -217,7 +217,7 @@ vim.cmd("write")
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 1 end
 cv.send({ note = "" })
@@ -240,7 +240,7 @@ cv.send({ note = "" })
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 vim.fn.confirm = function(msg) vim.notify("CONFIRM " .. msg); return 2 end
 cv.send({ note = "" })
@@ -261,7 +261,7 @@ cv.send({ note = "" })
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 local buf = vim.api.nvim_get_current_buf()
 vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
@@ -292,7 +292,7 @@ cv.send()
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
 cv.send()
 `,
@@ -312,7 +312,7 @@ cv.send()
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 vim.ui.input = function(o, cb) vim.notify("PROMPT " .. o.prompt); cb("") end
 cv.open_chunk(1)
@@ -339,7 +339,7 @@ cv.send()
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 cv.annotate(vim.api.nvim_get_current_buf(), 2, 2, "draft survives quit")
 vim.wait(5000, function() return require("pi.session").connected() end)
@@ -352,7 +352,7 @@ vim.cmd("qa!")
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 require("pi.session").ensure(function(_, root)
   vim.notify("DRAFTS " .. vim.json.encode(require("pi.annotations").list(root)))
@@ -374,7 +374,7 @@ end)
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 local buf = vim.api.nvim_get_current_buf()
 cv.toggle_panel()
@@ -495,7 +495,7 @@ end)
       `
 local cv = require("pi")
 local session = require("pi.session")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit README.md")
 vim.ui.select = function(items, opts, on_choice)
   local labels = {}
@@ -527,7 +527,7 @@ vim.notify("ATTACHED " .. cv.session_label() .. " " .. session.cached.sessionId)
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit README.md")
 require("pi.session").ensure(function() end)
 vim.wait(5000, function() return cv.statusline() ~= "" end)
@@ -560,7 +560,7 @@ end, 5)
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit README.md")
 require("pi.session").ensure(function() vim.notify("ATTACHED") end)
 vim.wait(15000, function() return false end, 20)
@@ -585,7 +585,7 @@ vim.wait(15000, function() return false end, 20)
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit README.md")
 require("pi.session").ensure(function() vim.notify("ATTACHED") end)
 local announced = false
@@ -620,7 +620,7 @@ end, 20)
       `
 local cv = require("pi")
 vim.g.mapleader = " "
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit README.md")
 vim.notify("KEY " .. vim.fn.maparg("<leader>pm", "n", false, true).desc)
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<leader>pm", true, false, true), "mx", false)
@@ -682,7 +682,7 @@ end, 20)
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 local buf = vim.api.nvim_get_current_buf()
 local ns = vim.api.nvim_create_namespace("pi_live")
@@ -846,7 +846,7 @@ vim.notify("DONE " .. vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit b.txt")
 cv.annotate(vim.api.nvim_get_current_buf(), 2, 2, "moves")
 vim.wait(5000, function() return require("pi.session").connected() end)
@@ -871,7 +871,7 @@ vim.cmd("write")
       repo,
       `
 local cv = require("pi")
-cv.setup()
+cv.setup({ diff = "builtin" })
 vim.cmd("edit a.txt")
 local buf = vim.api.nvim_get_current_buf()
 vim.diagnostic.set(vim.api.nvim_create_namespace("e2e"), buf, {

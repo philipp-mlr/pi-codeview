@@ -195,6 +195,14 @@ Review flow:
    take or put a change. For the open chunk the right side is the real file,
    so LSP and editing work; past chunks are read-only. A help line in the
    window bar lists the keys.
+
+   With [diffview.nvim](https://github.com/sindrets/diffview.nvim) installed
+   the chunk opens there instead (`:DiffviewOpen <from> -- <files>`): its keys
+   apply (`<Tab>` / `<S-Tab>` for files, `:DiffviewClose` to go back) and the
+   note and reason show above the left side. diffview is optional; without it
+   the built-in view above is used. `setup({ diff = "builtin" })` always uses
+   the built-in view, `"diffview"` prefers diffview (with a warning when it is
+   missing), the default `"auto"` uses it when present.
 4. Annotate lines with `<leader>pn` on the right side, your file. The left
    side is only a copy of the old state and cannot be annotated.
 5. `<leader>pr` sends the review: your annotations, your own edits and an
