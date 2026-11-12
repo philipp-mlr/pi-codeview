@@ -9,6 +9,7 @@ import type { Mode } from "./git.ts";
 import { LineDecoder, PROTOCOL_VERSION, encode } from "./protocol.ts";
 import type { EventName, PromptContext, Request } from "./protocol.ts";
 import { humanChangedSteer, renderAnnotationPrompt, renderPrompt, renderResume, renderReview } from "./render.ts";
+import { openInNeovim } from "./open-nvim.ts";
 import { socketPath, startServer } from "./server.ts";
 import type { Server } from "./server.ts";
 import { PiNvimState } from "./state.ts";
@@ -123,6 +124,10 @@ export class ReviewLoop {
   private warnedOutside = false;
   /** Epoch ms of the last sign of life: agent start/settle, tool call or result, prompt or send from nvim. */
   private lastActive = Date.now();
+  /** Checkpoints pi already offered to open in Neovim; asked once each. */
+  private readonly offered = new Set<number>();
+  /** Dismisses the open "Open checkpoint N in Neovim?" dialog when the checkpoint closes or pi stops. */
+  private offerDialog: AbortController | null = null;
 
   private constructor(
     private readonly pi: ExtensionAPI,
@@ -159,6 +164,7 @@ export class ReviewLoop {
   }
 
   async stop(): Promise<void> {
+    this.offerDialog?.abort();
     this.resolveWaiters(REVIEW_PENDING);
     // Let in-flight work (e.g. a human_write) finish and persist before the runtime goes away.
     await this.lock;
@@ -187,6 +193,7 @@ export class ReviewLoop {
       return created;
     });
     if (!chunk) return NOTHING_CHANGED;
+    void this.offerToOpen(chunk.n);
     return this.waitForReview(chunk.n, signal);
   }
 
@@ -223,15 +230,20 @@ export class ReviewLoop {
 
   async endOfRun(): Promise<void> {
     if (this.effectiveMode() !== "checkpoints") return;
-    await this.serial(async () => {
-      if (this.state.openChunk()) return;
+    const chunk = await this.serial(async () => {
+      if (this.state.openChunk()) return null;
       const { sha } = await this.recordSince("agent");
-      if (await this.settleIfNetEmpty(sha)) return;
-      if (!this.state.steps.some((s) => s.author === "agent")) return this.persist();
-      const chunk = this.state.createChunk(END_OF_RUN_NOTE, sha);
+      if (await this.settleIfNetEmpty(sha)) return null;
+      if (!this.state.steps.some((s) => s.author === "agent")) {
+        this.persist();
+        return null;
+      }
+      const created = this.state.createChunk(END_OF_RUN_NOTE, sha);
       this.persist();
-      this.broadcast("chunk_ready", { chunk });
+      this.broadcast("chunk_ready", { chunk: created });
+      return created;
     });
+    if (chunk) void this.offerToOpen(chunk.n);
   }
 
   async turnEnd(turnIndex: number): Promise<void> {
@@ -360,6 +372,7 @@ export class ReviewLoop {
       const review = renderReview({ chunk, annotations, note: input.note, humanDiff });
       const reviewNote = input.note === "" ? undefined : input.note;
       const closed = this.state.closeChunk(chunk.n, { status: "reviewed", annotations, reviewNote });
+      this.offerDialog?.abort();
       this.state.advanceAfterReview(sha);
       this.state.setDrafts([]);
       if (this.resolveWaiters(review, closed.n)) {
@@ -385,6 +398,7 @@ export class ReviewLoop {
       const open = this.state.openChunk();
       if (!open) throw new Error("no open checkpoint");
       const chunk = this.state.closeChunk(open.n, { status: "discarded", annotations: [], reviewNote: note });
+      this.offerDialog?.abort();
       this.resolveWaiters(`Philipp discarded checkpoint ${chunk.n}. His note:\n${note}`, chunk.n);
       this.deliverQueued();
       this.persist();
@@ -626,6 +640,38 @@ export class ReviewLoop {
   private applyTools(): void {
     const others = this.pi.getActiveTools().filter((t) => t !== CHECKPOINT_TOOL);
     this.pi.setActiveTools(this.state.mode === "checkpoints" && this.ctx.hasUI ? [...others, CHECKPOINT_TOOL] : others);
+  }
+
+  /**
+   * When no Neovim is attached, tells Philipp checkpoint n waits and offers to open it in Neovim. Asks
+   * once per checkpoint; the dialog closes by itself when the checkpoint is reviewed meanwhile.
+   */
+  private async offerToOpen(n: number): Promise<void> {
+    if (this.offered.has(n) || (this.server?.clientCount() ?? 0) > 0 || !this.ctx.hasUI) return;
+    this.offered.add(n);
+    this.notify(`pi: checkpoint ${n} waiting — no Neovim attached`, "info");
+    this.offerDialog?.abort();
+    const dialog = new AbortController();
+    this.offerDialog = dialog;
+    let yes: boolean;
+    try {
+      yes = await this.ctx.ui.confirm(
+        `Open checkpoint ${n} in Neovim?`,
+        `Opens the checkpoint list in a Neovim running in ${this.root}, or starts one.`,
+        { signal: dialog.signal },
+      );
+    } catch {
+      yes = false;
+    }
+    if (this.offerDialog === dialog) this.offerDialog = null;
+    if (dialog.signal.aborted || this.state.openChunk()?.n !== n) return;
+    if (!yes) {
+      return this.notify(`pi: checkpoint ${n} waits — review it in Neovim or run /checkpoints continue <note>`, "info");
+    }
+    const opened = await openInNeovim({ root: this.root, sessionId: this.sessionId, runtimeDir: process.env.XDG_RUNTIME_DIR });
+    if (opened === "nvim") this.notify(`pi: checkpoint ${n} opened in Neovim`, "info");
+    else if (opened === "herdr") this.notify(`pi: checkpoint ${n} opens in a new Neovim pane`, "info");
+    else this.notify(`pi: open Neovim in ${this.root} and press <leader>pv (:PiCheckpoints)`, "info");
   }
 
   private persist(): void {

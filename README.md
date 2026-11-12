@@ -271,6 +271,15 @@ a tool list without `checkpoint`, or without a UI (`pi -p`), work as with
 checkpoint mode off: no size cap, no end-of-run checkpoint. `/checkpoints` there
 says `checkpoint mode is on for this repo, but this session can't stop for review`.
 
+When a checkpoint opens and no Neovim is attached to the session, pi says
+`pi: checkpoint N waiting — no Neovim attached` and asks once "Open checkpoint N
+in Neovim?". Yes opens the checkpoint list in a Neovim already running in that
+worktree (its working directory or current file is inside it); else, inside
+[herdr](https://herdr.dev), it starts Neovim in a new pane to the right of pi's;
+else it tells you to open Neovim in the worktree and press `<leader>pv`. No
+leaves it waiting: review it in Neovim or run `/checkpoints continue <note>`.
+`require("pi").review(root, session_id)` is the call pi makes in Neovim.
+
 Switch it with `<leader>pm` / `:PiCheckpointMode on|off` in Neovim, or in pi:
 
 - `/checkpoints` shows the state.

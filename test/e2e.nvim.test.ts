@@ -48,7 +48,12 @@ async function agentWrite(fake: FakePi, repo: TestRepo, file: string, text: stri
 }
 
 /** Runs `body` inside a headless nvim in the repo; every vim.notify call is appended to a JSON log. */
-function runNvim(repo: TestRepo, body: string, cwd = repo.root): { notifications(): Notification[]; exited: Promise<void> } {
+function runNvim(
+  repo: TestRepo,
+  body: string,
+  cwd = repo.root,
+  extraArgs: string[] = [],
+): { notifications(): Notification[]; exited: Promise<void> } {
   const run = fs.mkdtempSync(path.join(scratchDir, "n"));
   const log = path.join(run, "notify.json");
   const script = path.join(run, "script.lua");
@@ -73,7 +78,7 @@ if not ok then vim.notify("SCRIPT ERROR: " .. err, vim.log.levels.ERROR) end
   );
   const nvim: ChildProcess = spawn(
     "nvim",
-    ["--headless", "--clean", "-u", "NONE", "--cmd", `set rtp^=${NVIM_RTP}`, "-c", `luafile ${script}`],
+    ["--headless", "--clean", "-u", "NONE", ...extraArgs, "--cmd", `set rtp^=${NVIM_RTP}`, "-c", `luafile ${script}`],
     { cwd, env: { ...process.env, XDG_RUNTIME_DIR: runtimeDir }, stdio: "ignore" },
   );
   cleanups.push(() => {
@@ -858,5 +863,42 @@ vim.wait(5000, function() return false end, 20)
     const content = String(sent.kind === "user" && sent.content);
     expect(content).toContain("Diagnostics:\n  a.txt:2 error bad thing [lsp]");
     expect(content).not.toContain("just a hint");
+  }, TIMEOUT_MS);
+
+  it("a checkpoint with no Neovim attached opens in the running nvim of that worktree when Philipp says yes", async () => {
+    const saved = { NVIM: process.env.NVIM, HERDR_PANE_ID: process.env.HERDR_PANE_ID };
+    // Never fall through to a real herdr pane from a test.
+    delete process.env.NVIM;
+    delete process.env.HERDR_PANE_ID;
+    cleanups.push(() => {
+      for (const [key, value] of Object.entries(saved)) if (value !== undefined) process.env[key] = value;
+    });
+    const repo = await makeRepo();
+    const fake = await start(repo);
+    const listen = path.join(runtimeDir, "nvim.e2e.0");
+    const nvim = runNvim(
+      repo,
+      `
+require("pi").setup({ diff = "builtin" })
+local timer = vim.uv.new_timer()
+timer:start(50, 50, vim.schedule_wrap(function()
+  if require("pi.panel").visible() and require("pi.session").cached then
+    timer:stop()
+    vim.notify("PANEL " .. require("pi.session").cached.sessionId)
+  end
+end))
+vim.notify("READY")
+`,
+      repo.root,
+      ["--listen", listen],
+    );
+    await until(() => nvim.notifications().some((n) => n.msg === "READY"), "nvim ready");
+    fake.setConfirmAnswer(true);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    void fake.callTool("checkpoint", { note: "add a" });
+    await until(() => nvim.notifications().find((n) => n.msg.startsWith("PANEL")), "panel opened by review()");
+    expect(nvim.notifications().map((n) => n.msg)).toContain("PANEL test-session");
+    await until(() => fake.notifications.some((n) => n.message === "pi: checkpoint 1 opened in Neovim"), "pi notice");
+    expect(fake.confirms.map((c) => c.title)).toEqual(["Open checkpoint 1 in Neovim?"]);
   }, TIMEOUT_MS);
 });

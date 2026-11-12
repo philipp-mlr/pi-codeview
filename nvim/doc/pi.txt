@@ -184,6 +184,15 @@ tools include `checkpoint`. Subagents and other sessions without that tool or
 without a UI work as with the mode off (no size cap, no end-of-run
 checkpoint); `/checkpoints` there says why.
 
+                                                              *pi-review()*
+When a checkpoint opens and no Neovim is attached, pi asks once "Open
+checkpoint N in Neovim?". Yes calls `require("pi").review(root, session_id)`
+in each running Neovim: the first whose working directory or current file is
+inside `root` answers "ok", attaches to that session and opens the checkpoint
+list; the others answer "not here". With none, inside herdr pi starts Neovim
+in a new pane to the right of its own; else it tells you to open Neovim in the
+worktree and press the |:PiCheckpoints| key.
+
 The checkpoint list (|:PiCheckpoints|) opens when a checkpoint arrives. In it:
 
     <CR>   open the checkpoint (on a file line: at that file)

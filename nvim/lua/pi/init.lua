@@ -151,6 +151,30 @@ function M.attach()
   session.choose()
 end
 
+-- Whether path (a real path) is root or inside it.
+local function inside(root, path)
+  return path ~= nil and (path == root or discover.relpath(root, path) ~= nil)
+end
+
+-- Called by pi (`nvim --server … --remote-expr`) when a checkpoint waits and no Neovim is attached.
+-- Returns "not here" unless this nvim's cwd or current file is inside root; else returns "ok" at once
+-- and then attaches to exactly that session and opens the checkpoint list.
+function M.review(root, session_id)
+  root = vim.uv.fs_realpath(root) or root
+  local name = vim.api.nvim_buf_get_name(0)
+  local file = name ~= "" and vim.uv.fs_realpath(name) or nil
+  if not inside(root, vim.uv.fs_realpath(vim.uv.cwd() or "")) and not inside(root, file) then
+    return "not here"
+  end
+  -- Deferred: the remote-expr caller waits for the answer, attaching may take a moment.
+  vim.schedule(function()
+    session.attach_to(root, session_id, function()
+      panel.open()
+    end)
+  end)
+  return "ok"
+end
+
 -- Sends text as a prompt; context is { path, startLine?, endLine? } or nil.
 function M.prompt(text, context, on_sent)
   session.request("prompt", { text = text, context = context }, function(err, result)

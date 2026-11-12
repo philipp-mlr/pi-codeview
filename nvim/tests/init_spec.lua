@@ -1413,4 +1413,112 @@ M["which-key: absent, without add, or failing never breaks setup"] = function()
   reset_maps()
 end
 
+-- A git worktree with one file; returns its real path.
+local function git_root(name)
+  local d = vim.fn.tempname() .. name
+  vim.fn.mkdir(d, "p")
+  d = vim.uv.fs_realpath(d)
+  vim.system({ "git", "init", "-q", d }):wait()
+  vim.fn.writefile({ "x" }, d .. "/f.txt")
+  return d
+end
+
+-- Two fake pi sessions ("one", "two") in `root`; returns a restore function and the requests seen.
+local function fake_sessions(root)
+  local session = require("pi.session")
+  local client, discover = require("pi.client"), require("pi.discover")
+  local real = { sockets = discover.sockets, connect = client.connect }
+  local requests = {}
+  discover.sockets = function() return { root .. "/one.sock", root .. "/two.sock" } end
+  client.connect = function(path)
+    local id = vim.fs.basename(path):gsub("%.sock$", "")
+    return {
+      closed = false,
+      close = function(self) self.closed = true end,
+      request = function(_, type, _, cb)
+        requests[#requests + 1] = id .. " " .. type
+        if not cb then return end
+        if type == "status" then
+          cb(nil, { root = root, name = id, sessionId = id, drafts = {} })
+        elseif type == "list_chunks" then
+          cb(nil, { { n = 1, status = "open", note = "add a", fromSha = "a", toSha = "b", agentFiles = { "f.txt" }, humanFiles = {}, annotations = {} } })
+        else
+          cb(nil, {})
+        end
+      end,
+    }
+  end
+  return function()
+    session.detach()
+    discover.sockets, client.connect = real.sockets, real.connect
+  end, requests
+end
+
+M["review: \"not here\" when neither the cwd nor the current file is in root"] = function()
+  local root, elsewhere = git_root("rv-a"), git_root("rv-b")
+  local cwd = vim.uv.cwd()
+  vim.cmd("enew")
+  vim.cmd("cd " .. vim.fn.fnameescape(elsewhere))
+  local restore, requests = fake_sessions(root)
+  local ok, err = pcall(function()
+    assert(pi.review(root, "two") == "not here")
+    vim.cmd("edit " .. vim.fn.fnameescape(elsewhere .. "/f.txt"))
+    assert(pi.review(root, "two") == "not here", "a file of another worktree is open")
+    vim.wait(50)
+    assert(#requests == 0, vim.inspect(requests))
+  end)
+  restore()
+  vim.cmd("cd " .. vim.fn.fnameescape(cwd))
+  vim.cmd("enew")
+  assert(ok, err)
+end
+
+M["review: in root it attaches to exactly that session and opens the checkpoint list"] = function()
+  local session, panel = require("pi.session"), require("pi.panel")
+  local root = git_root("rv-c")
+  local cwd = vim.uv.cwd()
+  local elsewhere = git_root("rv-e")
+  vim.cmd("only")
+  -- The cwd is elsewhere; the current file in root is enough.
+  vim.cmd("cd " .. vim.fn.fnameescape(elsewhere))
+  vim.cmd("edit " .. vim.fn.fnameescape(root .. "/f.txt"))
+  local restore = fake_sessions(root)
+  local ok, err = pcall(function()
+    local notes = capture_notify(function()
+      assert(pi.review(root, "two") == "ok")
+      vim.wait(1000, function() return panel.visible() end)
+    end)
+    assert(panel.visible(), "panel not open")
+    assert(session.connected() and session.cached.sessionId == "two", vim.inspect(session.cached))
+    assert(#notes == 0, vim.inspect(notes))
+    -- Already attached to "two": asking for "one" moves the attachment there.
+    assert(pi.review(root, "one") == "ok")
+    vim.wait(1000, function() return session.cached and session.cached.sessionId == "one" end)
+    assert(session.cached.sessionId == "one", vim.inspect(session.cached))
+  end)
+  panel.close()
+  restore()
+  vim.cmd("cd " .. vim.fn.fnameescape(cwd))
+  vim.cmd("enew")
+  assert(ok, err)
+end
+
+M["review: a session id not running in root says so"] = function()
+  local root = git_root("rv-d")
+  local cwd = vim.uv.cwd()
+  vim.cmd("enew")
+  vim.cmd("cd " .. vim.fn.fnameescape(root))
+  local restore = fake_sessions(root)
+  local ok, err = pcall(function()
+    local notes = capture_notify(function()
+      assert(pi.review(root, "gone") == "ok")
+      vim.wait(500, function() return false end)
+    end)
+    assert(#notes == 1 and notes[1].msg:find("no pi session gone", 1, true), vim.inspect(notes))
+  end)
+  restore()
+  vim.cmd("cd " .. vim.fn.fnameescape(cwd))
+  assert(ok, err)
+end
+
 return M

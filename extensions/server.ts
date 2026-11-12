@@ -10,7 +10,12 @@ export function socketPath(repoHash: string, sessionId: string, runtimeDir?: str
   return path.join(base, "pi-nvim", repoHash, `${sessionId}.sock`);
 }
 
-export type Server = { broadcast(e: Event): void; close(): Promise<void> };
+export type Server = {
+  broadcast(e: Event): void;
+  /** Connected clients that completed `hello` (attached Neovims). */
+  clientCount(): number;
+  close(): Promise<void>;
+};
 
 function isLive(p: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
@@ -92,6 +97,11 @@ export async function startServer(opts: {
     broadcast(e) {
       const line = encode(e);
       for (const c of clients) if (greeted.has(c) && !c.destroyed) c.write(line);
+    },
+    clientCount() {
+      let n = 0;
+      for (const c of clients) if (greeted.has(c) && !c.destroyed) n++;
+      return n;
     },
     async close() {
       for (const c of clients) c.destroy();

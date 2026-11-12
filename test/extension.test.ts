@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NO_REVIEW, ReviewLoop } from "../extensions/loop.ts";
+import { processRunner } from "../extensions/open-nvim.ts";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -21,13 +22,23 @@ type Client = {
 let runtimeDir: string;
 const cleanups: Array<() => Promise<void> | void> = [];
 
+// pi runs inside herdr and Neovim terminals; the open-in-Neovim paths must only see what a test sets.
+const savedEnv = { NVIM: process.env.NVIM, HERDR_PANE_ID: process.env.HERDR_PANE_ID };
+
 beforeEach(() => {
   runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "cv-"));
   process.env.XDG_RUNTIME_DIR = runtimeDir;
+  delete process.env.NVIM;
+  delete process.env.HERDR_PANE_ID;
 });
 
 afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
+  vi.restoreAllMocks();
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   delete process.env.XDG_RUNTIME_DIR;
   fs.rmSync(runtimeDir, { recursive: true, force: true });
 });
@@ -1094,5 +1105,126 @@ describe("pi-nvim checkpoint mode in a session nobody can review", () => {
     const main = await start(repo, { sessionId: "main" });
     expect(main.pi.getActiveTools()).toContain("checkpoint");
     expect(main.notifications.some((n) => n.message.includes("one checkpoint-mode session per worktree"))).toBe(false);
+  });
+});
+
+describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
+  type Run = { cmd: string; args: string[] };
+
+  /** Replaces the process runner; `answer` gives the stdout per call, null for a failed command. */
+  function stubRunner(answer: (cmd: string, args: string[]) => string | null): Run[] {
+    const runs: Run[] = [];
+    vi.spyOn(processRunner, "run").mockImplementation(async (cmd: string, args: string[]) => {
+      runs.push({ cmd, args });
+      const out = answer(cmd, args);
+      return out === null ? { code: 1, stdout: "" } : { code: 0, stdout: out };
+    });
+    return runs;
+  }
+
+  /** A unix socket that accepts connections, standing in for a running nvim's server socket. */
+  async function fakeNvimSocket(name: string): Promise<string> {
+    const sock = path.join(runtimeDir, name);
+    const server = net.createServer((c) => c.destroy());
+    await new Promise<void>((res) => server.listen(sock, res));
+    cleanups.push(() => new Promise<void>((res) => server.close(() => res())));
+    return sock;
+  }
+
+  async function openCheckpoint(fake: FakePi, repo: TestRepo): Promise<void> {
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    void fake.callTool("checkpoint", { note: "add a" });
+    await until(() => fake.confirms.length > 0 && fake.notifications.length >= 2);
+  }
+
+  it("notifies and asks once per checkpoint; no → says how to continue", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const runs = stubRunner(() => null);
+    await openCheckpoint(fake, repo);
+    void fake.callTool("checkpoint", { note: "again" });
+    await until(() => fake.notifications.some((n) => n.message.includes("/checkpoints continue")));
+    expect(fake.notifications.map((n) => n.message)).toEqual([
+      "pi: checkpoint 1 waiting — no Neovim attached",
+      "pi: checkpoint 1 waits — review it in Neovim or run /checkpoints continue <note>",
+    ]);
+    expect(fake.confirms).toHaveLength(1);
+    expect(fake.confirms[0].title).toBe("Open checkpoint 1 in Neovim?");
+    expect(runs).toEqual([]);
+  });
+
+  it("asks for the end-of-run checkpoint too", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    stubRunner(() => null);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    await fake.fire("agent_before_settle");
+    await until(() => fake.confirms.length > 0);
+    expect(fake.confirms[0].title).toBe("Open checkpoint 1 in Neovim?");
+  });
+
+  it("asks nothing when a Neovim client is attached", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    void fake.callTool("checkpoint", { note: "add a" });
+    await until(() => client.events.find((e) => e.event === "chunk_ready"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fake.confirms).toEqual([]);
+    expect(fake.notifications).toEqual([]);
+  });
+
+  it("yes → asks the running nvim in this worktree to open the checkpoint", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const stale = path.join(runtimeDir, "nvim.1.0");
+    fs.writeFileSync(stale, "");
+    const other = await fakeNvimSocket("nvim.2.0");
+    const here = await fakeNvimSocket("nvim.3.0");
+    process.env.HERDR_PANE_ID = "w1:p1";
+    const runs = stubRunner((cmd, args) => (cmd === "nvim" && args[1] === here ? "ok" : cmd === "nvim" ? "not here" : null));
+    fake.setConfirmAnswer(true);
+    await openCheckpoint(fake, repo);
+    await until(() => fake.notifications.some((n) => n.message === "pi: checkpoint 1 opened in Neovim"));
+    const asked = runs.map((r) => r.args[1]);
+    // The stale socket is skipped; the first "ok" ends the search.
+    expect(asked.at(-1)).toBe(here);
+    expect(asked).not.toContain(stale);
+    expect(asked.filter((s) => s !== here).every((s) => s === other)).toBe(true);
+    const call = runs.find((r) => r.args[1] === here)!;
+    expect(call).toEqual({
+      cmd: "nvim",
+      args: ["--server", here, "--remote-expr", `luaeval('require("pi").review(_A[1], _A[2])', [${JSON.stringify(repo.root)}, "test-session"])`],
+    });
+    expect(runs.some((r) => r.cmd === "herdr")).toBe(false);
+  });
+
+  it("yes, no nvim in this worktree, inside herdr → splits a pane right of pi's and starts nvim there", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    process.env.HERDR_PANE_ID = "w1:p4";
+    const runs = stubRunner((cmd, args) =>
+      cmd === "herdr" && args[1] === "split" ? JSON.stringify({ result: { pane: { pane_id: "w1:p9" } } }) : cmd === "herdr" ? "" : null,
+    );
+    fake.setConfirmAnswer(true);
+    await openCheckpoint(fake, repo);
+    await until(() => runs.some((r) => r.args[1] === "run"));
+    expect(runs.filter((r) => r.cmd === "herdr")).toEqual([
+      { cmd: "herdr", args: ["pane", "split", "w1:p4", "--direction", "right", "--cwd", repo.root, "--focus"] },
+      { cmd: "herdr", args: ["pane", "run", "w1:p9", `nvim -c 'lua require("pi").review(${JSON.stringify(repo.root)}, "test-session")'`] },
+    ]);
+    await until(() => fake.notifications.some((n) => n.message === "pi: checkpoint 1 opens in a new Neovim pane"));
+  });
+
+  it("yes, no nvim and no herdr → tells Philipp where to open Neovim and which key to press", async () => {
+    const repo = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const runs = stubRunner(() => null);
+    fake.setConfirmAnswer(true);
+    await openCheckpoint(fake, repo);
+    await until(() => fake.notifications.length >= 2);
+    expect(fake.notifications.at(-1)?.message).toBe(`pi: open Neovim in ${repo.root} and press <leader>pv (:PiCheckpoints)`);
+    expect(runs).toEqual([]);
   });
 });

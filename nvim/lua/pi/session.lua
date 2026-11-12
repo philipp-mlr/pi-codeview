@@ -375,6 +375,31 @@ function M.choose(cb)
   end)
 end
 
+-- Attaches to the pi session `session_id` running in root, replacing another attachment, then calls
+-- cb(conn, root). Says so when no such session is running there.
+function M.attach_to(root, session_id, cb)
+  if M.connected() and M.root == root and M.cached and M.cached.sessionId == session_id then
+    return cb(M.conn, M.root)
+  end
+  collect(root, root, function(live)
+    local choice
+    for _, c in ipairs(live) do
+      if c.status.sessionId == session_id then
+        choice = c
+      end
+    end
+    if not choice then
+      pick_from(live, nil, root, function() end)
+      return pi_text.notify_fit({
+        ("pi: no pi session %s in %s"):format(session_id, vim.fs.basename(root)),
+        ("pi: no pi session %s"):format(session_id),
+      }, vim.log.levels.ERROR)
+    end
+    M.detach()
+    pick_from(live, choice, root, cb)
+  end)
+end
+
 -- Attaches if needed, then sends one request; cb(err, result) is optional.
 function M.request(type, payload, cb)
   M.ensure(function(conn)
