@@ -61,13 +61,24 @@ function socketsIn(dir: string): { path: string; mtime: number }[] {
   return found;
 }
 
+/** The login name, or undefined when the uid has no passwd entry and $USER is unset. */
+function currentUserName(): string | undefined {
+  try {
+    return os.userInfo().username;
+  } catch {
+    return process.env.USER || undefined;
+  }
+}
+
 /**
  * Where nvim puts its server sockets: `runtimeDir` ($XDG_RUNTIME_DIR), else one directory per nvim
  * under `<tmpdir>/nvim.<user>/`.
  */
 function socketDirs(runtimeDir: string | undefined): string[] {
   if (runtimeDir) return [runtimeDir];
-  const base = path.join(os.tmpdir(), `nvim.${os.userInfo().username}`);
+  const user = currentUserName();
+  if (!user) return [];
+  const base = path.join(os.tmpdir(), `nvim.${user}`);
   try {
     return fs.readdirSync(base).map((name) => path.join(base, name));
   } catch {

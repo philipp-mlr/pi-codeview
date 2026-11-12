@@ -141,6 +141,7 @@ M[":w in the editor sends"] = function()
   local got = open()
   type_text("written<Esc>")
   vim.cmd("w")
+  settle()
   assert(vim.deep_equal(got.submitted, { "written" }) and got.cancelled == 0, vim.inspect(got))
   assert(not vim.api.nvim_win_is_valid(got.win) and vim.api.nvim_get_current_win() == origin)
 end
@@ -350,6 +351,23 @@ M["a checkpoint arriving while the editor is open keeps it, its text and the foc
   vim.api.nvim_clear_autocmds({ group = "pi" })
   drain()
   assert(ok, err)
+end
+
+M["`:wq` submits once and closes only the editor"] = function()
+  vim.cmd("tabnew")
+  local tab = vim.api.nvim_get_current_tabpage()
+  local origin = vim.api.nvim_get_current_win()
+  local got = open({ text = "note" })
+  type_text("<Esc>")
+  vim.cmd("wq")
+  settle()
+  assert(#got.submitted == 1 and got.submitted[1] == "note", "submitted " .. #got.submitted .. " times")
+  assert(vim.api.nvim_win_is_valid(origin), "origin window closed")
+  assert(not vim.api.nvim_win_is_valid(got.win), "editor window still open")
+  assert(not vim.api.nvim_buf_is_valid(got.buf), "editor buffer still there")
+  assert(vim.api.nvim_get_current_win() == origin, "focus not back on origin")
+  vim.cmd("tabclose")
+  assert(not vim.api.nvim_tabpage_is_valid(tab))
 end
 
 return M

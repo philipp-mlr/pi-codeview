@@ -168,7 +168,16 @@ function M.open(opts)
       vim.schedule(mark_modified)
     end,
   })
-  vim.api.nvim_create_autocmd("BufWriteCmd", { group = group, buffer = buf, callback = submit })
+  -- The write only marks the buffer saved; the send and close run after the command line, so the
+  -- `:q` of `:wq` / `:x` closes the float itself instead of the window left behind.
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    group = group,
+    buffer = buf,
+    callback = function()
+      vim.bo[buf].modified = false
+      vim.schedule(submit)
+    end,
+  })
   -- `:q` in the editor cancels (the text stays a draft) instead of stopping at 'modified'; so does
   -- `:qa` typed in it.
   vim.api.nvim_create_autocmd("QuitPre", {

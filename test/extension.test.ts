@@ -130,6 +130,16 @@ function text(result: any): string {
   return result.content.map((c: { text: string }) => c.text).join("");
 }
 
+const { userInfoFails } = vi.hoisted(() => ({ userInfoFails: { on: false } }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const userInfo = () => {
+    if (userInfoFails.on) throw new Error("ENOENT: no passwd entry");
+    return actual.userInfo();
+  };
+  return { ...actual, default: { ...actual, userInfo }, userInfo };
+});
+
 describe("isReadOnlyTool", () => {
   it("treats read-only tools as read-only and everything else as mutating", () => {
     for (const name of ["read", "checkpoint", "lens_diagnostics", "module_report", "read_symbol", "read_enclosing",
@@ -1286,6 +1296,36 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     const runs = stubRunner((cmd, args) => (cmd === "nvim" && args[1] === sock ? "ok" : null));
     expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {} })).toBe("nvim");
     expect(runs.map((r) => r.args[1])).toEqual([sock]);
+  });
+
+  it("without XDG_RUNTIME_DIR and with no passwd entry for the uid, falls back to $USER, else skips the scan", async () => {
+    const savedTmp = process.env.TMPDIR;
+    const savedUser = process.env.USER;
+    process.env.TMPDIR = runtimeDir;
+    cleanups.push(() => {
+      if (savedTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmp;
+      if (savedUser === undefined) delete process.env.USER;
+      else process.env.USER = savedUser;
+    });
+    userInfoFails.on = true;
+    cleanups.push(() => {
+      userInfoFails.on = false;
+    });
+    const dir = path.join(runtimeDir, "nvim.fallbackuser", "Xa1b2");
+    fs.mkdirSync(dir, { recursive: true });
+    const sock = path.join(dir, "nvim.7.0");
+    const server = net.createServer((c) => c.destroy());
+    await new Promise<void>((res) => server.listen(sock, res));
+    cleanups.push(() => new Promise<void>((res) => server.close(() => res())));
+    const runs = stubRunner((cmd, args) => (cmd === "nvim" && args[1] === sock ? "ok" : null));
+    process.env.USER = "fallbackuser";
+    expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {} })).toBe("nvim");
+    expect(runs.map((r) => r.args[1])).toEqual([sock]);
+    delete process.env.USER;
+    runs.length = 0;
+    expect(await openInNeovim({ root: "/repo", sessionId: "s", runtimeDir: undefined, env: {} })).not.toBe("nvim");
+    expect(runs.some((r) => r.cmd === "nvim")).toBe(false);
   });
 
   it("yes, no nvim in this worktree, inside herdr → splits a pane right of pi's and starts nvim there", async () => {
