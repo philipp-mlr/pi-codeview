@@ -197,10 +197,11 @@ list; the others answer "not here". With none, pi tries in order:
 1. `git config pi-nvim.openCommand` (repo or global), e.g.
    `wezterm cli split-pane --right --cwd {root} -- {nvim}` or
    `kitty @ launch --location=vsplit --cwd {root} {nvim}`. Split on whitespace
-   (no quoting, no shell); `{root}` and `{session}` are replaced inside arguments,
-   `{nvim}` becomes `nvim -c "lua require('pi').review(...)"`. Runs in the
-   worktree with PI_NVIM_ROOT and PI_NVIM_SESSION set. If it fails, pi reports
-   the exit code and shows the hint, without trying the others.
+   (no quoting, no shell); `{root}` and `{session}` are replaced inside
+   arguments, `{nvim}` becomes `nvim -c "lua require('pi').review(...)"`.
+   Runs in the worktree with PI_NVIM_ROOT and PI_NVIM_SESSION set. If it
+   fails, pi reports the exit code and shows the hint, without trying the
+   others.
 2. Inside herdr: a new pane to the right of pi's.
 3. Inside tmux: `tmux split-window -h` next to pi's pane.
 4. Inside zellij: `zellij run --direction right`.
