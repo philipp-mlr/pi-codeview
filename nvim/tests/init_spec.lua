@@ -910,6 +910,20 @@ local function worktree_pair()
   return base, vim.uv.fs_realpath(a), vim.uv.fs_realpath(b)
 end
 
+-- A linked worktree nested inside the main worktree, like superpowers' layout (a/.wt/b).
+local function nested_pair()
+  local a = vim.uv.fs_realpath(vim.fn.tempname() .. "n") or (function() local d = vim.fn.tempname(); vim.fn.mkdir(d, "p"); return vim.uv.fs_realpath(d) end)()
+  local function git(...)
+    local r = vim.system(vim.list_extend({ "git", "-C", a }, { ... }), { text = true }):wait()
+    assert(r.code == 0, r.stderr)
+  end
+  git("init", "-q")
+  git("-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "i")
+  git("worktree", "add", "-q", "-b", "nested", a .. "/.wt/b")
+  vim.fn.writefile({ "x" }, a .. "/.wt/b/f.txt")
+  return a, vim.uv.fs_realpath(a .. "/.wt/b")
+end
+
 -- Runs fn with session state faked as attached to a session now running in b while this nvim sits in a.
 local function with_followed_state(fn)
   local session = require("pi.session")
@@ -1182,6 +1196,34 @@ M["continue sends the notes of every visited worktree and clears them all"] = fu
   assert(#sent == 2, vim.inspect(sent))
   assert(remaining[1] == 0 and remaining[2] == 0, vim.inspect(remaining))
   assert(notes[1].msg == "pi[s]: continuing — checkpoint 3 reviewed with 2 annotations", vim.inspect(notes))
+end
+
+M["notes in a nested worktree are sent once, under their own root"] = function()
+  local ann = require("pi.annotations")
+  local a, b = nested_pair()
+  local buf = vim.fn.bufadd(b .. "/f.txt")
+  vim.fn.bufload(buf)
+  vim.bo[buf].buflisted = true
+  ann.add(buf, 1, 1, "only once")
+  local union = ann.list_union({ a, b })
+  vim.api.nvim_buf_delete(buf, { force = true })
+  vim.fn.delete(a, "rf")
+  assert(#union == 1 and union[1].path == "f.txt", vim.inspect(union))
+end
+
+M["restoring drafts does not duplicate a note that lives in another visited worktree"] = function()
+  local ann = require("pi.annotations")
+  local a, b = nested_pair()
+  vim.fn.writefile({ "x" }, a .. "/ga.txt")
+  local buf = vim.fn.bufadd(a .. "/ga.txt")
+  vim.fn.bufload(buf)
+  ann.add(buf, 1, 1, "home note")
+  -- the server knows the note under the session root b (saved after a follow), path relative to b is wrong for a
+  ann.restore({ { path = "ga.txt", startLine = 1, endLine = 1, note = "home note" } }, { b, a })
+  local union = ann.list_union({ a, b })
+  vim.api.nvim_buf_delete(buf, { force = true })
+  vim.fn.delete(a, "rf")
+  assert(#union == 1, vim.inspect(union))
 end
 
 M["prompt context falls back to a visited worktree when the buffer is not under the session root"] = function()

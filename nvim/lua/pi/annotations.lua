@@ -282,7 +282,23 @@ vim.api.nvim_create_autocmd({ "WinResized", "VimResized", "BufWinEnter" }, {
 })
 
 -- opts.diagnostics: attach the ERROR/WARN diagnostics on each annotation's current lines.
-function M.list(root, opts)
+-- roots without duplicates, in their given order.
+local function distinct(roots)
+  local seen, out = {}, {}
+  for _, r in ipairs(roots) do
+    if type(r) == "string" and r ~= "" and not seen[r] then
+      seen[r] = true
+      out[#out + 1] = r
+    end
+  end
+  return out
+end
+
+-- Annotations under any of roots, each listed once: relative to the deepest root containing its
+-- file (a worktree nested inside another, like a/.wt/b, owns its own files). Then the unplaced
+-- drafts of every root.
+local function list_roots(roots, opts)
+  roots = distinct(roots)
   local kept, result = {}, {}
   for _, item in ipairs(items) do
     local s, e = position(item)
@@ -290,7 +306,13 @@ function M.list(root, opts)
       kept[#kept + 1] = item
       local name = vim.api.nvim_buf_get_name(item.buf)
       local real = name ~= "" and vim.uv.fs_realpath(name) or nil
-      local rel = real and discover.relpath(root, real) or nil
+      local rel, owner = nil, nil
+      for _, r in ipairs(roots) do
+        local candidate = real and discover.relpath(r, real) or nil
+        if candidate and (not owner or #r > #owner) then
+          rel, owner = candidate, r
+        end
+      end
       if rel then
         local entry = { path = rel, startLine = s, endLine = e, note = item.note }
         if opts and opts.diagnostics then
@@ -304,9 +326,11 @@ function M.list(root, opts)
     end
   end
   items = kept
-  for _, u in ipairs(unplaced) do
-    if u.root == root then
-      result[#result + 1] = vim.deepcopy(u.draft)
+  for _, r in ipairs(roots) do
+    for _, u in ipairs(unplaced) do
+      if u.root == r then
+        result[#result + 1] = vim.deepcopy(u.draft)
+      end
     end
   end
   table.sort(result, function(a, b)
@@ -316,6 +340,15 @@ function M.list(root, opts)
     return a.startLine < b.startLine
   end)
   return result
+end
+
+function M.list(root, opts)
+  return list_roots({ root }, opts)
+end
+
+-- The annotations of every worktree the session ran in, each note once (see list_roots).
+function M.list_union(roots, opts)
+  return list_roots(roots, opts)
 end
 
 -- Drops the annotations of files under root and the unplaced drafts of root; others stay.
@@ -362,9 +395,20 @@ local function same(a, b)
   return a.path == b.path and a.startLine == b.startLine and a.endLine == b.endLine and a.note == b.note
 end
 
-function M.restore(drafts, root)
+-- Places the server's drafts. roots is one worktree or a list (the session root first, then the
+-- other worktrees the session ran in): a draft goes to the first root holding its file, else it is
+-- parked under the first root; a note already shown in any of the roots is not placed twice.
+function M.restore(drafts, roots)
+  roots = distinct(type(roots) == "table" and roots or { roots })
   local changed = false
   for _, draft in ipairs(drafts) do
+    local root = roots[1]
+    for _, r in ipairs(roots) do
+      if vim.uv.fs_stat(r .. "/" .. draft.path) then
+        root = r
+        break
+      end
+    end
     local path = root .. "/" .. draft.path
     local exists = vim.uv.fs_stat(path) ~= nil
     local buf = nil
@@ -373,7 +417,7 @@ function M.restore(drafts, root)
       -- A draft parked as unplaced becomes placeable once its file exists.
       local parked = {}
       for _, u in ipairs(unplaced) do
-        if not (u.root == root and same(u.draft, draft)) then
+        if not (vim.tbl_contains(roots, u.root) and same(u.draft, draft)) then
           parked[#parked + 1] = u
         end
       end
@@ -386,7 +430,7 @@ function M.restore(drafts, root)
       target = { path = draft.path, startLine = s, endLine = math.max(s, math.min(draft.endLine, last)), note = draft.note }
     end
     local duplicate = false
-    for _, p in ipairs(M.list(root)) do
+    for _, p in ipairs(list_roots(roots)) do
       if same(p, target) or (not exists and same(p, draft)) then
         duplicate = true
         break

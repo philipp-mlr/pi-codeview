@@ -418,21 +418,14 @@ function M.continue()
       end
       local open_chunk = type(status.openChunk) == "table" and status.openChunk or nil
       local roots = session.visited and #session.visited > 0 and session.visited or { root }
-      local count = 0
-      for _, r in ipairs(roots) do
-        count = count + #annotations.list(r)
-      end
+      local count = #annotations.list_union(roots)
       if not open_chunk and count == 0 then
         local annotate = keys_state.label("annotate", ":PiAnnotate")
         local ask = keys_state.label("ask", ":PiAsk")
         return pi_text.notify_fit({ ("pi: nothing to send — %s to annotate, %s to ask"):format(annotate, ask), "pi: nothing to send" })
       end
-      local annotations_all = {}
-      for _, r in ipairs(roots) do
-        vim.list_extend(annotations_all, annotations.list(r, { diagnostics = true }))
-      end
       local payload = {
-        annotations = annotations_all,
+        annotations = annotations.list_union(roots, { diagnostics = true }),
         note = "",
         viewed = open_chunk ~= nil and diff.viewed(open_chunk.n), -- ignored by the extension, kept for older ones
       }

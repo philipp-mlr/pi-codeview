@@ -78,11 +78,7 @@ local function save_drafts(cb)
     return
   end
   -- Notes from every worktree the session ran in stay drafts (paths are repo-relative, so they match).
-  local roots = M.visited and #M.visited > 0 and M.visited or { M.root }
-  local drafts = {}
-  for _, r in ipairs(roots) do
-    vim.list_extend(drafts, annotations.list(r))
-  end
+  local drafts = annotations.list_union(M.visited and #M.visited > 0 and M.visited or { M.root })
   M.conn:request("save_drafts", { annotations = drafts }, function(err)
     if cb then
       cb()
@@ -263,10 +259,11 @@ local function attach(conn, root, status, cb)
     M.visited[2] = M.root
   end
   annotations.on_change(M.schedule_save)
-  -- Drafts are stored relative to the worktree the session runs in now.
-  annotations.restore(status.drafts or {}, M.root)
+  -- Drafts belong to the worktree holding their file (the session's now, or this nvim's); a note
+  -- already shown in either is not placed again.
+  annotations.restore(status.drafts or {}, M.visited)
   -- Annotations added while pi was unreachable reach the extension now.
-  if not vim.deep_equal(annotations.list(M.root), status.drafts or {}) then
+  if not vim.deep_equal(annotations.list_union(M.visited), status.drafts or {}) then
     M.schedule_save()
   end
   redraw()
