@@ -110,6 +110,16 @@ export function unreviewedBeforeFollowText(from: string, to: string): string {
   return `Changes in ${path.basename(from)} are not reviewed yet. Call checkpoint with a note first, then edit ${path.basename(to)}.`;
 }
 
+/** The block reason when the agent edits in another worktree while an earlier tool call is still running in this one. */
+export function stillEditingText(from: string, to: string): string {
+  return `Still editing in ${path.basename(from)}. Finish those edits first, then edit ${path.basename(to)} in a separate tool call.`;
+}
+
+/** The block reason when another checkpoint-mode session already reviews the worktree the agent moves to. */
+export function reviewedElsewhereText(to: string): string {
+  return `Another pi session is reviewing in ${path.basename(to)}. Finish there or stop that session first.`;
+}
+
 /** The warning for edits outside the session's worktree; the same text shows in pi and in nvim. */
 export function outsideWorktreeText(root: string): string {
   return `pi: the agent is editing outside ${path.basename(root)} — start pi in that worktree to review it`;
@@ -133,6 +143,8 @@ export class ReviewLoop {
   private warnedOutside = false;
   /** Whether pi already offered to open a followed worktree in Neovim in the current run. */
   private offeredFollow = false;
+  /** Whether the "another session is reviewing there" warning was already shown in the current run. */
+  private warnedReviewedElsewhere = false;
   /** The worktree the session is in: where it started, or the one it last followed the agent into. */
   private worktreeRoot: string;
   /** Which worktree each directory an agent tool targeted belongs to; asked once per directory. */
@@ -158,6 +170,8 @@ export class ReviewLoop {
     readonly sockPath: string,
     private readonly cap: number,
     saved: PersistedState | undefined,
+    /** The worktree pi started in; `root` is persisted only when the session is somewhere else. */
+    private readonly startRoot: string,
   ) {
     this.worktreeRoot = root;
     this.state = new PiNvimState(saved);
@@ -189,7 +203,7 @@ export class ReviewLoop {
       if ((await sameRepoWorktree(saved.root, repoDir)) === saved.root) root = saved.root;
       else startOver = true;
     }
-    const loop = new ReviewLoop(pi, ctx, root, repoDir, sessionId, sockPath, config.cap, saved);
+    const loop = new ReviewLoop(pi, ctx, root, repoDir, sessionId, sockPath, config.cap, saved, startRoot);
     loop.state.mode = config.mode;
     if (config.mode === "checkpoints" && (await loop.otherReviewSession())) {
       loop.state.mode = "off";
@@ -321,6 +335,7 @@ export class ReviewLoop {
     this.runAgentFiles = new Set();
     this.warnedOutside = false;
     this.offeredFollow = false;
+    this.warnedReviewedElsewhere = false;
     this.broadcast("activity_current", { current: null, busy: true });
   }
 
@@ -329,7 +344,7 @@ export class ReviewLoop {
    * the agent there; elsewhere outside the session's worktree it warns once per run. Returns a block
    * reason only when following would leave unreviewed changes behind in checkpoint mode.
    */
-  async toolCall(toolName: string, input: unknown): Promise<string | undefined> {
+  async toolCall(toolCallId: string | undefined, toolName: string, input: unknown): Promise<string | undefined> {
     this.touch();
     if (isReadOnlyTool(toolName) || typeof input !== "object" || input === null) return undefined;
     const args = input as Record<string, unknown>;
@@ -340,7 +355,7 @@ export class ReviewLoop {
       const target = path.resolve(this.ctx.cwd, expanded);
       const worktree = await sameRepoWorktree(target, this.repoDir, this.worktrees);
       // An inherited open checkpoint (a subagent child) stays where it is; it can't be reviewed elsewhere.
-      if (worktree && worktree !== this.root && !this.state.openChunk()) return this.followTo(worktree);
+      if (worktree && worktree !== this.root && !this.state.openChunk()) return this.followTo(worktree, toolCallId);
       if ((worktree && worktree !== this.root) || (!worktree && this.isOutsideRoot(target))) {
         this.warnOutside(target);
         return undefined;
@@ -363,10 +378,20 @@ export class ReviewLoop {
    * was reverted does not count). Chunks, drafts and queued prompts stay; the new worktree gets a fresh
    * baseline, which is also the new mark base.
    */
-  private followTo(newRoot: string): Promise<string | undefined> {
+  private followTo(newRoot: string, toolCallId: string | undefined): Promise<string | undefined> {
     return this.serial(async () => {
       if (this.stopped || newRoot === this.root || this.state.openChunk()) return undefined;
       const from = this.root;
+      // pi runs every tool_call hook of a parallel batch before the tools write: edits still running
+      // here would land in a worktree nobody tracks any more.
+      if (this.activity.runningExcept(toolCallId).some((r) => !isReadOnlyTool(r.tool))) return stillEditingText(from, newRoot);
+      if (this.effectiveMode() === "checkpoints" && (await this.otherReviewSession(newRoot))) {
+        if (!this.warnedReviewedElsewhere) {
+          this.warnedReviewedElsewhere = true;
+          this.notify(`pi: another pi session is reviewing in ${path.basename(newRoot)} — not following`, "warning");
+        }
+        return reviewedElsewhereText(newRoot);
+      }
       const { sha, files } = await this.recordSince("agent");
       const pending = this.state.steps.some((s) => s.author === "agent" || !s.reported);
       const leftBehind = pending && !(await this.settleIfNetEmpty(sha));
@@ -726,14 +751,14 @@ export class ReviewLoop {
     return this.ctx.isIdle() ? undefined : { deliverAs: "followUp" };
   }
 
-  private async otherReviewSession(): Promise<boolean> {
+  private async otherReviewSession(root: string = this.root): Promise<boolean> {
     const dir = path.dirname(this.sockPath);
     const others = fs.existsSync(dir)
       ? fs.readdirSync(dir).filter((f) => f.endsWith(".sock") && path.join(dir, f) !== this.sockPath)
       : [];
     for (const file of others) {
       const status = await probeStatus(path.join(dir, file));
-      if (status?.root === this.root && status.mode === "checkpoints") return true;
+      if (status?.root === root && status.mode === "checkpoints") return true;
     }
     return false;
   }
@@ -839,7 +864,8 @@ export class ReviewLoop {
   }
 
   private persist(): void {
-    const data: PersistedState = { ...this.state.serialize(), snapshotSeq: this.snapshotSeq, root: this.root };
+    const data: PersistedState = { ...this.state.serialize(), snapshotSeq: this.snapshotSeq };
+    if (this.root !== this.startRoot) data.root = this.root;
     this.pi.appendEntry(STATE_ENTRY, data);
     const open = this.state.openChunk();
     const status = open

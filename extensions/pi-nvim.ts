@@ -82,7 +82,7 @@ export default function piNvim(pi: ExtensionAPI): void {
   pi.on("tool_call", async (event) => {
     let reason: string | undefined;
     try {
-      reason = await loop?.toolCall(event.toolName, event.input);
+      reason = await loop?.toolCall(event.toolCallId, event.toolName, event.input);
     } catch (e) {
       // Following the agent or warning about outside paths must never reject the agent's tool call.
       console.error(`pi-nvim: tool_call check failed: ${errorText(e)}`);

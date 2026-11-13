@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NO_REVIEW, ReviewLoop } from "../extensions/loop.ts";
 import { openInNeovim, processRunner } from "../extensions/open-nvim.ts";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -1672,6 +1673,82 @@ describe("pi-nvim follows the agent into another worktree of the same repo", () 
     expect(status.markBase).toBe(chunks[2].fromSha);
   });
 
+  it("a parallel batch: a cross-worktree call is blocked while an edit is still running, and follows once it settled", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    const oldFile = path.join(repo.root, "a.ts");
+    const newFile = path.join(wt.root, "b.ts");
+    // pi starts every call of a batch and runs its tool_call hook before any tool writes.
+    await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "write", args: { path: oldFile } });
+    await fake.fire("tool_execution_start", { toolCallId: "t2", toolName: "write", args: { path: newFile } });
+    expect(await fake.fire("tool_call", { toolCallId: "t1", toolName: "write", input: { path: oldFile } })).toEqual([undefined]);
+    expect(await fake.fire("tool_call", { toolCallId: "t2", toolName: "write", input: { path: newFile } })).toEqual([
+      {
+        block: true,
+        reason: `Still editing in ${path.basename(repo.root)}. Finish those edits first, then edit ${path.basename(wt.root)} in a separate tool call.`,
+      },
+    ]);
+    expect(rootChanges(client)).toEqual([]);
+    expect((await client.request("status")).result.root).toBe(repo.root);
+    // The first edit lands where the session still is, so it is tracked.
+    await agentWrite(fake, repo, "a.ts", "a\n");
+    await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "write", result: {}, isError: false });
+    await fake.fire("tool_execution_end", { toolCallId: "t2", toolName: "write", result: {}, isError: true });
+    await fake.fire("tool_execution_start", { toolCallId: "t3", toolName: "write", args: { path: newFile } });
+    expect(await fake.fire("tool_call", { toolCallId: "t3", toolName: "write", input: { path: newFile } })).toEqual([undefined]);
+    expect((await client.request("status")).result.root).toBe(wt.root);
+    await fake.fire("turn_end", { turnIndex: 0 });
+    expect((await client.request("list_chunks")).result.map((c: any) => c.agentFiles)).toEqual([["a.ts"]]);
+  });
+
+  it("a read-only tool still running does not hold the follow back", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo);
+    await fake.fire("tool_execution_start", { toolCallId: "r1", toolName: "read", args: { path: "a.ts" } });
+    await fake.fire("tool_execution_start", { toolCallId: "t2", toolName: "write", args: { path: path.join(wt.root, "b.ts") } });
+    expect(await fake.fire("tool_call", { toolCallId: "t2", toolName: "write", input: { path: path.join(wt.root, "b.ts") } })).toEqual([undefined]);
+    expect(fake.notifications.map((n) => n.message)).toEqual([following(wt.root)]);
+  });
+
+  describe("another session reviewing in the new worktree", () => {
+    it("checkpoint mode: no follow, one warning per run, the call is blocked", async () => {
+      const repo = await makeRepo();
+      const wt = await repo.worktree();
+      await start(wt, { mode: "checkpoints", sessionId: "there" });
+      const fake = await start(repo, { mode: "checkpoints" });
+      const client = await connect(repo);
+      const blocked = [{ block: true, reason: `Another pi session is reviewing in ${path.basename(wt.root)}. Finish there or stop that session first.` }];
+      expect(await write(fake, path.join(wt.root, "x.ts"))).toEqual(blocked);
+      expect(await write(fake, path.join(wt.root, "y.ts"))).toEqual(blocked);
+      expect(fake.notifications).toEqual([
+        { message: `pi: another pi session is reviewing in ${path.basename(wt.root)} — not following`, level: "warning" },
+      ]);
+      expect(rootChanges(client)).toEqual([]);
+      expect((await client.request("status")).result.root).toBe(repo.root);
+    });
+
+    it("checkpoints off: follows as before", async () => {
+      const repo = await makeRepo();
+      const wt = await repo.worktree();
+      await start(wt, { mode: "checkpoints", sessionId: "there" });
+      const fake = await start(repo, { mode: "off" });
+      expect(await write(fake, path.join(wt.root, "x.ts"))).toEqual([undefined]);
+      expect(fake.notifications.map((n) => n.message)).toEqual([following(wt.root)]);
+    });
+  });
+
+  it("persists root only after a move away from the start root", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo, { mode: "checkpoints" });
+    expect(fake.entries.every((e) => !("root" in (e.data as object)))).toBe(true);
+    await write(fake, path.join(wt.root, "x.ts"));
+    expect((fake.entries.at(-1)!.data as any).root).toBe(wt.root);
+  });
+
   it("checkpoints off: unreported human steps go into the recorded chunk at the move; drafts stay", async () => {
     const repo = await makeRepo();
     const wt = await repo.worktree();
@@ -1907,7 +1984,24 @@ describe("pi-nvim follows the agent into another worktree of the same repo", () 
       expect(status.root).toBe(repo.root);
       const saved = again.entries.at(-1)!.data as any;
       expect(saved.steps).toEqual([]);
-      expect(saved.root).toBe(repo.root);
+      expect(saved.root).toBeUndefined();
+    });
+
+    it("the followed path is now another repo: starts over in the start root with no step", async () => {
+      const repo = await makeRepo();
+      const wt = await repo.worktree();
+      const fake = await start(repo, { mode: "checkpoints" });
+      await write(fake, path.join(wt.root, "x.ts"));
+      await fake.fire("session_shutdown", { reason: "quit" });
+      await repo.git("worktree", "remove", "--force", wt.root);
+      fs.mkdirSync(wt.root, { recursive: true });
+      execFileSync("git", ["init", "-q"], { cwd: wt.root });
+      const again = await start(repo, { entries: fake.entries });
+      const client = await connect(repo);
+      expect((await client.request("status")).result.root).toBe(repo.root);
+      const saved = again.entries.at(-1)!.data as any;
+      expect(saved.steps).toEqual([]);
+      expect(saved.root).toBeUndefined();
     });
   });
 });

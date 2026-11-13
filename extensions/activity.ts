@@ -19,6 +19,11 @@ export class ActivityLog {
     this.running = [];
   }
 
+  /** Tools still running other than `id`, oldest first. */
+  runningExcept(id: string | undefined): { id: string; tool: string }[] {
+    return this.running.filter((r) => r.id !== id);
+  }
+
   /** The most recently started tool still running, null when none. */
   current(): CurrentTool | null {
     const last = this.running.at(-1);
