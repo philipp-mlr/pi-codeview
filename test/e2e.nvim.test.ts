@@ -865,6 +865,38 @@ vim.wait(5000, function() return false end, 20)
     expect(content).not.toContain("just a hint");
   }, TIMEOUT_MS);
 
+  it("root_changed updates the cached root, prompts, and Follow switches directory and opens the file", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo, { mode: "off" });
+    const nvim = runNvim(
+      repo,
+      `
+local session = require("pi.session")
+require("pi").setup()
+vim.cmd("edit README.md")
+vim.ui.select = function(items, opts, on_choice)
+  vim.notify("PROMPT " .. opts.prompt .. " " .. table.concat(items, "/") .. " root=" .. tostring(session.root))
+  -- The agent's current file arrives with the next status refresh.
+  vim.wait(5000, function() return session.cached and session.cached.activity ~= nil end, 20)
+  on_choice("Follow")
+  vim.notify("CWD " .. vim.fn.getcwd() .. " FILE " .. vim.fs.basename(vim.api.nvim_buf_get_name(0)))
+end
+session.ensure(function() vim.notify("ATTACHED " .. session.root) end)
+vim.wait(15000, function() return false end, 20)
+`,
+    );
+    await until(() => nvim.notifications().some((n) => n.msg.startsWith("ATTACHED")), "attached");
+    expect(await fake.fire("tool_call", { toolName: "write", input: { path: path.join(wt.root, "x.txt") } })).toEqual([undefined]);
+    wt.write("x.txt", "one\n");
+    await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "write", args: { path: path.join(wt.root, "x.txt") } });
+    const cwd = await until(() => nvim.notifications().find((n) => n.msg.startsWith("CWD")), "follow done");
+    const msgs = nvim.notifications().map((n) => n.msg);
+    expect(msgs).toContain(`pi: following the agent into ${path.basename(wt.root)}`);
+    expect(msgs).toContain(`PROMPT pi: agent moved to ${path.basename(wt.root)} — follow here? Follow/Stay root=${wt.root}`);
+    expect(cwd.msg).toBe(`CWD ${wt.root} FILE x.txt`);
+  }, TIMEOUT_MS);
+
   it("a checkpoint with no Neovim attached opens in the running nvim of that worktree when Philipp says yes", async () => {
     const saved = { NVIM: process.env.NVIM, HERDR_PANE_ID: process.env.HERDR_PANE_ID };
     // Never fall through to a real herdr pane from a test.

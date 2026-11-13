@@ -3,7 +3,7 @@ local annotations = require("pi.annotations")
 
 local M = {}
 
-local KEYS = { "<leader>pa", "<leader>ps", "<leader>pn", "<leader>px", "<leader>pe", "<leader>pi", "<leader>pv", "<leader>pm", "<leader>pc", "<leader>pk" }
+local KEYS = { "<leader>pa", "<leader>ps", "<leader>pn", "<leader>px", "<leader>pe", "<leader>pi", "<leader>pv", "<leader>pm", "<leader>pc", "<leader>pk", "<leader>pf" }
 
 local function reset_maps()
   for _, lhs in ipairs(KEYS) do
@@ -52,6 +52,7 @@ M["default keys live under <leader>p with pi: descriptions"] = function()
     mode = "<leader>pm",
     session = "<leader>pi",
     peek = "<leader>pk",
+    follow = "<leader>pf",
   }), vim.inspect(pi.default_keys))
   local notes = capture_notify(function() pi.setup() end)
   local want = {
@@ -67,12 +68,13 @@ M["default keys live under <leader>p with pi: descriptions"] = function()
     { "n", "<leader>pm", "pi: toggle checkpoint mode" },
     { "n", "<leader>pi", "pi: choose pi session" },
     { "n", "<leader>pk", "pi: peek at the full note or annotation" },
+    { "n", "<leader>pf", "pi: follow the agent's worktree" },
   }
   for _, w in ipairs(want) do
     local desc = vim.fn.maparg(w[2], w[1], false, true).desc
     assert(desc == w[3], ("%s (%s): %s"):format(w[2], w[1], tostring(desc)))
   end
-  for _, name in ipairs({ "PiAsk", "PiContinue", "PiStop", "PiAnnotate", "PiAnnotationEdit", "PiAnnotationRemove", "PiCheckpoints", "PiCheckpointMode", "PiSession", "PiPeek" }) do
+  for _, name in ipairs({ "PiAsk", "PiContinue", "PiStop", "PiAnnotate", "PiAnnotationEdit", "PiAnnotationRemove", "PiCheckpoints", "PiCheckpointMode", "PiSession", "PiPeek", "PiFollow" }) do
     assert(vim.fn.exists(":" .. name) == 2, "missing command " .. name)
   end
   for _, name in ipairs({ "PiSendAnnotations", "PiCancel", "PiChunks" }) do
@@ -890,6 +892,177 @@ M["ensure says switched once per switch, also quiet; silent on first attach"] = 
   assert(ok, err)
 end
 
+-- Two real worktrees of one repo (a = main, b = linked) for follow specs.
+local function worktree_pair()
+  local base = vim.uv.fs_realpath(vim.fn.tempname() .. "x") or vim.fn.tempname()
+  vim.fn.mkdir(base, "p")
+  base = vim.uv.fs_realpath(base)
+  local a, b = base .. "/a", base .. "/b"
+  vim.fn.mkdir(a, "p")
+  local function git(...)
+    local r = vim.system(vim.list_extend({ "git", "-C", a }, { ... }), { text = true }):wait()
+    assert(r.code == 0, r.stderr)
+  end
+  git("init", "-q")
+  git("-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "i")
+  git("worktree", "add", "-q", "-b", "other", b)
+  vim.fn.writefile({ "x" }, b .. "/f.txt")
+  return base, vim.uv.fs_realpath(a), vim.uv.fs_realpath(b)
+end
+
+-- Runs fn with session state faked as attached to a session now running in b while this nvim sits in a.
+local function with_followed_state(fn)
+  local session = require("pi.session")
+  local base, a, b = worktree_pair()
+  local real = { connected = session.connected, cached = session.cached, root = session.root, home = session.home, select = vim.ui.select, refresh = session.refresh_live, cwd = vim.fn.getcwd() }
+  session.connected = function() return true end
+  session.root, session.home, session.cached = a, a, { root = a, name = "s" }
+  session.refresh_live = function() end
+  vim.cmd("tcd " .. vim.fn.fnameescape(a))
+  local handlers = {}
+  local real_on = session.on_event
+  session.on_event = function(f) handlers[#handlers + 1] = f end
+  capture_notify(function() pi.setup() end)
+  session.on_event = real_on
+  local ok, err = pcall(fn, { session = session, a = a, b = b, event = handlers[#handlers] })
+  session.connected, session.cached, session.root, session.home, vim.ui.select, session.refresh_live = real.connected, real.cached, real.root, real.home, real.select, real.refresh
+  vim.cmd("silent! only")
+  vim.cmd("tcd " .. vim.fn.fnameescape(real.cwd))
+  vim.fn.delete(base, "rf")
+  assert(ok, err)
+end
+
+M["root_changed notifies and prompts Follow / Stay once; Stay and Esc do nothing"] = function()
+  with_followed_state(function(c)
+    local asked = {}
+    vim.ui.select = function(items, opts, on_choice) asked[#asked + 1] = { items = items, prompt = opts.prompt, cb = on_choice } end
+    local notes = capture_notify(function() c.session.root = c.b; c.event("root_changed", { root = c.b }); vim.wait(50, function() return #asked > 0 end) end)
+    assert(#notes == 1 and notes[1].msg == "pi: following the agent into b", vim.inspect(notes))
+    assert(#asked == 1 and asked[1].prompt == "pi: agent moved to b — follow here?", vim.inspect(asked))
+    assert(vim.deep_equal(asked[1].items, { "Follow", "Stay" }))
+    asked[1].cb("Stay")
+    asked[1].cb(nil)
+    assert(vim.fn.getcwd() == c.a, vim.fn.getcwd())
+  end)
+end
+
+M["root_changed into the worktree nvim already sits in only notifies"] = function()
+  with_followed_state(function(c)
+    local asked = 0
+    vim.ui.select = function() asked = asked + 1 end
+    local notes = capture_notify(function() c.event("root_changed", { root = c.a }); vim.wait(50) end)
+    assert(#notes == 1 and notes[1].msg == "pi: following the agent into a", vim.inspect(notes))
+    assert(asked == 0)
+  end)
+end
+
+M["Follow does :tcd, opens the agent's current file in a split, and :PiFollow does the same"] = function()
+  with_followed_state(function(c)
+    local choose
+    vim.ui.select = function(_, _, on_choice) choose = on_choice end
+    c.session.root = c.b
+    c.session.cached.root = c.b
+    c.session.cached.activity = { tool = "edit", target = "f.txt" }
+    capture_notify(function() c.event("root_changed", { root = c.b }); vim.wait(50, function() return choose ~= nil end) end)
+    choose("Follow")
+    assert(vim.fn.getcwd() == c.b, vim.fn.getcwd())
+    assert(vim.uv.fs_realpath(vim.api.nvim_buf_get_name(0)) == c.b .. "/f.txt", vim.api.nvim_buf_get_name(0))
+    assert(#vim.api.nvim_tabpage_list_wins(0) == 2)
+    -- already there: nothing to follow
+    local notes = capture_notify(function() vim.cmd("PiFollow") end)
+    assert(#notes == 1 and notes[1].msg == "pi: nothing to follow", vim.inspect(notes))
+    -- manual: back in a, :PiFollow goes to b again; a missing file opens no split
+    vim.cmd("only | tcd " .. vim.fn.fnameescape(c.a))
+    c.session.cached.activity = { tool = "edit", target = "gone.txt" }
+    capture_notify(function() vim.cmd("PiFollow") end)
+    assert(vim.fn.getcwd() == c.b and #vim.api.nvim_tabpage_list_wins(0) == 1, vim.fn.getcwd())
+  end)
+end
+
+M["PiFollow without a session says so like the other commands"] = function()
+  local session = require("pi.session")
+  local real = { connected = session.connected, ensure = session.ensure }
+  session.connected = function() return false end
+  capture_notify(function() pi.setup() end)
+  local notes = capture_notify(function() vim.cmd("PiFollow") end)
+  session.connected, session.ensure = real.connected, real.ensure
+  assert(#notes == 1 and notes[1].level == vim.log.levels.ERROR and notes[1].msg:find("^pi: "), vim.inspect(notes))
+end
+
+M["ensure finds a session that followed the agent into another worktree of the repo"] = function()
+  local session = require("pi.session")
+  local client, discover = require("pi.client"), require("pi.discover")
+  local base, a, b = worktree_pair()
+  local real = { sockets = discover.sockets, connect = client.connect }
+  discover.sockets = function() return { base .. "/s1" } end
+  client.connect = function()
+    return { closed = false, close = function(self) self.closed = true end,
+      request = function(_, _, _, cb) cb(nil, { root = b, name = "moved", sessionId = "id", drafts = {} }) end }
+  end
+  local buf = vim.fn.bufadd(a .. "/g.txt")
+  vim.fn.writefile({ "x" }, a .. "/g.txt")
+  vim.fn.bufload(buf)
+  vim.api.nvim_set_current_buf(buf)
+  session.detach()
+  local attached, root
+  local ok, err = pcall(function()
+    session.ensure(function(_, r) attached, root = true, r end)
+    assert(attached and session.cached.name == "moved", "not attached")
+    assert(session.root == b and root == b, tostring(session.root))
+    assert(session.home == a, tostring(session.home))
+    -- a second command from the start worktree stays attached, does not re-pick
+    local again
+    session.ensure(function() again = true end, { buf = buf })
+    assert(again)
+  end)
+  session.detach()
+  discover.sockets, client.connect = real.sockets, real.connect
+  vim.fn.delete(base, "rf")
+  assert(ok, err)
+end
+
+M["a session in an unrelated repo is not picked up, nor one in the buffer's worktree outranked"] = function()
+  local session = require("pi.session")
+  local client, discover = require("pi.client"), require("pi.discover")
+  local base, a, b = worktree_pair()
+  local other = vim.uv.fs_realpath(vim.fn.tempname() .. "o") or vim.fn.tempname() .. "o"
+  vim.fn.mkdir(other, "p")
+  other = vim.uv.fs_realpath(other)
+  vim.system({ "git", "-C", other, "init", "-q" }):wait()
+  local roots = { s1 = b, s2 = other, s3 = a }
+  local real = { sockets = discover.sockets, connect = client.connect }
+  discover.sockets = function() return { base .. "/s1", base .. "/s2", base .. "/s3" } end
+  client.connect = function(path)
+    local id = vim.fs.basename(path)
+    return { closed = false, close = function(self) self.closed = true end,
+      request = function(_, _, _, cb) cb(nil, { root = roots[id], name = id, sessionId = id, drafts = {} }) end }
+  end
+  vim.fn.writefile({ "x" }, a .. "/g.txt")
+  vim.api.nvim_set_current_buf(vim.fn.bufadd(a .. "/g.txt"))
+  vim.fn.bufload(0)
+  session.detach()
+  local ok, err = pcall(function()
+    session.ensure(function() end)
+    -- s3 runs in the buffer's own worktree, so it wins; the followed s1 and the other repo's s2 do not count
+    assert(session.cached.sessionId == "s3", vim.inspect(session.cached))
+    session.detach()
+    roots.s3 = other
+    session.ensure(function() end)
+    assert(session.cached.sessionId == "s1", vim.inspect(session.cached))
+  end)
+  session.detach()
+  discover.sockets, client.connect = real.sockets, real.connect
+  vim.fn.delete(base, "rf")
+  vim.fn.delete(other, "rf")
+  assert(ok, err)
+end
+
+M["picker row shows the session's own worktree, not the buffer's"] = function()
+  local session = require("pi.session")
+  local row = session.describe({ name = "n", root = "/w/followed-here", busy = false }, 0)
+  assert(row == "n · followed-here · idle", row)
+end
+
 M["waiting notice and checkpoint-ready notice name the keys or the commands"] = function()
   reset_maps()
   capture_notify(function() pi.setup() end)
@@ -1404,13 +1577,13 @@ M["which-key: setup registers the pi group under the keys' common prefix"] = fun
   assert(#added == 1 and added[1][1][1] == "<leader>r", vim.inspect(added))
   added = {}
   with_which_key({ add = function(spec) added[#added + 1] = spec end }, function()
-    capture_notify(function() pi.setup({ keys = { ask = "<C-a>", continue = "<C-b>", stop = false, annotate = false, edit = false, remove = false, checkpoints = false, mode = false, session = false, peek = false } }) end)
+    capture_notify(function() pi.setup({ keys = { ask = "<C-a>", continue = "<C-b>", stop = false, annotate = false, edit = false, remove = false, checkpoints = false, mode = false, session = false, peek = false, follow = false } }) end)
   end)
   assert(#added == 0, vim.inspect(added))
   -- A single mapped key is a key, not a group.
   added = {}
   with_which_key({ add = function(spec) added[#added + 1] = spec end }, function()
-    capture_notify(function() pi.setup({ keys = { ask = "<leader>pa", continue = false, stop = false, annotate = false, edit = false, remove = false, checkpoints = false, mode = false, session = false, peek = false } }) end)
+    capture_notify(function() pi.setup({ keys = { ask = "<leader>pa", continue = false, stop = false, annotate = false, edit = false, remove = false, checkpoints = false, mode = false, session = false, peek = false, follow = false } }) end)
   end)
   assert(#added == 0, vim.inspect(added))
   for _, lhs in ipairs({ "<C-a>", "<C-b>" }) do pcall(vim.keymap.del, "n", lhs) end

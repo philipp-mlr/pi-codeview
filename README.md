@@ -96,6 +96,7 @@ the notice.
 | `<leader>pv` | `:PiCheckpoints` | Toggle the checkpoint list. |
 | `<leader>pm` | `:PiCheckpointMode [on\|off]` | Switch checkpoint mode for this repository; without an argument it toggles. |
 | `<leader>pi` | `:PiSession` | Choose the pi session to work with. |
+| `<leader>pf` | `:PiFollow` | Follow the agent into the worktree the session moved to: `:tcd` there (this tab) and open the file it is editing in a split. |
 | `<leader>pk` | `:PiPeek` | Peek: show the full checkpoint note and the file's reason in a checkpoint diff, or the full annotations of the cursor line. |
 
 ## Writing and reading long text
@@ -238,6 +239,16 @@ buffer. With one such session it attaches on first use; with several it
 asks. Running a command from a buffer in another worktree switches to that
 worktree's session. `<leader>pi` (`:PiSession`) picks a session on purpose.
 Name your pi sessions (`/name` in pi) to tell them apart in the picker.
+
+When the agent edits in another worktree of the same repository, the pi
+session follows it (`pi: following the agent into <worktree>`) and Neovim
+stays attached. If your Neovim sits in a different worktree it asks
+`pi: agent moved to <worktree> — follow here?` with Follow / Stay (once per
+move; `<Esc>` is Stay). Follow does a tab-local `:tcd` there and opens the
+file the agent is editing in a vertical split; `<leader>pf` (`:PiFollow`)
+does the same later (`pi: nothing to follow` when you are already there).
+A Neovim started in the original worktree still finds such a session, and
+the picker row names the worktree the session runs in now.
 
 Picker rows read `<label> · <worktree> · <state>[ · checkpoints] · <age>`, e.g.
 `api · feature-x · checkpoint 2 waiting · checkpoints · 5m ago`. The label is the

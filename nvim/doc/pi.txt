@@ -80,6 +80,7 @@ are in the second column.
     `<leader>pm`  mode         |:PiCheckpointMode| toggle checkpoint mode
     `<leader>pi`  session      |:PiSession|       choose the pi session
     `<leader>pk`  peek         |:PiPeek|          show the full note
+    `<leader>pf`  follow       |:PiFollow|        follow the agent's worktree
 
 Messages name your configured key, or the command when a key is not mapped.
 
@@ -128,6 +129,13 @@ Messages name your configured key, or the command when a key is not mapped.
 
                                                                   *:PiSession*
 :PiSession              Choose the pi session to work with.
+
+                                                                  *:PiFollow*
+:PiFollow               Follow the agent into the worktree the session runs
+                        in now: |:tcd| there (this tab only), then open the
+                        file the agent is editing in a vertical split, if it
+                        exists. Says `pi: nothing to follow` when you are
+                        already there. See |pi-sessions|.
 
                                                                      *:PiPeek*
 :PiPeek                 Show the full text behind a preview in a float: the
@@ -236,6 +244,14 @@ buffer. With one such session it attaches on first use; with several it
 asks. Running a command from a buffer in another worktree switches to that
 worktree's session and says so. |:PiSession| picks one on purpose. Name your
 pi sessions with `/name` in pi to tell them apart.
+
+A session whose agent moved into another worktree of the same repository
+keeps its socket and your Neovim stays attached; a Neovim started in the
+original worktree finds it too, and the |:PiSession| row names the worktree
+the session runs in now. When the agent moves, `pi: following the agent into
+<worktree>` appears and, if your Neovim sits in another worktree, a picker
+asks `pi: agent moved to <worktree> — follow here?` (Follow / Stay; `<Esc>`
+is Stay), once per move. Follow is |:PiFollow|; use it later if you stayed.
 
 When there is none you get `pi: no pi session for <worktree> — start pi in
 that worktree`.

@@ -28,6 +28,7 @@ M.default_keys = {
   mode = "<leader>pm",
   session = "<leader>pi",
   peek = "<leader>pk",
+  follow = "<leader>pf",
 }
 
 -- Repo-relative path of buf, or nil when it is not a file inside root.
@@ -85,7 +86,63 @@ function M.notify_run_end(data)
   end)
 end
 
+-- The file the agent is editing now, as an absolute path under root; nil unless it exists on disk.
+-- `activity.target` is a path (repo-relative or absolute) for file tools, else a command or nothing.
+local function current_file(root)
+  local activity = session.cached and session.cached.activity
+  local target = type(activity) == "table" and activity.target or nil
+  if type(target) ~= "string" or target == "" or target:find("%s") then
+    return nil
+  end
+  local path = target:sub(1, 1) == "/" and target or (root .. "/" .. target)
+  local stat = vim.uv.fs_stat(path)
+  return stat and stat.type == "file" and path or nil
+end
+
+-- Moves this tab into the session's worktree and shows the file the agent is editing in a vertical
+-- split, so the live marks are on screen.
+local function follow_into(root)
+  vim.cmd("tcd " .. vim.fn.fnameescape(root))
+  session.refresh_live()
+  local file = current_file(root)
+  if file then
+    vim.cmd("vsplit " .. vim.fn.fnameescape(file))
+  end
+end
+
+-- Asks, once per move, whether to follow the agent into root (Esc or a closed picker is Stay).
+local function ask_follow(root)
+  vim.ui.select({ "Follow", "Stay" }, {
+    prompt = ("pi: agent moved to %s — follow here?"):format(vim.fs.basename(root)),
+  }, function(choice)
+    if choice == "Follow" and session.root == root then
+      follow_into(root)
+    end
+  end)
+end
+
+-- Follows the agent into the worktree the attached session runs in now (`:PiFollow`, same as Follow
+-- in the automatic prompt).
+function M.follow()
+  session.ensure(function(_, root)
+    if root == discover.root(vim.uv.cwd()) then
+      return pi_text.notify_fit("pi: nothing to follow")
+    end
+    follow_into(root)
+  end)
+end
+
 local function on_event(name, data)
+  if name == "root_changed" and type(data) == "table" and type(data.root) == "string" then
+    pi_text.notify_fit(("pi: following the agent into %s"):format(vim.fs.basename(data.root)))
+    -- session.lua already moved its root; a client attached from another worktree is asked.
+    local root = session.root
+    if root and root ~= discover.root(vim.uv.cwd()) then
+      vim.schedule(function()
+        ask_follow(root)
+      end)
+    end
+  end
   if name == "run_settled" then
     M.notify_run_end(data)
   end
@@ -604,6 +661,7 @@ function M.setup(opts)
     desc = "pi: checkpoint mode on|off, toggle without argument",
   })
   command("PiSession", M.attach, { desc = "pi: choose the pi session to work with" })
+  command("PiFollow", M.follow, { desc = "pi: follow the agent into the worktree it moved to" })
   command("PiPeek", M.peek, { desc = "pi: peek at the full note or annotation" })
 
   -- Default keys never replace an existing mapping (e.g. another plugin's <leader>p… key); keys passed in
@@ -637,6 +695,7 @@ function M.setup(opts)
   map("n", "checkpoints", "<cmd>PiCheckpoints<CR>", "pi: toggle checkpoint list")
   map("n", "mode", "<cmd>PiCheckpointMode<CR>", "pi: toggle checkpoint mode")
   map("n", "session", "<cmd>PiSession<CR>", "pi: choose pi session")
+  map("n", "follow", "<cmd>PiFollow<CR>", "pi: follow the agent's worktree")
   map("n", "peek", "<cmd>PiPeek<CR>", "pi: peek at the full note or annotation")
   if #skipped > 0 then
     pi_text.notify_fit({
