@@ -1564,3 +1564,350 @@ describe("pi-nvim checkpoint waiting with no Neovim attached", () => {
     expect(fake.confirms[0].signal?.aborted).toBe(true);
   });
 });
+
+describe("pi-nvim follows the agent into another worktree of the same repo", () => {
+  const following = (root: string) => `pi: following the agent into ${path.basename(root)}`;
+  const rootChanges = (client: Client) => client.events.filter((e) => e.event === "root_changed");
+  const write = (fake: FakePi, file: string) => fake.fire("tool_call", { toolName: "write", input: { path: file } });
+
+  /** The agent writes `file` in `repo` like a real tool call: tool_call first (may follow or block), then the write. */
+  async function agentEdit(fake: FakePi, repo: TestRepo, file: string, text: string): Promise<unknown[]> {
+    const results = await write(fake, path.join(repo.root, file));
+    if (results.some((r) => r)) return results;
+    await agentWrite(fake, repo, file, text);
+    return results;
+  }
+
+  it("follows instead of warning: status.root, root_changed, one notice per move, same socket, mode and cap kept", async () => {
+    const repo = await makeRepo();
+    await repo.git("config", "pi-nvim.cap", "40");
+    const wt = await repo.worktree();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    expect(await write(fake, path.join(wt.root, "x.ts"))).toEqual([undefined]);
+    await until(() => rootChanges(client).length > 0);
+    expect(rootChanges(client)).toEqual([{ event: "root_changed", data: { root: wt.root } }]);
+    expect(fake.notifications).toEqual([{ message: following(wt.root), level: "info" }]);
+    expect(client.events.filter((e) => e.event === "outside_worktree")).toEqual([]);
+    // The repo config is read at start only: a later change does not reach the followed session.
+    await repo.git("config", "pi-nvim.checkpoints", "false");
+    const status = (await client.request("status")).result;
+    expect(status).toMatchObject({ root: wt.root, mode: "checkpoints", sessionId: "test-session" });
+    expect(status.markBase).toBe(status.baseline);
+    expect(fake.confirms).toEqual([]);
+    // More edits in the same worktree neither notify nor broadcast again.
+    await write(fake, path.join(wt.root, "y.ts"));
+    expect(fake.notifications).toHaveLength(1);
+    expect(rootChanges(client)).toHaveLength(1);
+    // The baseline is the new worktree's: only the agent's edit there counts, against the session's cap.
+    await agentWrite(fake, wt, "x.ts", lines(41));
+    expect(await write(fake, path.join(wt.root, "y.ts"))).toEqual([
+      { block: true, reason: "Changed lines since the last checkpoint exceed 40. Call checkpoint with a note first." },
+    ]);
+    void fake.callTool("checkpoint", { note: "x" });
+    const chunk = (await until(() => client.events.find((e) => e.event === "chunk_ready"))).data.chunk;
+    expect(chunk.agentFiles).toEqual(["x.ts"]);
+    expect((await client.request("get_chunk", { n: chunk.n })).result.diff).toContain("+line 40");
+  });
+
+  it("other repos, ~ and /tmp keep the warning, also after a follow", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const other = await makeRepo();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    await write(fake, path.join(other.root, "x.ts"));
+    await write(fake, path.join(wt.root, "x.ts"));
+    await fake.fire("agent_start", {});
+    await write(fake, path.join(os.tmpdir(), "pi-nvim-follow-test.txt"));
+    await fake.fire("agent_start", {});
+    await write(fake, "~/pi-nvim-follow-test.txt");
+    expect(fake.notifications).toEqual([
+      { message: `pi: the agent is editing outside ${path.basename(repo.root)} — start pi in that worktree to review it`, level: "warning" },
+      { message: following(wt.root), level: "info" },
+      { message: `pi: the agent is editing outside ${path.basename(wt.root)} — start pi in that worktree to review it`, level: "warning" },
+      { message: `pi: the agent is editing outside ${path.basename(wt.root)} — start pi in that worktree to review it`, level: "warning" },
+    ]);
+    expect((await client.request("status")).result.root).toBe(wt.root);
+    await until(() => client.events.filter((e) => e.event === "outside_worktree").length === 3);
+  });
+
+  it("follows into a worktree nested inside the root", async () => {
+    const repo = await makeRepo();
+    const nested = await repo.worktree(".worktrees/feature");
+    const fake = await start(repo);
+    const client = await connect(repo);
+    await write(fake, path.join(nested.root, "x.ts"));
+    expect((await client.request("status")).result.root).toBe(nested.root);
+    // Back into the outer worktree: also a move.
+    await write(fake, path.join(repo.root, "y.ts"));
+    expect((await client.request("status")).result.root).toBe(repo.root);
+    expect(fake.notifications.map((n) => n.message)).toEqual([following(nested.root), following(repo.root)]);
+  });
+
+  it("back and forth: every move follows and notifies once, also back to the first root", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    await fake.fire("agent_start", {});
+    await agentEdit(fake, wt, "a.ts", "a\n");
+    await agentEdit(fake, repo, "b.ts", "b\n");
+    await agentEdit(fake, wt, "c.ts", "c\n");
+    expect(fake.notifications.map((n) => n.message)).toEqual([following(wt.root), following(repo.root), following(wt.root)]);
+    await until(() => rootChanges(client).length === 3);
+    expect(rootChanges(client).map((e) => e.data.root)).toEqual([wt.root, repo.root, wt.root]);
+    // Checkpoints off: the work in each worktree before a move is cut into a recorded chunk there.
+    await fake.fire("turn_end", { turnIndex: 0 });
+    const chunks = (await client.request("list_chunks")).result;
+    expect(chunks.map((c: any) => [c.note, c.status, c.agentFiles])).toEqual([
+      [`before following into ${path.basename(repo.root)}`, "recorded", ["a.ts"]],
+      [`before following into ${path.basename(wt.root)}`, "recorded", ["b.ts"]],
+      ["turn 1", "recorded", ["c.ts"]],
+    ]);
+    // Every chunk's diff still resolves after the moves: all worktrees share the object store.
+    expect((await client.request("get_chunk", { n: 1 })).result.diff).toContain("+a");
+    // Mark base: the new worktree's baseline at the move, not the run start in another worktree.
+    const status = (await client.request("status")).result;
+    expect(status.markBase).toBe(chunks[2].fromSha);
+  });
+
+  it("checkpoints off: unreported human steps go into the recorded chunk at the move; drafts stay", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    const drafts = [{ path: "README.md", startLine: 1, endLine: 1, note: "keep" }];
+    expect((await client.request("save_drafts", { annotations: drafts })).ok).toBe(true);
+    repo.write("human.txt", "mine\n");
+    expect((await client.request("human_write", { path: "human.txt" })).ok).toBe(true);
+    await write(fake, path.join(wt.root, "x.ts"));
+    const chunks = (await client.request("list_chunks")).result;
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({ status: "recorded", humanFiles: ["human.txt"], agentFiles: [] });
+    expect(chunks[0].humanSteps).toHaveLength(1);
+    const status = (await client.request("status")).result;
+    expect(status.root).toBe(wt.root);
+    expect(status.drafts).toEqual(drafts);
+    expect(status.markBase).toBe(status.baseline);
+  });
+
+  it("checkpoint mode: unreviewed agent work blocks the move until it is reviewed, then the next edit follows", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    const reason = `Changes in ${path.basename(repo.root)} are not reviewed yet. Call checkpoint with a note first, then edit ${path.basename(wt.root)}.`;
+    expect(await write(fake, path.join(wt.root, "x.ts"))).toEqual([{ block: true, reason }]);
+    expect((await client.request("status")).result.root).toBe(repo.root);
+    expect(rootChanges(client)).toEqual([]);
+    expect(fake.notifications).toEqual([]);
+    const pending = fake.callTool("checkpoint", { note: "add a" });
+    await until(() => client.events.find((e) => e.event === "chunk_ready"));
+    // No follow while the checkpoint is open.
+    expect(await write(fake, path.join(wt.root, "x.ts"))).toEqual([undefined]);
+    expect((await client.request("status")).result.root).toBe(repo.root);
+    expect((await client.request("send", { annotations: [], note: "ok", viewed: true })).ok).toBe(true);
+    await pending;
+    expect(await write(fake, path.join(wt.root, "x.ts"))).toEqual([undefined]);
+    expect((await client.request("status")).result.root).toBe(wt.root);
+  });
+
+  it("checkpoint mode: unreported human steps block the move too and reach the agent with the review", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    repo.write("human.txt", "mine\n");
+    expect((await client.request("human_write", { path: "human.txt" })).ok).toBe(true);
+    expect(await write(fake, path.join(wt.root, "x.ts"))).toEqual([
+      { block: true, reason: expect.stringContaining(`Changes in ${path.basename(repo.root)} are not reviewed yet`) },
+    ]);
+    const pending = fake.callTool("checkpoint", { note: "nothing of mine" });
+    await until(() => client.events.find((e) => e.event === "chunk_ready"));
+    expect((await client.request("send", { annotations: [], note: "", viewed: true })).ok).toBe(true);
+    expect(text(await pending)).toContain("+mine");
+    expect(await write(fake, path.join(wt.root, "x.ts"))).toEqual([undefined]);
+    expect((await client.request("status")).result.root).toBe(wt.root);
+  });
+
+  it("checkpoint mode: an edit and its revert do not block the move", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo, { mode: "checkpoints" });
+    const client = await connect(repo);
+    await agentWrite(fake, repo, "a.txt", "a\n");
+    repo.rm("a.txt");
+    await fake.fire("tool_result", { toolName: "bash", input: {}, content: [], isError: false });
+    expect(await write(fake, path.join(wt.root, "x.ts"))).toEqual([undefined]);
+    expect((await client.request("status")).result.root).toBe(wt.root);
+    expect((await client.request("list_chunks")).result).toEqual([]);
+  });
+
+  it("setMode, describe and the one-session-per-worktree check work after a move", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo, { sessionId: "a" });
+    const client = await connect(repo, "a");
+    await write(fake, path.join(wt.root, "x.ts"));
+    await fake.runCommand("checkpoints", "on");
+    expect((await client.request("status")).result).toMatchObject({ root: wt.root, mode: "checkpoints" });
+    await fake.runCommand("checkpoints", "");
+    expect(fake.notifications.at(-1)?.message).toContain("checkpoint mode on");
+    // A second session started in the followed worktree is kept out of checkpoint mode.
+    const second = await start(wt, { sessionId: "b" });
+    await second.runCommand("checkpoints", "on");
+    expect(second.notifications.at(-1)).toMatchObject({ level: "error", message: expect.stringContaining("one checkpoint-mode session per worktree") });
+  });
+
+  it("a session without UI follows silently: no notice, no offer", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo, { hasUI: false });
+    const client = await connect(repo);
+    await write(fake, path.join(wt.root, "x.ts"));
+    await until(() => rootChanges(client).length > 0);
+    expect(fake.notifications).toEqual([]);
+    expect(fake.confirms).toEqual([]);
+  });
+
+  it("a session holding an inherited open checkpoint does not follow; it warns as before", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const main = await start(repo, { mode: "checkpoints", sessionId: "main" });
+    await agentWrite(main, repo, "a.txt", "a\n");
+    void main.callTool("checkpoint", { note: "add a" });
+    await until(() => JSON.stringify(main.entries.at(-1)).includes('"status":"open"'));
+    await main.fire("session_shutdown", { reason: "quit" });
+    const child = await start(repo, { entries: main.entries, hasUI: false, sessionId: "child" });
+    const client = await connect(repo, "child");
+    await write(child, path.join(wt.root, "x.ts"));
+    await until(() => client.events.some((e) => e.event === "outside_worktree"));
+    expect((await client.request("status")).result.root).toBe(repo.root);
+    expect(rootChanges(client)).toEqual([]);
+  });
+
+  describe("pane offer", () => {
+    function stubRunner(answer: (cmd: string, args: string[]) => string | null): { cmd: string; args: string[] }[] {
+      const runs: { cmd: string; args: string[] }[] = [];
+      vi.spyOn(processRunner, "run").mockImplementation(async (cmd: string, args: string[]) => {
+        runs.push({ cmd, args });
+        const out = answer(cmd, args);
+        return out === null ? { code: 1, stdout: "" } : { code: 0, stdout: out };
+      });
+      return runs;
+    }
+
+    it("no Neovim attached: asks once per run to open the new worktree; yes → opens it there", async () => {
+      const repo = await makeRepo();
+      const wt = await repo.worktree();
+      const fake = await start(repo);
+      process.env.HERDR_PANE_ID = "w1:p4";
+      const runs = stubRunner((cmd, args) =>
+        cmd === "herdr" && args[1] === "split" ? JSON.stringify({ result: { pane: { pane_id: "w1:p9" } } }) : cmd === "herdr" ? "" : null,
+      );
+      fake.setConfirmAnswer(true);
+      await fake.fire("agent_start", {});
+      await write(fake, path.join(wt.root, "x.ts"));
+      await until(() => fake.notifications.some((n) => n.message.includes("new Neovim pane")));
+      expect(fake.confirms.map((c) => c.title)).toEqual([`Open ${path.basename(wt.root)} in Neovim?`]);
+      expect(runs.find((r) => r.cmd === "herdr")?.args).toContain(`PI_NVIM_ROOT=${wt.root}`);
+      expect(fake.notifications.map((n) => n.message)).toEqual([
+        following(wt.root),
+        `pi: ${path.basename(wt.root)} opens in a new Neovim pane (herdr)`,
+      ]);
+      await write(fake, path.join(repo.root, "y.ts"));
+      await new Promise((r) => setImmediate(r));
+      expect(fake.confirms).toHaveLength(1);
+      await fake.fire("agent_start", {});
+      await write(fake, path.join(wt.root, "z.ts"));
+      await until(() => fake.confirms.length === 2);
+    });
+
+    it("no → nothing opens", async () => {
+      const repo = await makeRepo();
+      const wt = await repo.worktree();
+      const fake = await start(repo);
+      const runs = stubRunner(() => null);
+      await write(fake, path.join(wt.root, "x.ts"));
+      await until(() => fake.confirms.length === 1);
+      await new Promise((r) => setImmediate(r));
+      expect(runs).toEqual([]);
+      expect(fake.notifications.map((n) => n.message)).toEqual([following(wt.root)]);
+    });
+
+    it("a Neovim attached: no offer", async () => {
+      const repo = await makeRepo();
+      const wt = await repo.worktree();
+      const fake = await start(repo);
+      await connect(repo);
+      await write(fake, path.join(wt.root, "x.ts"));
+      await new Promise((r) => setImmediate(r));
+      expect(fake.confirms).toEqual([]);
+    });
+
+    it("pi stopping while the offer is open: no notice, nothing opens", async () => {
+      const repo = await makeRepo();
+      const wt = await repo.worktree();
+      const fake = await start(repo);
+      const runs = stubRunner(() => null);
+      fake.holdConfirm();
+      await write(fake, path.join(wt.root, "x.ts"));
+      await until(() => fake.confirms.length === 1);
+      const before = fake.notifications.length;
+      await fake.fire("session_shutdown", { reason: "quit" });
+      expect(fake.confirms[0].signal?.aborted).toBe(true);
+      await new Promise((r) => setImmediate(r));
+      expect(fake.notifications).toHaveLength(before);
+      expect(runs).toEqual([]);
+    });
+  });
+
+  describe("restore", () => {
+    it("resumes in the followed worktree: changes made while pi was down there become an agent step", async () => {
+      const repo = await makeRepo();
+      const wt = await repo.worktree();
+      const fake = await start(repo, { mode: "checkpoints" });
+      await write(fake, path.join(wt.root, "x.ts"));
+      await fake.fire("session_shutdown", { reason: "quit" });
+      expect((fake.entries.at(-1)!.data as any).root).toBe(wt.root);
+      wt.write("down.ts", lines(151));
+      const again = await start(repo, { entries: fake.entries });
+      const client = await connect(repo);
+      expect((await client.request("status")).result.root).toBe(wt.root);
+      expect(await again.fire("tool_call", { toolName: "edit", input: {} })).toEqual([
+        { block: true, reason: "Changed lines since the last checkpoint exceed 150. Call checkpoint with a note first." },
+      ]);
+      expect((again.entries.at(-1)!.data as any).steps.map((s: any) => [s.author, s.files])).toEqual([["agent", ["down.ts"]]]);
+    });
+
+    it("an entry from before following existed (no root) restores in the start root as before", async () => {
+      const repo = await makeRepo();
+      const fake = await start(repo, { mode: "checkpoints" });
+      await fake.fire("session_shutdown", { reason: "quit" });
+      const entries = fake.entries.map((e) => ({ ...e, data: { ...(e.data as object), root: undefined } }));
+      repo.write("down.ts", "d\n");
+      const again = await start(repo, { entries });
+      const client = await connect(repo);
+      expect((await client.request("status")).result.root).toBe(repo.root);
+      expect((again.entries.at(-1)!.data as any).steps.map((s: any) => s.files)).toEqual([["down.ts"]]);
+    });
+
+    it("the followed worktree is gone: starts over in the start root with no step", async () => {
+      const repo = await makeRepo();
+      const wt = await repo.worktree();
+      const fake = await start(repo, { mode: "checkpoints" });
+      await write(fake, path.join(wt.root, "x.ts"));
+      await fake.fire("session_shutdown", { reason: "quit" });
+      await repo.git("worktree", "remove", "--force", wt.root);
+      const again = await start(repo, { entries: fake.entries });
+      const client = await connect(repo);
+      const status = (await client.request("status")).result;
+      expect(status.root).toBe(repo.root);
+      const saved = again.entries.at(-1)!.data as any;
+      expect(saved.steps).toEqual([]);
+      expect(saved.root).toBe(repo.root);
+    });
+  });
+});

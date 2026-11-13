@@ -31,7 +31,7 @@ export type Response =
   | { id: number | null; ok: true; result: unknown }
   | { id: number | null; ok: false; error: string };
 
-export type EventName = "chunk_ready" | "chunk_reviewed" | "mode_changed" | "run_settled" | "activity_current" | "outside_worktree";
+export type EventName = "chunk_ready" | "chunk_reviewed" | "mode_changed" | "run_settled" | "activity_current" | "outside_worktree" | "root_changed";
 export type Event = { event: EventName; data: unknown };
 
 /** Serialises one message as an NDJSON line. */

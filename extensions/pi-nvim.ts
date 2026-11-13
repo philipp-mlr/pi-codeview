@@ -79,14 +79,15 @@ export default function piNvim(pi: ExtensionAPI): void {
     loop = null;
   });
 
-  pi.on("tool_call", (event) => {
+  pi.on("tool_call", async (event) => {
+    let reason: string | undefined;
     try {
-      loop?.toolCall(event.toolName, event.input);
+      reason = await loop?.toolCall(event.toolName, event.input);
     } catch (e) {
-      // The outside-worktree warning must never reject the agent's tool call.
+      // Following the agent or warning about outside paths must never reject the agent's tool call.
       console.error(`pi-nvim: tool_call check failed: ${errorText(e)}`);
     }
-    const reason = loop?.capBlock(event.toolName);
+    reason ??= loop?.capBlock(event.toolName);
     return reason ? { block: true, reason } : undefined;
   });
 

@@ -4,12 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ActivityLog, toolLine } from "./activity.ts";
-import { diffText, fileStats, numstat, parseMode, pruneRefs, readConfig, readOpenCommand, repoHash, showFile, snapshot, writeMode } from "./git.ts";
-import type { Mode } from "./git.ts";
+import { commonDir, diffText, fileStats, numstat, parseMode, pruneRefs, readConfig, readOpenCommand, repoHash, sameRepoWorktree, showFile, snapshot, writeMode } from "./git.ts";
+import type { Mode, WorktreeCache } from "./git.ts";
 import { LineDecoder, PROTOCOL_VERSION, encode } from "./protocol.ts";
 import type { EventName, PromptContext, Request } from "./protocol.ts";
 import { humanChangedSteer, renderAnnotationPrompt, renderPrompt, renderResume, renderReview } from "./render.ts";
 import { openInNeovim } from "./open-nvim.ts";
+import type { OpenedIn } from "./open-nvim.ts";
 import { socketPath, startServer } from "./server.ts";
 import type { Server } from "./server.ts";
 import { PiNvimState } from "./state.ts";
@@ -50,8 +51,11 @@ export function isReadOnlyTool(name: string): boolean {
   return READ_ONLY_TOOLS.has(name) || name.startsWith("lens_");
 }
 
-/** What is stored in each `pi-nvim-state` entry: the state plus the next snapshot ref number. */
-export type PersistedState = Serialized & { snapshotSeq: number };
+/**
+ * What is stored in each `pi-nvim-state` entry: the state, the next snapshot ref number and the
+ * worktree the session is in (absent in entries written before sessions could follow the agent).
+ */
+export type PersistedState = Serialized & { snapshotSeq: number; root?: string };
 
 export type SendInput = { annotations: Annotation[]; note: string; viewed: boolean };
 
@@ -101,6 +105,11 @@ function probeStatus(sockPath: string): Promise<{ root?: string; mode?: string }
   });
 }
 
+/** The block reason when the agent moves to another worktree with changes here not reviewed yet. */
+export function unreviewedBeforeFollowText(from: string, to: string): string {
+  return `Changes in ${path.basename(from)} are not reviewed yet. Call checkpoint with a note first, then edit ${path.basename(to)}.`;
+}
+
 /** The warning for edits outside the session's worktree; the same text shows in pi and in nvim. */
 export function outsideWorktreeText(root: string): string {
   return `pi: the agent is editing outside ${path.basename(root)} — start pi in that worktree to review it`;
@@ -122,11 +131,17 @@ export class ReviewLoop {
   private runAgentFiles = new Set<string>();
   /** Whether the outside-worktree warning was already shown in the current run. */
   private warnedOutside = false;
+  /** Whether pi already offered to open a followed worktree in Neovim in the current run. */
+  private offeredFollow = false;
+  /** The worktree the session is in: where it started, or the one it last followed the agent into. */
+  private worktreeRoot: string;
+  /** Which worktree each directory an agent tool targeted belongs to; asked once per directory. */
+  private readonly worktrees: WorktreeCache = new Map();
   /** Epoch ms of the last sign of life: agent start/settle, tool call or result, prompt or send from nvim. */
   private lastActive = Date.now();
   /** Checkpoints pi already offered to open in Neovim; asked once each. */
   private readonly offered = new Set<number>();
-  /** Dismisses the open "Open checkpoint N in Neovim?" dialog when the checkpoint closes or pi stops. */
+  /** Dismisses the open "Open … in Neovim?" dialog when the checkpoint closes, the session moves on, or pi stops. */
   private offerDialog: AbortController | null = null;
   /** Set by stop(): no notice or dialog may follow, since the ctx may be stale by then. */
   private stopped = false;
@@ -136,30 +151,52 @@ export class ReviewLoop {
   private constructor(
     private readonly pi: ExtensionAPI,
     private readonly ctx: ExtensionContext,
-    readonly root: string,
+    root: string,
+    /** The repo's `commonDir`, the same for all its worktrees; a session only follows within it. */
+    private readonly repoDir: string,
     readonly sessionId: string,
     readonly sockPath: string,
     private readonly cap: number,
     saved: PersistedState | undefined,
   ) {
+    this.worktreeRoot = root;
     this.state = new PiNvimState(saved);
     this.snapshotSeq = saved?.snapshotSeq ?? 0;
   }
 
-  static async start(pi: ExtensionAPI, ctx: ExtensionContext, root: string): Promise<ReviewLoop> {
-    const config = await readConfig(root);
-    await pruneRefs(root, config.retentionDays);
+  /** The worktree the session is in; changes when it follows the agent into another worktree of the repo. */
+  get root(): string {
+    return this.worktreeRoot;
+  }
+
+  /**
+   * Repo config (mode, cap, retention) is read here only, in the worktree pi started in: a session
+   * that follows the agent into another worktree keeps its mode and cap.
+   */
+  static async start(pi: ExtensionAPI, ctx: ExtensionContext, startRoot: string): Promise<ReviewLoop> {
+    const config = await readConfig(startRoot);
+    await pruneRefs(startRoot, config.retentionDays);
     const sessionId = ctx.sessionManager.getSessionId();
-    const sockPath = socketPath(await repoHash(root), sessionId, process.env.XDG_RUNTIME_DIR);
+    // Every worktree of a repo has the same repo hash, so the socket stays put when the session follows.
+    const sockPath = socketPath(await repoHash(startRoot), sessionId, process.env.XDG_RUNTIME_DIR);
+    const repoDir = await commonDir(startRoot);
     const saved = lastPersisted(ctx);
-    const loop = new ReviewLoop(pi, ctx, root, sessionId, sockPath, config.cap, saved);
+    // A session restored after following the agent resumes in that worktree while it still belongs to the repo;
+    // when it is gone, the saved baseline can't be compared with the start root, so the session starts over there.
+    let root = startRoot;
+    let startOver = false;
+    if (saved?.root && saved.root !== startRoot) {
+      if ((await sameRepoWorktree(saved.root, repoDir)) === saved.root) root = saved.root;
+      else startOver = true;
+    }
+    const loop = new ReviewLoop(pi, ctx, root, repoDir, sessionId, sockPath, config.cap, saved);
     loop.state.mode = config.mode;
     if (config.mode === "checkpoints" && (await loop.otherReviewSession())) {
       loop.state.mode = "off";
       loop.notify(`pi: checkpoint mode stays off, ${ONE_REVIEW_SESSION}`, "warning");
     }
     // A restored session keeps its chunks and steps; changes made while pi was down land on the agent's side.
-    if (saved) await loop.recordSince("agent");
+    if (saved && !startOver) await loop.recordSince("agent");
     else loop.state.setBaseline(await loop.snapshot());
     loop.server = await startServer({ path: sockPath, handle: (req) => loop.handle(req) });
     loop.applyTools();
@@ -283,26 +320,77 @@ export class ReviewLoop {
     this.runBaseline = this.state.baseline;
     this.runAgentFiles = new Set();
     this.warnedOutside = false;
+    this.offeredFollow = false;
     this.broadcast("activity_current", { current: null, busy: true });
   }
 
-  /** Warns once per run when a mutating tool targets a path outside the session's worktree. Never blocks the tool. */
-  toolCall(toolName: string, input: unknown): void {
+  /**
+   * Checks where a mutating tool writes. Inside another worktree of the same repo the session follows
+   * the agent there; elsewhere outside the session's worktree it warns once per run. Returns a block
+   * reason only when following would leave unreviewed changes behind in checkpoint mode.
+   */
+  async toolCall(toolName: string, input: unknown): Promise<string | undefined> {
     this.touch();
-    if (this.warnedOutside || isReadOnlyTool(toolName) || typeof input !== "object" || input === null) return;
+    if (isReadOnlyTool(toolName) || typeof input !== "object" || input === null) return undefined;
     const args = input as Record<string, unknown>;
     for (const key of ["path", "file_path"]) {
       const value = args[key];
       if (typeof value !== "string" || value === "") continue;
       const expanded = value === "~" || value.startsWith("~/") ? path.join(os.homedir(), value.slice(1)) : value;
       const target = path.resolve(this.ctx.cwd, expanded);
-      if (this.isOutsideRoot(target)) {
-        this.warnedOutside = true;
-        this.notify(outsideWorktreeText(this.root), "warning");
-        this.broadcast("outside_worktree", { path: target });
-        return;
+      const worktree = await sameRepoWorktree(target, this.repoDir, this.worktrees);
+      // An inherited open checkpoint (a subagent child) stays where it is; it can't be reviewed elsewhere.
+      if (worktree && worktree !== this.root && !this.state.openChunk()) return this.followTo(worktree);
+      if ((worktree && worktree !== this.root) || (!worktree && this.isOutsideRoot(target))) {
+        this.warnOutside(target);
+        return undefined;
       }
     }
+    return undefined;
+  }
+
+  private warnOutside(target: string): void {
+    if (this.warnedOutside) return;
+    this.warnedOutside = true;
+    this.notify(outsideWorktreeText(this.root), "warning");
+    this.broadcast("outside_worktree", { path: target });
+  }
+
+  /**
+   * Moves the session into `newRoot`, another worktree of the same repo. Pending changes in the old
+   * worktree are recorded first: with checkpoints off they become a recorded chunk there (Philipp's
+   * unreported steps with them); in checkpoint mode they block the move until reviewed (an edit that
+   * was reverted does not count). Chunks, drafts and queued prompts stay; the new worktree gets a fresh
+   * baseline, which is also the new mark base.
+   */
+  private followTo(newRoot: string): Promise<string | undefined> {
+    return this.serial(async () => {
+      if (this.stopped || newRoot === this.root || this.state.openChunk()) return undefined;
+      const from = this.root;
+      const { sha, files } = await this.recordSince("agent");
+      const pending = this.state.steps.some((s) => s.author === "agent" || !s.reported);
+      const leftBehind = pending && !(await this.settleIfNetEmpty(sha));
+      if (leftBehind && this.effectiveMode() === "checkpoints") {
+        if (files.length > 0) this.persist();
+        return unreviewedBeforeFollowText(from, newRoot);
+      }
+      // Taken before anything changes, so a failing snapshot leaves the session where it was.
+      const baseline = await this.snapshot(newRoot);
+      if (leftBehind) {
+        const chunk = this.state.createChunk(`before following into ${path.basename(newRoot)}`, sha, "recorded");
+        this.broadcast("chunk_ready", { chunk });
+      }
+      this.worktreeRoot = newRoot;
+      this.state.setBaseline(baseline);
+      this.runBaseline = baseline;
+      this.persist();
+      this.broadcast("root_changed", { root: newRoot });
+      this.notify(`pi: following the agent into ${path.basename(newRoot)}`, "info");
+      // A still open offer names the worktree the session just left.
+      this.offerDialog?.abort();
+      void this.offerToOpenFollowed(newRoot);
+      return undefined;
+    });
   }
 
   private isOutsideRoot(target: string): boolean {
@@ -549,9 +637,9 @@ export class ReviewLoop {
     return run;
   }
 
-  private snapshot(): Promise<string> {
+  private snapshot(root = this.root): Promise<string> {
     const ref = `refs/pi-nvim/${this.sessionId}/${this.snapshotSeq++}`;
-    return snapshot(this.root, ref, "pi-nvim snapshot");
+    return snapshot(root, ref, "pi-nvim snapshot");
   }
 
   /**
@@ -696,16 +784,50 @@ export class ReviewLoop {
     if (!yes) {
       return this.notify(`pi: checkpoint ${n} waits — review it in Neovim or run /checkpoints continue <note>`, "info");
     }
-    const opened = await openInNeovim({
+    await this.openAndReport(`checkpoint ${n}`);
+  }
+
+  /**
+   * After a follow with no Neovim attached, offers to open the new worktree in Neovim; asks once per run.
+   * The guards are those of offerToOpen: never from a stopped session or one without a UI.
+   */
+  private async offerToOpenFollowed(root: string): Promise<void> {
+    try {
+      if (this.stopped || this.offeredFollow || (this.server?.clientCount() ?? 0) > 0 || !this.ctx.hasUI) return;
+      this.offeredFollow = true;
+      const dialog = new AbortController();
+      this.offerDialog = dialog;
+      let yes: boolean;
+      try {
+        yes = await this.ctx.ui.confirm(
+          `Open ${path.basename(root)} in Neovim?`,
+          `Opens the checkpoint list in a Neovim running in ${root}, or starts one.`,
+          { signal: dialog.signal },
+        );
+      } catch {
+        yes = false;
+      }
+      if (this.offerDialog === dialog) this.offerDialog = null;
+      if (this.stopped || dialog.signal.aborted || !yes || this.root !== root) return;
+      await this.openAndReport(path.basename(root));
+    } catch (e) {
+      // Runs unawaited, like offerToOpen.
+      console.error(`pi-nvim: offer to open ${root} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** Opens this session's checkpoint list in Neovim in the session's worktree and says where; `what` names it in the notices. */
+  private async openAndReport(what: string): Promise<void> {
+    const opened: OpenedIn = await openInNeovim({
       root: this.root,
       sessionId: this.sessionId,
       runtimeDir: process.env.XDG_RUNTIME_DIR,
       openCommand: await readOpenCommand(this.root),
     });
     if (this.stopped) return;
-    if (opened.opened === "nvim") this.notify(`pi: checkpoint ${n} opened in Neovim`, "info");
-    else if (opened.opened === "pane") this.notify(`pi: checkpoint ${n} opens in a new Neovim pane (${opened.tool})`, "info");
-    else if (opened.opened === "command") this.notify(`pi: checkpoint ${n} opens via pi-nvim.openCommand`, "info");
+    if (opened.opened === "nvim") this.notify(`pi: ${what} opened in Neovim`, "info");
+    else if (opened.opened === "pane") this.notify(`pi: ${what} opens in a new Neovim pane (${opened.tool})`, "info");
+    else if (opened.opened === "command") this.notify(`pi: ${what} opens via pi-nvim.openCommand`, "info");
     else {
       const failure = opened.commandFailure;
       if (failure) {
@@ -717,7 +839,7 @@ export class ReviewLoop {
   }
 
   private persist(): void {
-    const data: PersistedState = { ...this.state.serialize(), snapshotSeq: this.snapshotSeq };
+    const data: PersistedState = { ...this.state.serialize(), snapshotSeq: this.snapshotSeq, root: this.root };
     this.pi.appendEntry(STATE_ENTRY, data);
     const open = this.state.openChunk();
     const status = open

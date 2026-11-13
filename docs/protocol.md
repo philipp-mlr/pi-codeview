@@ -51,6 +51,7 @@ The extension renders them under the context or the annotation's note as a `Diag
   (no UI, or its tool allowlist keeps the `checkpoint` tool out) reports `off` even when the repo's mode is on, and then
   `modeNote` (optional, absent otherwise) says why: `"checkpoint mode is on for this repo, but this session can't stop for review"`. `name` is the pi session name or `null`. `baseline` is the sha of the latest recorded snapshot.
   `root` is the worktree the session runs in; clients attach only to sessions whose `root` is their own worktree.
+  It changes when the session follows the agent into another worktree of the same repo (see `root_changed`).
   `busy` is true while the agent is working (`activity_current` events carry it too); `queued` counts prompts waiting behind the open chunk.
   `lastActive` is the epoch ms of the session's last sign of life (agent start or settle, tool call or result, prompt or send from nvim; session start otherwise). Optional: older extensions omit it.
   `activity` is the tool currently running (`{"tool":"edit","target":"a.ts"}`, the most recently started one when several run) or `null`.
@@ -75,7 +76,8 @@ The extension renders them under the context or the annotation's note as a `Diag
 | `chunk_reviewed` | `{"event":"chunk_reviewed","data":{"chunk":{"n":2,"status":"reviewed","...":"..."}}}` |
 | `mode_changed` | `{"event":"mode_changed","data":{"mode":"checkpoints"}}` |
 | `run_settled` | `{"event":"run_settled","data":{"aborted":false,"files":2}}` |
-| `outside_worktree` | `{"event":"outside_worktree","data":{"path":"/abs/other-worktree/x.al"}}` |
+| `outside_worktree` | `{"event":"outside_worktree","data":{"path":"/abs/other-repo/x.al"}}` |
+| `root_changed` | `{"event":"root_changed","data":{"root":"/abs/other-worktree"}}` |
 | `activity_current` | `{"event":"activity_current","data":{"current":{"tool":"edit","target":"a.ts"},"mutating":true,"busy":true}}` |
 
 `activity_current` is sent on tool start (`busy` true, `current` the tool), tool end (`current` the still-running tool or `null`; `mutating` only here), `agent_start` (`busy` true, `current` null) and `agent_settled` (`busy` false, `current` null).
@@ -83,7 +85,9 @@ The extension renders them under the context or the annotation's note as a `Diag
 
 `mode_changed.mode` is the mode in effect (as in `status`); it is also sent when `/tree` changes whether the session can be reviewed.
 
-`outside_worktree` is sent at most once per agent run, when a mutating tool's `path` argument resolves outside the session's root (the tool is not blocked). Clients show a warning.
+`outside_worktree` is sent at most once per agent run, when a mutating tool's `path` argument resolves outside the session's root and outside every other worktree of the same repo (the tool is not blocked). Clients show a warning.
+
+`root_changed` is sent when the session follows the agent into another worktree of the same repo (same git common dir; also one nested inside the root): a mutating tool's `path` resolves there and no chunk is open. `root` is the new worktree, as in `status` from now on. The socket path stays the same, so clients stay attached. Before the move, pending changes in the old worktree become a `recorded` chunk (`note` "before following into <worktree>") with checkpoints off; in checkpoint mode the tool call is blocked until they are reviewed (an edit that was reverted does not count). The new worktree gets a fresh `baseline`, which is also the new `markBase`. Chunks, drafts and queued prompts stay. Every move sends one event, also back to an earlier worktree. Clients that do not know the event ignore it.
 
 A `checkpoint` call with no changes since the last checkpoint (no agent and no human steps) creates no chunk and broadcasts nothing; it returns "Nothing changed since the last checkpoint; no review needed. Continue." Drafts are untouched.
 

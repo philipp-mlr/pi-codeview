@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import { copyFile, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export type Mode = "checkpoints" | "off";
 
@@ -40,10 +41,58 @@ export async function findRoot(cwd: string): Promise<string | null> {
   }
 }
 
-export async function repoHash(root: string): Promise<string> {
+/** The repo's git-common-dir, realpath'd: the same for every worktree of one repo. */
+export async function commonDir(root: string): Promise<string> {
   const common = (await git(root, ["rev-parse", "--git-common-dir"])).trim();
-  const real = await realpath(resolve(root, common));
-  return createHash("sha256").update(real).digest("hex").slice(0, 12);
+  return realpath(resolve(root, common));
+}
+
+export async function repoHash(root: string): Promise<string> {
+  return createHash("sha256").update(await commonDir(root)).digest("hex").slice(0, 12);
+}
+
+/** The nearest existing directory at or above `target` (an absolute path); a file gives its directory. */
+function nearestDir(target: string): string {
+  let cur = target;
+  for (;;) {
+    try {
+      if (statSync(cur).isDirectory()) return cur;
+    } catch {
+      // Not there (yet): try the parent.
+    }
+    const parent = dirname(cur);
+    if (parent === cur) return cur;
+    cur = parent;
+  }
+}
+
+export type WorktreeCache = Map<string, Promise<{ root: string; commonDir: string } | null>>;
+
+/**
+ * The root of the worktree holding `target` (absolute; it may not exist yet) when that worktree belongs
+ * to the repo with `common` as its `commonDir`; null for other repos, paths outside any repo, and paths
+ * with no existing directory above them but `/`. With `cache`, git is asked once per directory.
+ */
+export async function sameRepoWorktree(target: string, common: string, cache?: WorktreeCache): Promise<string | null> {
+  const dir = nearestDir(target);
+  let found = cache?.get(dir);
+  if (!found) {
+    found = worktreeOf(dir);
+    cache?.set(dir, found);
+  }
+  const wt = await found;
+  return wt && wt.commonDir === common ? wt.root : null;
+}
+
+/** The worktree holding the existing directory `dir`: its root and its repo's `commonDir`; null outside any worktree. */
+async function worktreeOf(dir: string): Promise<{ root: string; commonDir: string } | null> {
+  try {
+    const [root, common] = (await git(dir, ["rev-parse", "--show-toplevel", "--git-common-dir"])).trim().split("\n");
+    if (!root || !common) return null;
+    return { root, commonDir: await realpath(resolve(dir, common)) };
+  } catch {
+    return null;
+  }
 }
 
 /**

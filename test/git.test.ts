@@ -1,15 +1,17 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
+  commonDir,
   findRoot,
   numstat,
   pruneRefs,
   readConfig,
   repoHash,
+  sameRepoWorktree,
   seedIndex,
   showFile,
   snapshot,
@@ -233,5 +235,33 @@ describe("config migration from pi-codeview", () => {
     expect((await r.git("config", "--local", "pi-nvim.checkpoints")).trim()).toBe("false");
     expect((await r.git("config", "--local", "pi-codeview.mode")).trim()).toBe("review");
     expect((await readConfig(r.root)).mode).toBe("off");
+  });
+});
+
+describe("sameRepoWorktree", () => {
+  it("names another worktree of the same repo, also for a new file in it; null for other repos, ~, /tmp and missing paths", async () => {
+    const r = await makeRepo();
+    const common = await commonDir(r.root);
+    const wt = await r.worktree();
+    const nested = await r.worktree(".worktrees/feature");
+    const other = await makeRepo();
+    expect(await sameRepoWorktree(join(wt.root, "README.md"), common)).toBe(wt.root);
+    expect(await sameRepoWorktree(join(wt.root, "new/dir/x.ts"), common)).toBe(wt.root);
+    expect(await sameRepoWorktree(join(nested.root, "x.ts"), common)).toBe(nested.root);
+    expect(await sameRepoWorktree(join(r.root, "x.ts"), common)).toBe(r.root);
+    expect(await sameRepoWorktree(join(other.root, "x.ts"), common)).toBeNull();
+    expect(await sameRepoWorktree(join(homedir(), "pi-nvim-follow-test.txt"), common)).toBeNull();
+    expect(await sameRepoWorktree(join(tmpdir(), "pi-nvim-follow-test.txt"), common)).toBeNull();
+    expect(await sameRepoWorktree("/pi-nvim-does-not-exist/x.ts", common)).toBeNull();
+  });
+
+  it("asks git once per directory when given a cache", async () => {
+    const r = await makeRepo();
+    const common = await commonDir(r.root);
+    const wt = await r.worktree();
+    const cache = new Map<string, Promise<{ root: string; commonDir: string } | null>>();
+    await sameRepoWorktree(join(wt.root, "a.ts"), common, cache);
+    await sameRepoWorktree(join(wt.root, "b.ts"), common, cache);
+    expect([...cache.keys()]).toEqual([wt.root]);
   });
 });
