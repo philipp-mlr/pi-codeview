@@ -29,11 +29,15 @@ covering the work. Philipp wants the review to follow the agent instead.
     session.
   - An attached nvim already in that worktree: nothing to open.
   - An attached nvim in another worktree (the usual case): it stays attached — the list, diffs and
-    peek work for the new worktree anyway — and it shows
-    `pi: agent moved to <basename> — <leader>pf to follow here`. `<leader>pf` (`:PiFollow`) does a
-    `:tcd` to the new root and refreshes; no pane is opened for it. No dialog in pi.
+    peek work for the new worktree anyway — and it **prompts automatically**: `pi: agent moved to
+    <basename> — follow here?` with Follow / Stay (his `vim.ui.select` picker; Esc counts as Stay,
+    asked once per move). Follow does a `:tcd` to the new root, refreshes, and opens the file the
+    agent is currently editing so the live marks are on screen at once. `<leader>pf` (`:PiFollow`)
+    does the same later; no pane is opened for it. No dialog in pi.
 - **Back and forth:** every same-repo outside move follows, also back to the original worktree. Each
   follow re-snapshots (cheap) and notifies.
+- **Live edits:** unchanged — `▎` marks and buffer reloads work in any open buffer; after a follow
+  they apply to the new worktree's files once opened (the Follow choice opens the current one).
 - **Annotations:** drafts from the old worktree are kept as drafts; their paths are repo-relative and
   still sent with the next review, so nothing of Philipp's is dropped.
 
