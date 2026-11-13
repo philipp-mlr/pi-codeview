@@ -47,5 +47,6 @@
 - [ ] On `root_changed { root }`: update the cached root, refresh status and live marks, notify `pi: following the agent into <basename>`; when the previous root differs from the new one and a client is attached from another worktree, prompt automatically once per move: `pi: agent moved to <basename> — follow here?` Follow / Stay (`vim.ui.select`, Esc = Stay).
 - [ ] Follow (`pf`, `:PiFollow`, or the prompt): `:tcd <root>` (tab-local), refresh, then open the agent's current file (cached `activity.target`, repo-relative → absolute under the new root) in a split if it exists; `pi: nothing to follow` when the root already matches.
 - [ ] Key `pf = "<leader>pf"` in `default_keys` (skip-existing rule applies); hint via `keys.label("follow", ":PiFollow")`.
+- [ ] Session discovery across worktrees (from the Task 1 review): `session.collect`/`ensure` accept a session whose `status.root` is a different worktree of the SAME repo (compare via `discover.repo_hash`), so a fresh nvim in the start worktree still finds a followed session; the picker shows that session's worktree basename in its row. Specs for both.
 - [ ] e2e: extension follow → nvim receives `root_changed`, cached root changes, prompt appears (stubbed `vim.ui.select`), Follow switches dir and opens the file.
 - [ ] Commit `feat(nvim): automatic follow prompt when the agent moves worktrees`.
