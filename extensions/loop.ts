@@ -382,8 +382,9 @@ export class ReviewLoop {
     return this.serial(async () => {
       if (this.stopped || newRoot === this.root || this.state.openChunk()) return undefined;
       const from = this.root;
-      // pi runs every tool_call hook of a parallel batch before the tools write: edits still running
-      // here would land in a worktree nobody tracks any more.
+      // While any other mutating tool is running, a cross-worktree call is blocked in either direction
+      // (no follow, no follow-back): pi runs a batch's hooks before its tools write, so that edit would
+      // land in a worktree nobody tracks.
       if (this.activity.runningExcept(toolCallId).some((r) => !isReadOnlyTool(r.tool))) return stillEditingText(from, newRoot);
       if (this.effectiveMode() === "checkpoints" && (await this.otherReviewSession(newRoot))) {
         if (!this.warnedReviewedElsewhere) {

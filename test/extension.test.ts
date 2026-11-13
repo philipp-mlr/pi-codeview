@@ -1703,6 +1703,58 @@ describe("pi-nvim follows the agent into another worktree of the same repo", () 
     expect((await client.request("list_chunks")).result.map((c: any) => c.agentFiles)).toEqual([["a.ts"]]);
   });
 
+  it("a parallel batch in reverse order: the old-root call after a new-root call is blocked too, and follows once settled", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    const oldFile = path.join(repo.root, "a.ts");
+    const newFile = path.join(wt.root, "b.ts");
+    const stillEditing = (from: string, to: string) => ({
+      block: true,
+      reason: `Still editing in ${path.basename(from)}. Finish those edits first, then edit ${path.basename(to)} in a separate tool call.`,
+    });
+    await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "write", args: { path: newFile } });
+    expect(await fake.fire("tool_call", { toolCallId: "t1", toolName: "write", input: { path: newFile } })).toEqual([undefined]);
+    await fake.fire("tool_execution_start", { toolCallId: "t2", toolName: "write", args: { path: oldFile } });
+    expect(await fake.fire("tool_call", { toolCallId: "t2", toolName: "write", input: { path: oldFile } })).toEqual([stillEditing(wt.root, repo.root)]);
+    expect(rootChanges(client).length).toBe(1);
+    await agentWrite(fake, repo, "a.ts", "a\n");
+    await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "write", result: {}, isError: true });
+    await fake.fire("tool_execution_end", { toolCallId: "t2", toolName: "write", result: {}, isError: false });
+    await fake.fire("tool_execution_start", { toolCallId: "t3", toolName: "write", args: { path: newFile } });
+    expect(await fake.fire("tool_call", { toolCallId: "t3", toolName: "write", input: { path: newFile } })).toEqual([undefined]);
+    expect((await client.request("status")).result.root).toBe(wt.root);
+    await fake.fire("tool_execution_end", { toolCallId: "t3", toolName: "write", result: {}, isError: false });
+    // The follow happened while nothing else ran; a later old-root call is held by the running new-root edit.
+    await fake.fire("tool_execution_start", { toolCallId: "t4", toolName: "write", args: { path: newFile } });
+    await fake.fire("tool_execution_start", { toolCallId: "t5", toolName: "write", args: { path: oldFile } });
+    expect(await fake.fire("tool_call", { toolCallId: "t5", toolName: "write", input: { path: oldFile } })).toEqual([stillEditing(wt.root, repo.root)]);
+    expect((await client.request("status")).result.root).toBe(wt.root);
+  });
+
+  it("a parallel batch, new-root call first, both started: the new-root call is blocked and the old-root edit is tracked", async () => {
+    const repo = await makeRepo();
+    const wt = await repo.worktree();
+    const fake = await start(repo);
+    const client = await connect(repo);
+    const oldFile = path.join(repo.root, "a.ts");
+    const newFile = path.join(wt.root, "b.ts");
+    await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "write", args: { path: newFile } });
+    await fake.fire("tool_execution_start", { toolCallId: "t2", toolName: "write", args: { path: oldFile } });
+    expect(await fake.fire("tool_call", { toolCallId: "t1", toolName: "write", input: { path: newFile } })).toEqual([
+      { block: true, reason: `Still editing in ${path.basename(repo.root)}. Finish those edits first, then edit ${path.basename(wt.root)} in a separate tool call.` },
+    ]);
+    expect(await fake.fire("tool_call", { toolCallId: "t2", toolName: "write", input: { path: oldFile } })).toEqual([undefined]);
+    expect(rootChanges(client)).toEqual([]);
+    await agentWrite(fake, repo, "a.ts", "a\n");
+    await fake.fire("tool_execution_end", { toolCallId: "t1", toolName: "write", result: {}, isError: true });
+    await fake.fire("tool_execution_end", { toolCallId: "t2", toolName: "write", result: {}, isError: false });
+    expect((await client.request("status")).result.root).toBe(repo.root);
+    await fake.fire("turn_end", { turnIndex: 0 });
+    expect((await client.request("list_chunks")).result.map((c: any) => c.agentFiles)).toEqual([["a.ts"]]);
+  });
+
   it("a read-only tool still running does not hold the follow back", async () => {
     const repo = await makeRepo();
     const wt = await repo.worktree();
