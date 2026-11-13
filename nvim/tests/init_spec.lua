@@ -1031,6 +1031,48 @@ M["Follow opens the file the agent last edited, even after its tool ended"] = fu
   end)
 end
 
+M["a move back home cancels a pending follow picker"] = function()
+  with_followed_state(function(c)
+    local asked = 0
+    vim.ui.select = function() asked = asked + 1 end
+    capture_notify(function()
+      c.session.root = c.b
+      c.event("root_changed", { root = c.b })
+      c.session.root = c.a
+      c.event("root_changed", { root = c.a })
+      vim.wait(100)
+    end)
+    assert(asked == 0, asked)
+  end)
+end
+
+M["Follow leaves a checkpoint diff tab for the tab it was opened from"] = function()
+  with_followed_state(function(c)
+    local diff = require("pi.diff")
+    local panel = require("pi.panel")
+    local real = { ensure = c.session.ensure, request = c.session.request, view_of_tab = diff.view_of_tab }
+    c.session.ensure = function(cb) cb(nil, c.b) end
+    c.session.request = function(_, _, cb) if cb then cb(nil, {}) end end
+    -- a fake diff view whose origin is this tab, "opened from" another tab
+    local other = vim.api.nvim_get_current_tabpage()
+    diff.view_of_tab = function(tabpage)
+      if tabpage == other then
+        return { origin = other }
+      end
+      return nil
+    end
+    c.session.root = c.b
+    c.session.cached.root = c.b
+    c.session.cached.activity = { tool = "edit", target = "f.txt" }
+    local ok, err = pcall(function() vim.cmd("PiFollow") end)
+    diff.view_of_tab = real.view_of_tab
+    c.session.ensure, c.session.request = real.ensure, real.request
+    assert(ok, err)
+    assert(vim.fn.getcwd() == c.b, vim.fn.getcwd())
+    assert(vim.api.nvim_get_current_tabpage() == other, "left the diff tab")
+  end)
+end
+
 M["Follow into a worktree that vanished says so instead of erroring"] = function()
   with_followed_state(function(c)
     local choose

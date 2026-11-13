@@ -124,6 +124,9 @@ local function current_file(root)
   end
   -- Relative targets are seen before the follow moves the session, so they are relative to the
   -- worktree the agent edits in now (the follow root); fall back to the root current when seen.
+  if vim.startswith(target, "~/") then
+    target = vim.fn.expand(target)
+  end
   local bases = target:sub(1, 1) == "/" and { "" } or vim.tbl_filter(function(r)
     return type(r) == "string" and r ~= ""
   end, { root, seen_root })
@@ -147,7 +150,14 @@ local function follow_into(root)
     vim.api.nvim_set_current_tabpage(view.origin)
   end
   if panel.is_panel_window(vim.api.nvim_get_current_win()) then
-    vim.cmd("wincmd p")
+    if not pcall(vim.cmd, "wincmd p") or panel.is_panel_window(vim.api.nvim_get_current_win()) then
+      for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        if not panel.is_panel_window(w) then
+          vim.api.nvim_set_current_win(w)
+          break
+        end
+      end
+    end
   end
   local ok = pcall(vim.cmd, "tcd " .. vim.fn.fnameescape(root))
   if not ok then
@@ -196,9 +206,9 @@ local function on_event(name, data)
         ("pi: following the agent into %s"):format(base),
       } or { ("pi: following the agent into %s"):format(base) }
     )
+    move_seq = move_seq + 1
+    local mine = move_seq
     if will_ask then
-      move_seq = move_seq + 1
-      local mine = move_seq
       vim.schedule(function()
         if mine == move_seq then
           ask_follow(root)
@@ -206,7 +216,7 @@ local function on_event(name, data)
       end)
     end
   end
-  if name == "activity_current" and type(data) == "table" and type(data.current) == "table" then
+  if name == "activity_current" and type(data) == "table" and type(data.current) == "table" and data.mutating then
     local target = data.current.target
     if type(target) == "string" and is_path_like(target) then
       last_edit = { target = target, root = session.root }
