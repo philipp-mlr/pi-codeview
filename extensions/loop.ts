@@ -603,6 +603,7 @@ export class ReviewLoop {
           mode: this.effectiveMode(),
           modeNote: this.modeNote(),
           root: this.root,
+          startRoot: this.startRoot,
           sessionId: this.sessionId,
           name: this.ctx.sessionManager.getSessionName?.() ?? null,
           baseline: this.state.baseline,

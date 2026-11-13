@@ -15,6 +15,28 @@ local pi_text = require("pi.text")
 
 local M = {}
 
+-- The last path-like tool target the agent touched, with the session root current then; file tools
+-- end fast, so at Follow time the live activity is usually gone.
+local last_edit = nil -- { target, root }
+-- Move counter: only the newest root_changed may open the follow picker.
+local move_seq = 0
+
+-- Whether a tool target looks like a file path (absolute or repo-relative), not a shell command:
+-- absolute-ish always; otherwise no spaces (commands have them, paths rarely), and a slash or an
+-- extension ("src/a.lua", "f.txt", but not "ls" or "npm test").
+local function is_path_like(target)
+  if target == "" or target:find("[;&|><$`]") then
+    return false
+  end
+  if vim.startswith(target, "/") or vim.startswith(target, "./") or vim.startswith(target, "../") or vim.startswith(target, "~/") then
+    return true
+  end
+  if target:find("%s") then
+    return false
+  end
+  return target:find("/", 1, true) ~= nil or target:match("^[%w_.%-]+%.[%w_.%-]+$") ~= nil
+end
+
 M.auto_open_panel = true -- setup({ panel = { auto_open = false } }) only notifies when a checkpoint arrives
 
 M.default_keys = {
@@ -90,19 +112,47 @@ end
 -- `activity.target` is a path (repo-relative or absolute) for file tools, else a command or nothing.
 local function current_file(root)
   local activity = session.cached and session.cached.activity
-  local target = type(activity) == "table" and activity.target or nil
-  if type(target) ~= "string" or target == "" or target:find("%s") then
+  local target = type(activity) == "table" and type(activity.target) == "string" and is_path_like(activity.target)
+    and activity.target
+    or nil
+  local seen_root
+  if not target and last_edit and is_path_like(last_edit.target) then
+    target, seen_root = last_edit.target, last_edit.root
+  end
+  if not target then
     return nil
   end
-  local path = target:sub(1, 1) == "/" and target or (root .. "/" .. target)
-  local stat = vim.uv.fs_stat(path)
-  return stat and stat.type == "file" and path or nil
+  -- Relative targets are seen before the follow moves the session, so they are relative to the
+  -- worktree the agent edits in now (the follow root); fall back to the root current when seen.
+  local bases = target:sub(1, 1) == "/" and { "" } or vim.tbl_filter(function(r)
+    return type(r) == "string" and r ~= ""
+  end, { root, seen_root })
+  for _, base in ipairs(bases) do
+    local path = base == "" and target or (base .. "/" .. target)
+    local stat = vim.uv.fs_stat(path)
+    if stat and stat.type == "file" then
+      return path
+    end
+  end
+  return nil
 end
 
 -- Moves this tab into the session's worktree and shows the file the agent is editing in a vertical
 -- split, so the live marks are on screen.
 local function follow_into(root)
-  vim.cmd("tcd " .. vim.fn.fnameescape(root))
+  -- Land in a normal window: leave a checkpoint diff tab for the tab it was opened from, and the
+  -- panel for the code window, so the split does not cut the panel or the diff layout.
+  local view = diff.view_of_tab(vim.api.nvim_get_current_tabpage())
+  if view and view.origin and vim.api.nvim_tabpage_is_valid(view.origin) then
+    vim.api.nvim_set_current_tabpage(view.origin)
+  end
+  if panel.is_panel_window(vim.api.nvim_get_current_win()) then
+    vim.cmd("wincmd p")
+  end
+  local ok = pcall(vim.cmd, "tcd " .. vim.fn.fnameescape(root))
+  if not ok then
+    return pi_text.notify_fit(("pi: could not follow into %s"):format(vim.fs.basename(root)))
+  end
   session.refresh_live()
   local file = current_file(root)
   if file then
@@ -134,13 +184,32 @@ end
 
 local function on_event(name, data)
   if name == "root_changed" and type(data) == "table" and type(data.root) == "string" then
-    pi_text.notify_fit(("pi: following the agent into %s"):format(vim.fs.basename(data.root)))
+    -- The marks of the old worktree's buffers are stale now; refresh_live draws the new root's.
+    live.clear()
+    local base = vim.fs.basename(data.root)
     -- session.lua already moved its root; a client attached from another worktree is asked.
     local root = session.root
-    if root and root ~= discover.root(vim.uv.cwd()) then
+    local will_ask = root and root ~= discover.root(vim.uv.cwd())
+    pi_text.notify_fit(
+      will_ask and {
+        ("pi: following the agent into %s — %s to follow"):format(base, keys_state.label("follow", ":PiFollow")),
+        ("pi: following the agent into %s"):format(base),
+      } or { ("pi: following the agent into %s"):format(base) }
+    )
+    if will_ask then
+      move_seq = move_seq + 1
+      local mine = move_seq
       vim.schedule(function()
-        ask_follow(root)
+        if mine == move_seq then
+          ask_follow(root)
+        end
       end)
+    end
+  end
+  if name == "activity_current" and type(data) == "table" and type(data.current) == "table" then
+    local target = data.current.target
+    if type(target) == "string" and is_path_like(target) then
+      last_edit = { target = target, root = session.root }
     end
   end
   if name == "run_settled" then
@@ -338,14 +407,22 @@ function M.continue()
         return vim.notify("pi: " .. status_err, vim.log.levels.ERROR)
       end
       local open_chunk = type(status.openChunk) == "table" and status.openChunk or nil
-      local count = #annotations.list(root)
+      local roots = session.visited and #session.visited > 0 and session.visited or { root }
+      local count = 0
+      for _, r in ipairs(roots) do
+        count = count + #annotations.list(r)
+      end
       if not open_chunk and count == 0 then
         local annotate = keys_state.label("annotate", ":PiAnnotate")
         local ask = keys_state.label("ask", ":PiAsk")
         return pi_text.notify_fit({ ("pi: nothing to send — %s to annotate, %s to ask"):format(annotate, ask), "pi: nothing to send" })
       end
+      local annotations_all = {}
+      for _, r in ipairs(roots) do
+        vim.list_extend(annotations_all, annotations.list(r, { diagnostics = true }))
+      end
       local payload = {
-        annotations = annotations.list(root, { diagnostics = true }),
+        annotations = annotations_all,
         note = "",
         viewed = open_chunk ~= nil and diff.viewed(open_chunk.n), -- ignored by the extension, kept for older ones
       }
@@ -353,7 +430,9 @@ function M.continue()
         if err then
           return vim.notify("pi: " .. err, vim.log.levels.ERROR)
         end
-        annotations.clear_root(root)
+        for _, r in ipairs(roots) do
+          annotations.clear_root(r)
+        end
         local counted = ("%d annotation%s"):format(count, count == 1 and "" or "s")
         local label = session.label(status)
         if open_chunk then
@@ -415,6 +494,16 @@ end
 -- sel = { line1, line2, visual = true|nil }; visual uses the '< '> marks and the last visual mode.
 function M.prompt_context(buf, root, sel)
   local path = relpath(buf, root)
+  if not path and session.visited then
+    -- The session may have followed the agent away from the buffer's worktree.
+    for i = #session.visited, 1, -1 do
+      local tried = relpath(buf, session.visited[i])
+      if tried then
+        path = tried
+        break
+      end
+    end
+  end
   if not path then
     return nil
   end

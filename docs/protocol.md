@@ -85,6 +85,10 @@ The extension renders them under the context or the annotation's note as a `Diag
 
 `mode_changed.mode` is the mode in effect (as in `status`); it is also sent when `/tree` changes whether the session can be reviewed.
 
+The `status` result also carries `startRoot`, the worktree the session started in (older extensions
+omit it). It differs from `root` after the session followed the agent into another worktree of the
+repo; `root_changed` is sent on every such move.
+
 `outside_worktree` is sent at most once per agent run, when a mutating tool's `path` argument resolves outside the session's root and outside every other worktree of the same repo (the tool is not blocked). Clients show a warning.
 
 `root_changed` is sent when the session follows the agent into another worktree of the same repo (same git common dir; also one nested inside the root): a mutating tool's `path` or `file_path` argument resolves there and no chunk is open. The move waits while another mutating tool is still running (that call is blocked and the agent retries it in a separate tool call), and it is refused in checkpoint mode when another checkpoint-mode session is already in that worktree. `root` is the new worktree, as in `status` from now on. The socket path stays the same, so clients stay attached. Before the move, pending changes in the old worktree become a `recorded` chunk (`note` "before following into <worktree>") with checkpoints off; in checkpoint mode the tool call is blocked until they are reviewed (an edit that was reverted does not count). The new worktree gets a fresh `baseline`, which is also the new `markBase`. Chunks, drafts and queued prompts stay. Every move sends one event, also back to an earlier worktree. Clients that do not know the event ignore it.

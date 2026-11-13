@@ -937,7 +937,7 @@ M["root_changed notifies and prompts Follow / Stay once; Stay and Esc do nothing
     local asked = {}
     vim.ui.select = function(items, opts, on_choice) asked[#asked + 1] = { items = items, prompt = opts.prompt, cb = on_choice } end
     local notes = capture_notify(function() c.session.root = c.b; c.event("root_changed", { root = c.b }); vim.wait(50, function() return #asked > 0 end) end)
-    assert(#notes == 1 and notes[1].msg == "pi: following the agent into b", vim.inspect(notes))
+    assert(#notes == 1 and notes[1].msg == "pi: following the agent into b — <leader>pf to follow", vim.inspect(notes))
     assert(#asked == 1 and asked[1].prompt == "pi: agent moved to b — follow here?", vim.inspect(asked))
     assert(vim.deep_equal(asked[1].items, { "Follow", "Stay" }))
     asked[1].cb("Stay")
@@ -989,6 +989,174 @@ M["PiFollow without a session says so like the other commands"] = function()
   assert(#notes == 1 and notes[1].level == vim.log.levels.ERROR and notes[1].msg:find("^pi: "), vim.inspect(notes))
 end
 
+M["two moves in quick succession open one picker, not two"] = function()
+  with_followed_state(function(c)
+    local asked = 0
+    vim.ui.select = function() asked = asked + 1 end
+    capture_notify(function()
+      c.session.root = c.b
+      c.event("root_changed", { root = c.b })
+      c.event("root_changed", { root = c.b })
+      vim.wait(100)
+    end)
+    assert(asked == 1, asked)
+  end)
+end
+
+M["root_changed clears the live marks of the old worktree"] = function()
+  with_followed_state(function(c)
+    local live = require("pi.live")
+    local real_clear, cleared = live.clear, 0
+    live.clear = function() cleared = cleared + 1 end
+    capture_notify(function() c.event("root_changed", { root = c.b }); vim.wait(20) end)
+    live.clear = real_clear
+    assert(cleared == 1, cleared)
+  end)
+end
+
+M["Follow opens the file the agent last edited, even after its tool ended"] = function()
+  with_followed_state(function(c)
+    local choose
+    vim.ui.select = function(_, _, on_choice) choose = on_choice end
+    capture_notify(function()
+      c.event("activity_current", { current = { tool = "edit", target = "f.txt" }, mutating = true, busy = true })
+      c.session.root = c.b
+      c.session.cached.root = c.b
+      c.event("root_changed", { root = c.b })
+      vim.wait(50, function() return choose ~= nil end)
+    end)
+    choose("Follow")
+    assert(vim.fn.getcwd() == c.b, vim.fn.getcwd())
+    assert(vim.uv.fs_realpath(vim.api.nvim_buf_get_name(0)) == c.b .. "/f.txt", vim.api.nvim_buf_get_name(0))
+  end)
+end
+
+M["Follow into a worktree that vanished says so instead of erroring"] = function()
+  with_followed_state(function(c)
+    local choose
+    vim.ui.select = function(_, _, on_choice) choose = on_choice end
+    capture_notify(function() c.session.root = c.b; c.event("root_changed", { root = c.b }); vim.wait(50, function() return choose ~= nil end) end)
+    vim.fn.delete(c.b, "rf")
+    local ok, notes = pcall(capture_notify, function() choose("Follow") end)
+    assert(ok, notes)
+    assert(#notes == 1 and notes[1].msg == "pi: could not follow into b", vim.inspect(notes))
+  end)
+end
+
+M["Follow from the checkpoint panel lands in a normal window, not the panel split"] = function()
+  with_followed_state(function(c)
+    local panel = require("pi.panel")
+    -- The harness has no real connection; keep panel.open and its refresh quiet.
+    local real = { ensure = c.session.ensure, request = c.session.request }
+    c.session.ensure = function(cb) cb(nil, c.b) end
+    c.session.request = function(_, _, cb) if cb then cb(nil, {}) end end
+    panel.open()
+    vim.wait(50)
+    local panel_win
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if panel.is_panel_window(w) then
+        panel_win = w
+      end
+    end
+    assert(panel_win, "no panel window")
+    vim.api.nvim_set_current_win(panel_win)
+    c.session.root = c.b
+    c.session.cached.root = c.b
+    c.session.cached.activity = { tool = "edit", target = "f.txt" }
+    local ok, notes = pcall(capture_notify, function() vim.cmd("PiFollow") end)
+    panel.close()
+    c.session.ensure, c.session.request = real.ensure, real.request
+    assert(ok, notes)
+    assert(vim.fn.getcwd() == c.b, vim.fn.getcwd())
+    local file_win
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_is_valid(w) and vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(w)):find("f.txt", 1, true) then
+        file_win = w
+      end
+    end
+    assert(file_win, "file window missing")
+    assert(not panel.is_panel_window(file_win), "file opened in the panel")
+    assert(vim.api.nvim_win_get_width(file_win) > 30, vim.api.nvim_win_get_width(file_win))
+  end)
+end
+
+M["ensure stays attached for a worktree the session visited, without a switch notice"] = function()
+  local session = require("pi.session")
+  local base, a, b = worktree_pair()
+  local real = { connected = session.connected, cached = session.cached, root = session.root, home = session.home, visited = session.visited }
+  session.connected = function() return true end
+  -- the agent followed to b and is back in a; nvim sits in b after following along
+  session.root, session.home = a, a
+  session.visited = { a, b }
+  session.cached = { root = a, name = "s", sessionId = "id" }
+  vim.fn.writefile({ "x" }, b .. "/g.txt")
+  local buf = vim.fn.bufadd(b .. "/g.txt")
+  vim.fn.bufload(buf)
+  vim.api.nvim_set_current_buf(buf)
+  local stayed = false
+  local ok, notes = pcall(capture_notify, function()
+    session.ensure(function() stayed = true end)
+    vim.wait(20)
+  end)
+  session.connected, session.cached, session.root, session.home, session.visited = real.connected, real.cached, real.root, real.home, real.visited
+  vim.api.nvim_buf_delete(buf, { force = true })
+  vim.fn.delete(base, "rf")
+  assert(ok, notes)
+  assert(stayed, "detached instead of staying")
+  assert(#notes == 0, vim.inspect(notes))
+end
+
+M["continue sends the notes of every visited worktree and clears them all"] = function()
+  local session, ann = require("pi.session"), require("pi.annotations")
+  local base, a, b = worktree_pair()
+  local real = { ensure = session.ensure, refresh_status = session.refresh_status, visited = session.visited, root = session.root }
+  local requests = {}
+  local conn = { request = function(_, method, payload, cb) requests[#requests + 1] = { method = method, payload = payload }; cb(nil, {}) end }
+  vim.fn.writefile({ "x" }, a .. "/ga.txt")
+  vim.fn.writefile({ "x" }, b .. "/gb.txt")
+  local bufs = {}
+  for _, spec in ipairs({ { a, "ga.txt", "note a" }, { b, "gb.txt", "note b" } }) do
+    local buf = vim.fn.bufadd(spec[1] .. "/" .. spec[2])
+    vim.fn.bufload(buf)
+    vim.bo[buf].buflisted = true
+    ann.add(buf, 1, 1, spec[3])
+    bufs[#bufs + 1] = { buf = buf, root = spec[1], note = spec[3] }
+  end
+  session.ensure = function(cb) cb(conn, b) end
+  session.refresh_status = function(cb) if cb then cb(nil, { openChunk = { n = 3 }, name = "s" }) end end
+  session.root = b
+  session.visited = { a, b }
+  local ok, notes = pcall(capture_notify, function() pi.continue() end)
+  local remaining = {}
+  for _, e in ipairs(bufs) do
+    remaining[#remaining + 1] = #ann.list(e.root)
+    vim.api.nvim_buf_delete(e.buf, { force = true })
+  end
+  session.ensure, session.refresh_status, session.root, session.visited = real.ensure, real.refresh_status, real.root, real.visited
+  vim.fn.delete(base, "rf")
+  assert(ok, notes)
+  assert(#requests == 1 and requests[1].method == "send", vim.inspect(requests))
+  local sent = requests[1].payload.annotations
+  assert(#sent == 2, vim.inspect(sent))
+  assert(remaining[1] == 0 and remaining[2] == 0, vim.inspect(remaining))
+  assert(notes[1].msg == "pi[s]: continuing — checkpoint 3 reviewed with 2 annotations", vim.inspect(notes))
+end
+
+M["prompt context falls back to a visited worktree when the buffer is not under the session root"] = function()
+  local session = require("pi.session")
+  local base, a, b = worktree_pair()
+  local real = session.visited
+  vim.fn.writefile({ "x" }, a .. "/g.txt")
+  local buf = vim.fn.bufadd(a .. "/g.txt")
+  vim.fn.bufload(buf)
+  session.visited = { a, b }
+  local ctx = pi.prompt_context(buf, b, { line1 = 1, line2 = 1 })
+  session.visited = real
+  vim.api.nvim_buf_delete(buf, { force = true })
+  vim.fn.delete(base, "rf")
+  assert(ctx and ctx.path == "g.txt", vim.inspect(ctx))
+end
+
 M["ensure finds a session that followed the agent into another worktree of the repo"] = function()
   local session = require("pi.session")
   local client, discover = require("pi.client"), require("pi.discover")
@@ -997,7 +1165,7 @@ M["ensure finds a session that followed the agent into another worktree of the r
   discover.sockets = function() return { base .. "/s1" } end
   client.connect = function()
     return { closed = false, close = function(self) self.closed = true end,
-      request = function(_, _, _, cb) cb(nil, { root = b, name = "moved", sessionId = "id", drafts = {} }) end }
+      request = function(_, _, _, cb) cb(nil, { root = b, startRoot = a, name = "moved", sessionId = "id", drafts = {} }) end }
   end
   local buf = vim.fn.bufadd(a .. "/g.txt")
   vim.fn.writefile({ "x" }, a .. "/g.txt")
@@ -1030,31 +1198,74 @@ M["a session in an unrelated repo is not picked up, nor one in the buffer's work
   other = vim.uv.fs_realpath(other)
   vim.system({ "git", "-C", other, "init", "-q" }):wait()
   local roots = { s1 = b, s2 = other, s3 = a }
+  local start_roots = { s1 = a, s2 = nil, s3 = nil }
   local real = { sockets = discover.sockets, connect = client.connect }
   discover.sockets = function() return { base .. "/s1", base .. "/s2", base .. "/s3" } end
   client.connect = function(path)
     local id = vim.fs.basename(path)
     return { closed = false, close = function(self) self.closed = true end,
-      request = function(_, _, _, cb) cb(nil, { root = roots[id], name = id, sessionId = id, drafts = {} }) end }
+      request = function(_, _, _, cb)
+        local status = { root = roots[id], name = id, sessionId = id, drafts = {} }
+        if start_roots[id] then
+          status.startRoot = start_roots[id]
+        end
+        cb(nil, status)
+      end }
   end
   vim.fn.writefile({ "x" }, a .. "/g.txt")
   vim.api.nvim_set_current_buf(vim.fn.bufadd(a .. "/g.txt"))
   vim.fn.bufload(0)
   session.detach()
+  local real_select = vim.ui.select
+  -- s3 (running here) and s1 (started here, followed away) both belong to this worktree: the picker asks.
+  vim.ui.select = function(items, _, on_choice)
+    for _, item in ipairs(items) do
+      if item.status and item.status.sessionId == "s3" then
+        return on_choice(item)
+      end
+    end
+    on_choice(nil)
+  end
   local ok, err = pcall(function()
     session.ensure(function() end)
-    -- s3 runs in the buffer's own worktree, so it wins; the followed s1 and the other repo's s2 do not count
     assert(session.cached.sessionId == "s3", vim.inspect(session.cached))
     session.detach()
+    -- s3 now runs in an unrelated repo; only the followed s1 is left and is attached without asking.
     roots.s3 = other
     session.ensure(function() end)
     assert(session.cached.sessionId == "s1", vim.inspect(session.cached))
   end)
+  vim.ui.select = real_select
   session.detach()
   discover.sockets, client.connect = real.sockets, real.connect
   vim.fn.delete(base, "rf")
   vim.fn.delete(other, "rf")
   assert(ok, err)
+end
+
+M["a session elsewhere in the repo that never started here is not picked up"] = function()
+  local session = require("pi.session")
+  local client, discover = require("pi.client"), require("pi.discover")
+  local base, a, b = worktree_pair()
+  local real = { sockets = discover.sockets, connect = client.connect }
+  discover.sockets = function() return { base .. "/s1" } end
+  client.connect = function()
+    return { closed = false, close = function(self) self.closed = true end,
+      request = function(_, _, _, cb) cb(nil, { root = b, name = "elsewhere", sessionId = "s1", drafts = {} }) end }
+  end
+  vim.fn.writefile({ "x" }, a .. "/g.txt")
+  vim.api.nvim_set_current_buf(vim.fn.bufadd(a .. "/g.txt"))
+  vim.fn.bufload(0)
+  session.detach()
+  local ok, notes = pcall(capture_notify, function()
+    session.ensure(function() end)
+    vim.wait(20)
+  end)
+  session.detach()
+  discover.sockets, client.connect = real.sockets, real.connect
+  vim.fn.delete(base, "rf")
+  assert(ok, notes)
+  assert(#notes == 1 and notes[1].msg:find("^pi: no pi session"), vim.inspect(notes))
 end
 
 M["picker row shows the session's own worktree, not the buffer's"] = function()

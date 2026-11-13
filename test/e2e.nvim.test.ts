@@ -892,7 +892,7 @@ vim.wait(15000, function() return false end, 20)
     await fake.fire("tool_execution_start", { toolCallId: "t1", toolName: "write", args: { path: path.join(wt.root, "x.txt") } });
     const cwd = await until(() => nvim.notifications().find((n) => n.msg.startsWith("CWD")), "follow done");
     const msgs = nvim.notifications().map((n) => n.msg);
-    expect(msgs).toContain(`pi: following the agent into ${path.basename(wt.root)}`);
+    expect(msgs).toContain(`pi: following the agent into ${path.basename(wt.root)} — <leader>pf to follow`);
     expect(msgs).toContain(`PROMPT pi: agent moved to ${path.basename(wt.root)} — follow here? Follow/Stay root=${wt.root}`);
     expect(cwd.msg).toBe(`CWD ${wt.root} FILE x.txt`);
   }, TIMEOUT_MS);

@@ -1589,6 +1589,8 @@ describe("pi-nvim follows the agent into another worktree of the same repo", () 
     await until(() => rootChanges(client).length > 0);
     expect(rootChanges(client)).toEqual([{ event: "root_changed", data: { root: wt.root } }]);
     expect(fake.notifications).toEqual([{ message: following(wt.root), level: "info" }]);
+    const st = (await client.request("status")).result;
+    expect(st).toMatchObject({ root: wt.root, startRoot: repo.root });
     expect(client.events.filter((e) => e.event === "outside_worktree")).toEqual([]);
     // The repo config is read at start only: a later change does not reach the followed session.
     await repo.git("config", "pi-nvim.checkpoints", "false");

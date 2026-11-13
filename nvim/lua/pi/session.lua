@@ -13,6 +13,7 @@ local SAVE_DRAFTS_DEBOUNCE_MS = 300
 M.conn = nil
 M.root = nil -- the worktree the session runs in now; follows root_changed
 M.home = nil -- the worktree this nvim attached from
+M.visited = nil -- worktrees this session ran in (attach root plus every root_changed), oldest first
 M.cached = nil -- last `status` result
 local event_handler = function() end
 local save_timer = nil
@@ -76,11 +77,11 @@ local function save_drafts(cb)
   if not M.connected() then
     return
   end
-  -- Notes in files of the worktree this nvim attached from stay drafts after the session followed the
-  -- agent elsewhere (paths are repo-relative, so they still match).
-  local drafts = annotations.list(M.root)
-  if M.home and M.home ~= M.root then
-    vim.list_extend(drafts, annotations.list(M.home))
+  -- Notes from every worktree the session ran in stay drafts (paths are repo-relative, so they match).
+  local roots = M.visited and #M.visited > 0 and M.visited or { M.root }
+  local drafts = {}
+  for _, r in ipairs(roots) do
+    vim.list_extend(drafts, annotations.list(r))
   end
   M.conn:request("save_drafts", { annotations = drafts }, function(err)
     if cb then
@@ -206,7 +207,7 @@ function M.detach()
   end
   M.flush()
   local conn = M.conn
-  M.conn, M.root, M.home, M.cached = nil, nil, nil, nil
+  M.conn, M.root, M.home, M.cached, M.visited = nil, nil, nil, nil, nil
   live.clear()
   conn:close()
   redraw()
@@ -220,6 +221,12 @@ local function open(path)
     if conn == M.conn then
       if name == "root_changed" and type(data) == "table" and type(data.root) == "string" then
         M.root = vim.uv.fs_realpath(data.root) or data.root
+        if not M.visited then
+          M.visited = {}
+        end
+        if not vim.tbl_contains(M.visited, M.root) then
+          M.visited[#M.visited + 1] = M.root
+        end
         if M.cached then
           M.cached.root = M.root
         end
@@ -251,10 +258,15 @@ end
 local function attach(conn, root, status, cb)
   M.conn, M.home, M.cached = conn, root, status
   M.root = type(status.root) == "string" and (vim.uv.fs_realpath(status.root) or status.root) or root
+  M.visited = { root }
+  if M.root ~= root then
+    M.visited[2] = M.root
+  end
   annotations.on_change(M.schedule_save)
-  annotations.restore(status.drafts or {}, root)
+  -- Drafts are stored relative to the worktree the session runs in now.
+  annotations.restore(status.drafts or {}, M.root)
   -- Annotations added while pi was unreachable reach the extension now.
-  if not vim.deep_equal(annotations.list(root), status.drafts or {}) then
+  if not vim.deep_equal(annotations.list(M.root), status.drafts or {}) then
     M.schedule_save()
   end
   redraw()
@@ -262,19 +274,10 @@ local function attach(conn, root, status, cb)
   cb(conn, M.root)
 end
 
-local repo_hashes = {}
-
-local function cached_repo_hash(dir)
-  if repo_hashes[dir] == nil then
-    repo_hashes[dir] = discover.repo_hash(dir) or false
-  end
-  return repo_hashes[dir] or nil
-end
-
--- Connects to every live socket of dir's repo and calls done(candidates) with those whose session
--- runs in this worktree (root); each candidate is { conn, status }. Only when none does, those running
--- in another worktree of the same repo count (a session that followed the agent there started here).
--- Candidates that don't match are closed here; the caller closes the ones it doesn't attach.
+-- Connects to every live socket of dir's repo and calls done(candidates) with the sessions that
+-- belong to this worktree (root): those running here, or started here and followed the agent into
+-- another worktree (status.startRoot). Others are closed here; the caller closes the ones it keeps
+-- but doesn't attach to. Each candidate is { conn, status }.
 local function collect(dir, root, done)
   local all = {}
   for _, path in ipairs(discover.sockets(dir)) do
@@ -294,24 +297,23 @@ local function collect(dir, root, done)
       end
       remaining = remaining - 1
       if remaining == 0 then
-        local here, elsewhere = {}, {}
-        local hash = cached_repo_hash(dir)
+        -- A session belongs here when it runs here or started here (it followed the agent away).
+        -- Anything else, even in another worktree of the same repo, is someone else's session.
+        local here = {}
         for _, cand in ipairs(all) do
-          local r = cand.status and cand.status.root
-          local real = type(r) == "string" and (vim.uv.fs_realpath(r) or r) or nil
-          if real == root then
+          local ok, real, sreal = pcall(function()
+            local r = cand.status and cand.status.root
+            local sr = cand.status and cand.status.startRoot
+            return type(r) == "string" and (vim.uv.fs_realpath(r) or r) or nil,
+              type(sr) == "string" and (vim.uv.fs_realpath(sr) or sr) or nil
+          end)
+          if ok and (real == root or sreal == root) then
             here[#here + 1] = cand
-          elseif real and hash and cached_repo_hash(real) == hash then
-            elsewhere[#elsewhere + 1] = cand
           else
             cand.conn:close()
           end
         end
-        local keep = #here > 0 and here or elsewhere
-        for _, cand in ipairs(#here > 0 and elsewhere or {}) do
-          cand.conn:close()
-        end
-        done(keep)
+        done(here)
       end
     end)
   end
@@ -350,7 +352,7 @@ function M.ensure(cb, opts)
   if M.connected() then
     local fdir = file_dir(opts.buf)
     local froot = fdir and discover.root(fdir)
-    if not froot or froot == M.root or froot == M.home then
+    if not froot or froot == M.root or froot == M.home or (M.visited and vim.tbl_contains(M.visited, froot)) then
       return cb(M.conn, M.root)
     end
     M.detach()

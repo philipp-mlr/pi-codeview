@@ -247,11 +247,15 @@ pi sessions with `/name` in pi to tell them apart.
 
 A session whose agent moved into another worktree of the same repository
 keeps its socket and your Neovim stays attached; a Neovim started in the
-original worktree finds it too, and the |:PiSession| row names the worktree
-the session runs in now. When the agent moves, `pi: following the agent into
-<worktree>` appears and, if your Neovim sits in another worktree, a picker
+original worktree finds it too (the session started there; one that merely
+runs elsewhere in the repo is not picked up), and the |:PiSession| row names
+the worktree the session runs in now. Notes made in any worktree the
+session ran in are sent with the next review. When the agent moves,
+`pi: following the agent into <worktree>` appears and, if your Neovim sits
+in another worktree, a picker
 asks `pi: agent moved to <worktree> — follow here?` (Follow / Stay; `<Esc>`
 is Stay), once per move. Follow is |:PiFollow|; use it later if you stayed.
+Follow also opens the file the agent is editing in a vertical split.
 
 When there is none you get `pi: no pi session for <worktree> — start pi in
 that worktree`.

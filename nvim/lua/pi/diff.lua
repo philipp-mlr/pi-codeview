@@ -690,6 +690,11 @@ function M.forget(n)
   M.cleanup()
 end
 
+-- The view of a tabpage (built-in or diffview), or nil; follow uses it to land outside diff tabs.
+function M.view_of_tab(tabpage)
+  return views[tabpage]
+end
+
 function M.is_diff_window(win)
   for tab, view in pairs(views) do
     if vim.api.nvim_tabpage_is_valid(tab) and (view.left == win or view.right == win) then

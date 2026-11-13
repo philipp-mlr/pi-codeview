@@ -247,7 +247,10 @@ stays attached. If your Neovim sits in a different worktree it asks
 move; `<Esc>` is Stay). Follow does a tab-local `:tcd` there and opens the
 file the agent is editing in a vertical split; `<leader>pf` (`:PiFollow`)
 does the same later (`pi: nothing to follow` when you are already there).
-A Neovim started in the original worktree still finds such a session, and
+A Neovim started in the original worktree still finds such a session (it
+started there); one that merely runs in another worktree of the repo is not
+picked up. Notes you made in any worktree the session ran in are sent with
+the next review, and
 the picker row names the worktree the session runs in now.
 
 Picker rows read `<label> · <worktree> · <state>[ · checkpoints] · <age>`, e.g.
